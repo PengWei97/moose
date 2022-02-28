@@ -8,7 +8,7 @@
 //* https://www.gnu.org/licenses/lgpl-2.1.html
 
 #pragma once
-
+#include <iostream>
 #include "Coupleable.h"
 #include "GeneralPostprocessor.h"
 #include "InfixIterator.h"
@@ -49,9 +49,9 @@ public:
 
   virtual void initialSetup() override;
   virtual void meshChanged() override;
-  virtual void initialize() override;
-  virtual void execute() override;
-  virtual void finalize() override;
+  virtual void initialize() override; // 初始化
+  virtual void execute() override; // 每一步被调用
+  virtual void finalize() override; // 在这个插入相邻数据
   virtual Real getValue() override;
 
   /// Return the number of active features
@@ -82,6 +82,13 @@ public:
 
   /// Returns the variable representing the passed in feature
   virtual unsigned int getFeatureVar(unsigned int feature_id) const;
+
+  /// Returns the feature ID representing the passed in feature
+  virtual unsigned int getFeatureID(unsigned int feature_id) const;
+
+  virtual unsigned int getAdjacentGrainNum(unsigned int feature_id) const;
+
+  std::vector<unsigned int> createAdjacentGrainMap(int num_feature);
 
   /// Returns the number of coupled varaibles
   std::size_t numCoupledVars() const { return _n_vars; }
@@ -145,12 +152,16 @@ public:
      * no reason to use sets.
      */
     using container_type = std::set<dof_id_type>;
+  
+    // std::cout << "the value of dof_id_type is " << i << std::endl;
 
-    FeatureData() : FeatureData(std::numeric_limits<std::size_t>::max(), Status::INACTIVE) {}
+    // 构造函数的重载
+    FeatureData() : FeatureData(std::numeric_limits<std::size_t>::max(), Status::INACTIVE) {} // 构造函数1
 
+    // 构造函数的内部赋值及初始化列表
     FeatureData(std::size_t var_index,
                 unsigned int local_index,
-                processor_id_type rank,
+                processor_id_type rank, 
                 Status status)
       : FeatureData(var_index, status)
     {
@@ -159,10 +170,12 @@ public:
 
     FeatureData(std::size_t var_index,
                 Status status,
-                unsigned int id = invalid_id,
+                std::vector<unsigned int> adjacent_grain_id = std::vector<unsigned int>(), //添加
+                unsigned int id = invalid_id, // 默认参数
                 std::vector<BoundingBox> bboxes = {BoundingBox()})
-      : _var_index(var_index),
-        _id(id),
+      : _var_index(var_index), // The Moose variable where this feature was found (often the "order parameter")
+        _adjacent_grain_id(adjacent_grain_id), // 添加
+        _id(id), // An ID for this feature
         _bboxes(bboxes), // Assume at least one bounding box
         _min_entity_id(DofObject::invalid_id),
         _vol_count(0),
@@ -191,6 +204,8 @@ public:
      * the other FeatureData's bounding boxes.
      */
     bool boundingBoxesIntersect(const FeatureData & rhs) const;
+
+    
 
     /**
      * The routine called to see if two features are mergeable:
@@ -283,6 +298,8 @@ public:
 
     /// An ID for this feature
     unsigned int _id;
+
+    std::vector<unsigned int> _adjacent_grain_id;
 
     /// The vector of bounding boxes completely enclosing this feature
     /// (multiple used with periodic constraints)

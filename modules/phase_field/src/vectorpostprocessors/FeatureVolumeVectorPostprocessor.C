@@ -12,6 +12,7 @@
 // MOOSE includes
 #include "Assembly.h"
 #include "FeatureFloodCount.h"
+#include "PolycrystalUserObjectBase.h" // add
 #include "GrainTrackerInterface.h"
 #include "MooseMesh.h"
 #include "MooseVariable.h"
@@ -51,11 +52,13 @@ FeatureVolumeVectorPostprocessor::FeatureVolumeVectorPostprocessor(
     _single_feature_per_elem(getParam<bool>("single_feature_per_element")),
     _output_centroids(getParam<bool>("output_centroids")),
     _feature_counter(getUserObject<FeatureFloodCount>("flood_counter")),
-    _var_num(declareVector("var_num")),
+    _feature_id(declareVector("feature_id")), // 
+    _var_num(declareVector("var_num")), // 
+    _adjacent_num(declareVector("adjacent_num")),
     _feature_volumes(declareVector("feature_volumes")),
-    _intersects_bounds(declareVector("intersects_bounds")),
-    _intersects_specified_bounds(declareVector("intersects_specified_bounds")),
-    _percolated(declareVector("percolated")),
+    // _intersects_bounds(declareVector("intersects_bounds")),
+    // _intersects_specified_bounds(declareVector("intersects_specified_bounds")),
+    // _percolated(declareVector("percolated")), // 
     _vars(_feature_counter.getFECoupledVars()),
     _mesh(_subproblem.mesh()),
     _assembly(_subproblem.assembly(_tid)),
@@ -91,24 +94,44 @@ FeatureVolumeVectorPostprocessor::execute()
   const auto num_features = _feature_counter.getTotalFeatureCount();
 
   // Reset the variable index and intersect bounds vectors
-  _var_num.assign(num_features, -1);                     // Invalid
-  _intersects_bounds.assign(num_features, -1);           // Invalid
-  _intersects_specified_bounds.assign(num_features, -1); // Invalid
-  _percolated.assign(num_features, -1);                  // Invalid
+  _feature_id.assign(num_features, -1);                     // 晶粒ID
+  _var_num.assign(num_features, -1);                     // 序参量ID
+  _adjacent_num.assign(num_features, 0);                     // 序参量ID
+  // _intersects_bounds.assign(num_features, -1);           // Invalid
+  // _intersects_specified_bounds.assign(num_features, -1); // Invalid
+  // _percolated.assign(num_features, -1);                  // Invalid
+  // unsigned int feature_num = 1;
+  // _feature_counter.creatAdjacentGrainMap(); // bug
   for (MooseIndex(num_features) feature_num = 0; feature_num < num_features; ++feature_num)
   {
+    // 遍历初始时所有的晶粒ID
     auto var_num = _feature_counter.getFeatureVar(feature_num);
-    if (var_num != FeatureFloodCount::invalid_id)
-      _var_num[feature_num] = var_num;
+    auto feature_id = _feature_counter.getFeatureID(feature_num); // 获取特征ID createAdjacentGrainMap
+    auto adjacent_num = _feature_counter.getAdjacentGrainNum(feature_num); // bug
+    // auto adjacent_num = _feature_counter.callbuildGrainNeighborMatrix(num_features, feature_num);
+    // std::cout << "the number of adjacent_num " << adjacent_num << std::endl;
+    
+    
 
-    _intersects_bounds[feature_num] =
-        static_cast<unsigned int>(_feature_counter.doesFeatureIntersectBoundary(feature_num));
+    if (var_num != FeatureFloodCount::invalid_id) // 若序参数不为-1，即被激活
+      {
+        _var_num[feature_num] = var_num;
+        _feature_id[feature_num] = feature_num;
+        _adjacent_num[feature_num] = adjacent_num;
+      }
+    // if(0)
+    // {
+    //   _intersects_bounds[feature_num] =
+    //       static_cast<unsigned int>(_feature_counter.doesFeatureIntersectBoundary(feature_num));  // bool
 
-    _intersects_specified_bounds[feature_num] = static_cast<unsigned int>(
-        _feature_counter.doesFeatureIntersectSpecifiedBoundary(feature_num));
+    //   _intersects_specified_bounds[feature_num] = static_cast<unsigned int>(
+    //       _feature_counter.doesFeatureIntersectSpecifiedBoundary(feature_num)); // bool
 
-    _percolated[feature_num] =
-        static_cast<unsigned int>(_feature_counter.isFeaturePercolated(feature_num));
+    //   _percolated[feature_num] =
+    //       static_cast<unsigned int>(_feature_counter.isFeaturePercolated(feature_num)); // bool
+    // }
+
+        
   }
 
   if (_output_centroids)
@@ -117,7 +140,7 @@ FeatureVolumeVectorPostprocessor::execute()
       _centroid[i]->resize(num_features);
     for (std::size_t feature_num = 0; feature_num < num_features; ++feature_num)
     {
-      auto p = _feature_counter.featureCentroid(feature_num);
+      auto p = _feature_counter.featureCentroid(_feature_counter.getFeatureID(feature_num));
       for (std::size_t i = 0; i < 3; ++i)
         (*_centroid[i])[feature_num] = p(i);
     }

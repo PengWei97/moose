@@ -54,17 +54,19 @@ protected:
   /// A reference to the feature flood count object
   const FeatureFloodCount & _feature_counter;
 
-  VectorPostprocessorValue & _var_num;
-  VectorPostprocessorValue & _feature_volumes;
-  VectorPostprocessorValue & _intersects_bounds;
-  VectorPostprocessorValue & _intersects_specified_bounds;
-  VectorPostprocessorValue & _percolated;
+  VectorPostprocessorValue & _feature_id; // 特征ID
+  VectorPostprocessorValue & _var_num; // 序参数数目
+  VectorPostprocessorValue & _feature_volumes; // 晶粒体积
+  VectorPostprocessorValue & _adjacent_num; // 晶粒体积
+  // VectorPostprocessorValue & _intersects_bounds;
+  // VectorPostprocessorValue & _intersects_specified_bounds;
+  // VectorPostprocessorValue & _percolated;
 
   /// Indicates whether the calculation should be run on volumes or area of a boundary
   bool _is_boundary_restricted;
 
 private:
-  /// Add volume contributions to one or entries in the feature volume vector
+  /// * Add volume contributions to one or entries in the feature volume vector
   void accumulateVolumes(const Elem * elem,
                          const std::vector<unsigned int> & var_to_features,
                          std::size_t num_features);
@@ -75,7 +77,7 @@ private:
                                std::size_t num_features,
                                unsigned int side);
 
-  /// Calculate the integral value of the passed in variable (index)
+  /// * Calculate the integral value of the passed in variable (index)
   Real computeIntegral(std::size_t var_index) const;
 
   /// Calculate the integral on the face if boundary is supplied as input

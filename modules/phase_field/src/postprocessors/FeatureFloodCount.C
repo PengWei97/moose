@@ -8,6 +8,7 @@
 //* https://www.gnu.org/licenses/lgpl-2.1.html
 
 #include "FeatureFloodCount.h"
+#include "PolycrystalUserObjectBase.h"
 #include "IndirectSort.h"
 #include "MooseMesh.h"
 #include "MooseUtils.h"
@@ -26,6 +27,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <map>
 
 template <>
 void
@@ -40,6 +42,7 @@ dataStore(std::ostream & stream, FeatureFloodCount::FeatureData & feature, void 
   storeHelper(stream, feature._disjoint_halo_ids, context);
   storeHelper(stream, feature._periodic_nodes, context);
   storeHelper(stream, feature._var_index, context);
+  storeHelper(stream, feature._adjacent_grain_id, context);
   storeHelper(stream, feature._id, context);
   storeHelper(stream, feature._bboxes, context);
   storeHelper(stream, feature._orig_ids, context);
@@ -71,6 +74,7 @@ dataLoad(std::istream & stream, FeatureFloodCount::FeatureData & feature, void *
   loadHelper(stream, feature._disjoint_halo_ids, context);
   loadHelper(stream, feature._periodic_nodes, context);
   loadHelper(stream, feature._var_index, context);
+  loadHelper(stream, feature._adjacent_grain_id, context);
   loadHelper(stream, feature._id, context);
   loadHelper(stream, feature._bboxes, context);
   loadHelper(stream, feature._orig_ids, context);
@@ -219,7 +223,7 @@ FeatureFloodCount::FeatureFloodCount(const InputParameters & parameters)
     _feature_sets(getParam<bool>("restartable_required")
                       ? declareRestartableData<std::vector<FeatureData>>("feature_sets")
                       : _volatile_feature_sets),
-    _feature_maps(_maps_size),
+    _feature_maps(_maps_size), // 0
     _pbs(nullptr),
     _element_average_value(parameters.isParamValid("elem_avg_value")
                                ? getPostprocessorValue("elem_avg_value")
@@ -290,7 +294,10 @@ FeatureFloodCount::initialize()
   // Clear the feature marking maps and region counters and other data structures
   for (MooseIndex(_maps_size) map_num = 0; map_num < _maps_size; ++map_num)
   {
-    _feature_maps[map_num].clear();
+    // std::cout << "the value of map_num is " << map_num << std::endl; // 0~7
+    // std::cout << "the value of _maps_size " << _maps_size << std::endl; // 8; op_num = 8
+    // 对序参数进行循环操作
+    _feature_maps[map_num].clear(); // 初始化_feature_maps
     _partial_feature_sets[map_num].clear();
 
     if (_var_index_mode)
@@ -344,7 +351,7 @@ FeatureFloodCount::meshChanged()
       _all_boundary_entity_ids.insert((*elem_it)->_elem->id());
 }
 
-void
+void // timestep_end之后执行
 FeatureFloodCount::execute()
 {
   TIME_SECTION("execute", 3, "Flooding Features");
@@ -395,6 +402,9 @@ FeatureFloodCount::execute()
       }
     }
   }
+  
+  // std::cout << "the done of FeatureFloodCout Objects" << std::endl; // 计算之后调用
+  // std::cout << "the value of _feature_sets.size() " << _feature_sets.size() << std::endl; // 0
 }
 
 void
@@ -601,7 +611,12 @@ FeatureFloodCount::sortAndLabel()
   // Label the features with an ID based on the sorting (processor number independent value)
   for (MooseIndex(_feature_sets) i = 0; i < _feature_sets.size(); ++i)
     if (_feature_sets[i]._id == invalid_id)
+    {
       _feature_sets[i]._id = i;
+      // std::cout <<"_feature_sets["<< i << "]._id is " << _feature_sets[i]._id << std::endl;
+      // 只有开始的时候在主rank上被调用。
+    }
+      
 }
 
 void
@@ -650,13 +665,17 @@ FeatureFloodCount::buildLocalToGlobalIndices(std::vector<std::size_t> & local_to
   }
 }
 
-void
-FeatureFloodCount::buildFeatureIdToLocalIndices(unsigned int max_id)
+void // 在每一步之后被调用，调用次数为总的特征数
+FeatureFloodCount::buildFeatureIdToLocalIndices(unsigned int max_id) // max_id最大的全局ID
 {
   _feature_id_to_local_index.assign(max_id + 1, invalid_size_t);
   for (MooseIndex(_feature_sets) feature_index = 0; feature_index < _feature_sets.size();
        ++feature_index)
   {
+    // std::cout << "the done of FeatureFloodCount::buildFeatureIdToLocalIndices" << std::endl;
+    // std::cout << "the size of buildFeatureIdToLocalIndices::_feature_sets.size()" << _feature_sets.size() << std::endl;
+    // createAdjacentGrainMap();
+
     if (_feature_sets[feature_index]._status != Status::INACTIVE)
     {
       mooseAssert(_feature_sets[feature_index]._id <= max_id,
@@ -669,17 +688,24 @@ FeatureFloodCount::buildFeatureIdToLocalIndices(unsigned int max_id)
 void
 FeatureFloodCount::finalize()
 {
+
+  // std::cout << "the done of FeatureFloodCount::finalize, and the size of _features_set " << _feature_sets.size() << std::endl; //0 
+
   TIME_SECTION("finalize", 3, "Finalizing Feature Identification");
 
   // Gather all information on processor zero and merge
   communicateAndMerge();
 
   // Sort and label the features
-  if (_is_primary)
+  if (_is_primary) // bool
     sortAndLabel();
 
   // Send out the local to global mappings
   scatterAndUpdateRanks();
+
+  // std::cout << "the size of _features_set"
+
+  // 得到相邻晶粒ID
 
   // Populate _feature_maps and _var_index_maps
   updateFieldInfo();
@@ -705,6 +731,23 @@ void
 FeatureFloodCount::scatterAndUpdateRanks()
 {
   // local to global map (one per processor)
+  // std::cout << "the done of FeatureFloodCount::scatterAndUpdateRanks, and the size of _features_set " << _feature_sets.size() << std::endl;
+  int _num_feature;
+  for (MooseIndex(_feature_sets) _num_feature = 0; _num_feature < _feature_sets.size(); ++_num_feature)
+    {
+      // std::cout << "the done of createAdjacentGrainMap !!" << std::endl;
+      _feature_sets[_num_feature]._adjacent_grain_id.clear();
+      _feature_sets[_num_feature]._adjacent_grain_id = createAdjacentGrainMap(_num_feature);
+
+      // std::cout << "the number of adjacent grain is "<< _feature_sets[_num_feature]._adjacent_grain_id.size() << " for grain[" << _feature_sets[_num_feature]._id << "]" << std::endl;
+
+      // for (MooseIndex(_feature_sets) i = 0; i < _feature_sets[_num_feature]._adjacent_grain_id.size(); ++i)
+      // {
+      //   std::cout << "the grain " << _feature_sets[_num_feature]._adjacent_grain_id[i] << " is the adjacent grain for grain " << _feature_sets[_num_feature]._id << std::endl;
+      // }
+    }
+    
+
   std::vector<int> counts;
   std::vector<std::size_t> local_to_global_all;
   if (_is_primary)
@@ -794,7 +837,7 @@ FeatureFloodCount::getTotalFeatureCount() const
 }
 
 unsigned int
-FeatureFloodCount::getFeatureVar(unsigned int feature_id) const
+FeatureFloodCount::getFeatureVar(unsigned int feature_id) const // 获取特征变量
 {
   // Some processors don't contain the largest feature id, in that case we just return invalid_id
   if (feature_id >= _feature_id_to_local_index.size())
@@ -810,6 +853,87 @@ FeatureFloodCount::getFeatureVar(unsigned int feature_id) const
   }
 
   return invalid_id;
+}
+
+unsigned int
+FeatureFloodCount::getFeatureID(unsigned int feature_id) const
+{   
+  // buildGrainNeighborMatrix();
+
+  // Some processors don't contain the largest feature id, in that case we just return invalid_id
+  if (feature_id >= _feature_id_to_local_index.size())
+    return invalid_id;
+
+  auto local_index = _feature_id_to_local_index[feature_id];
+  if (local_index != invalid_size_t)
+  {
+    mooseAssert(local_index < _feature_sets.size(), "local_index out of bounds");
+
+    return _feature_sets[local_index]._status != Status::INACTIVE
+               ? _feature_sets[local_index]._id
+               : invalid_id;
+  }
+
+  return invalid_id;
+}
+
+unsigned int
+FeatureFloodCount::getAdjacentGrainNum(unsigned int feature_id) const
+{   
+  // buildGrainNeighborMatrix();
+
+  // Some processors don't contain the largest feature id, in that case we just return invalid_id
+  if (feature_id >= _feature_id_to_local_index.size())
+    return invalid_id;
+
+  auto local_index = _feature_id_to_local_index[feature_id];
+  if (local_index != invalid_size_t)
+  {
+    mooseAssert(local_index < _feature_sets.size(), "local_index out of bounds");
+
+    return _feature_sets[local_index]._status != Status::INACTIVE
+               ? _feature_sets[local_index]._adjacent_grain_id.size()
+               : invalid_id;
+  }
+
+  return 0;
+}
+
+std::vector<unsigned int> 
+FeatureFloodCount::createAdjacentGrainMap(int num_feature)
+{
+
+  std::map<int, std::vector<unsigned int> > adjacent_map; // a map(key, value) of grian i corresponds to adjcacent grian j
+  int i = num_feature;
+  // for (MooseIndex(_feature_sets) i = 0; i < _feature_sets.size(); ++i)
+  // {
+  //   std::cout << "the type of "
+    std::vector<unsigned int> adjacent_grain; // create a vector of grain I adjacent to grain J
+    for (MooseIndex(_feature_sets) j = 0; j < _feature_sets.size(); ++j)
+    {
+      if (i != j && _feature_sets[i].boundingBoxesIntersect(_feature_sets[j]) &&
+          _feature_sets[i].halosIntersect(_feature_sets[j]))
+      {      
+        adjacent_grain.push_back(_feature_sets[j]._id); //
+      }
+    }
+    adjacent_map.insert(std::make_pair(_feature_sets[i]._id, adjacent_grain)); 
+    // std::cout << "the number of adjacent grain is " << adjacent_map[_feature_sets[i]._id].size() << " for grain " << _feature_sets[i]._id <<std::endl;
+
+    return adjacent_grain;
+  // }  
+
+  // std::cout << "the size of adjacent_map or grain is " << adjacent_map.size() << std::endl; // output the total number of grain
+
+  // std::map< int, std::vector< int > >::iterator pos_grain; // iterator--迭代器
+	// for ( pos_grain = adjacent_map.begin(); pos_grain != adjacent_map.end(); ++pos_grain )
+	// {
+	// 	for ( size_t sz = 0; sz < pos_grain->second.size(); ++sz )
+	// 	{
+  //     std::cout << "the grain[" << pos_grain->second[ sz ] << "] is adjacent to Grain[" << pos_grain->first <<"]" << std::endl;
+	// 	}
+	// 	std::cout << "the number of adjacent grain for Grain[" << pos_grain->first << "] is " << pos_grain->second.size() << std::endl;
+	// }
 }
 
 bool
@@ -910,25 +1034,36 @@ FeatureFloodCount::getEntityValue(dof_id_type entity_id,
   auto use_default = false;
   if (var_index == invalid_size_t)
   {
+    // std::cout << "the value of var_index is equal FeatureFloodCount::invalid_size_t." << std::endl; // execute_on = 'initial timestep_end'
     use_default = true;
     var_index = 0;
   }
 
   mooseAssert(var_index < _maps_size, "Index out of range");
 
-  switch (field_type)
+  switch (field_type) 
   {
-    case FieldType::UNIQUE_REGION:
+    case FieldType::UNIQUE_REGION: // unique_region
     {
-      const auto entity_it = _feature_maps[var_index].find(entity_id);
+      const auto entity_it = _feature_maps[var_index].find(entity_id); // _feature_maps[0]
+        // std::vector<std::map<dof_id_type, int>> _feature_maps;
+        // const struct std::_Rb_tree_const_iterator<std::pair<const long unsigned int, int> > entity_it
+      // std::cout << "the type of entity_it is " << typeid(entity_it).name() << std::endl; // St23_Rb_tree_const_iteratorISt4pairIKmiEE
+      // std::cout << "the size of _feature_maps is " << _feature_maps.size() << std::endl; // 8; op_num = 8
+      // std::cout << "the size of _feature_maps[0] is " << _feature_maps[0] << std::endl; // 8; op_num = 8
+      // std::cout << "the value of entity_id is " << entity_id << std::endl;
+      // std::cout << "the value of var_index is " << var_index << std::endl;
 
       if (entity_it != _feature_maps[var_index].end())
-        return entity_it->second; // + _region_offsets[var_index];
+        {
+          // std::cout << "the done of 'entity_it != _feature_maps[var_index].end()';" << std::endl; // execute_on = 'initial timestep_end'
+          return entity_it->second; // + _region_offsets[var_index];
+        }
       else
         return -1;
     }
 
-    case FieldType::VARIABLE_COLORING:
+    case FieldType::VARIABLE_COLORING: // variable_coloring
     {
       mooseAssert(
           _var_index_mode,
@@ -1237,31 +1372,50 @@ FeatureFloodCount::areFeaturesMergeable(const FeatureData & f1, const FeatureDat
 void
 FeatureFloodCount::updateFieldInfo()
 {
+  // std::cout << "the done of updateFieldInfo!" << std::endl; // INITIAL执行，至执行一次
   for (MooseIndex(_feature_sets) i = 0; i < _feature_sets.size(); ++i)
   {
-    auto & feature = _feature_sets[i];
+    // std::cout << "the value of _feature_sets.size() is " << _feature_sets.size() << std::endl; // 晶粒数目
+    auto & feature = _feature_sets[i]; // std::vector<FeatureData> // FeatureData feature
 
     // If the developer has requested _condense_map_info we'll make sure we only update the zeroth
     // map
     auto map_index = (_single_map_mode || _condense_map_info) ? decltype(feature._var_index)(0)
-                                                              : feature._var_index;
+                                                              : feature._var_index; 
+    // std::cout << "the value of feature._var_index is " << feature._var_index << std::endl; // 0~29，其中晶粒数目是30
+    // std::cout << "i is " << i << std::endl; // map_index is 0
+    // std::cout << "the value of map_index is " << map_index << std::endl; // map_index is 0
+    // std::cout << "the value of feature._id is " << feature._id << std::endl; // 0~29，其中晶粒数目是30
+
 
     // Loop over the entity ids of this feature and update our local map
     for (auto entity : feature._local_ids)
     {
+      // 开始计算时候被执行
       _feature_maps[map_index][entity] = static_cast<int>(feature._id);
+      // std::cout << "the value of _feature_maps[map_index][entity] is " << _feature_maps[map_index][entity] << std::endl; 
+      // _feature_maps[map_index][entity] is 4 19 23
+      // std::cout << "the value of map_index is " << map_index << std::endl; // map_index is 0
+      // std::cout << "the value of feature._id is " << feature._id << std::endl; // feature._id is 4 19 23
+      // static_cast<int> 隐式转换
 
       if (_var_index_mode)
+      {
         _var_index_maps[map_index][entity] = feature._var_index;
+        // std::cout << "the done of _var_index_mode is " << _var_index_mode << std::endl; // 初始的时候并没有被启动
+      }
+        
 
       // Fill in the data structure that keeps track of all features per elem
       if (_compute_var_to_feature_map)
       {
+        // std::cout << "the done of _compute_var_to_feature_map is " << _compute_var_to_feature_map << std::endl; // map_index is 0
         auto insert_pair = moose_try_emplace(
             _entity_var_to_features, entity, std::vector<unsigned int>(_n_vars, invalid_id));
         auto & vec_ref = insert_pair.first->second;
         vec_ref[feature._var_index] = feature._id;
       }
+
     }
 
     if (_compute_halo_maps)
