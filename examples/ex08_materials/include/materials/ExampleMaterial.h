@@ -15,16 +15,18 @@
 class ExampleMaterial : public Material
 {
 public:
-  ExampleMaterial(const InputParameters & parameters);
+  ExampleMaterial(const InputParameters & parameters); // 构造函数
 
   static InputParameters validParams();
 
 protected:
-  virtual void computeQpProperties() override;
+  virtual void computeQpProperties() override; //     
 
 private:
   /// member variable to hold the computed diffusivity coefficient
-  MaterialProperty<Real> & _diffusivity;
+  MaterialProperty<Real> & _diffusivity; // 创建名为_diffusivity的材料性质引用
+  // MaterialProperty是一个模板类，
+
   /// member variable to hold the computed convection velocity gradient term
   MaterialProperty<RealGradient> & _convection_velocity;
 

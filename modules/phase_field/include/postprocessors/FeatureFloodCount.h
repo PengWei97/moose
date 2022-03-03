@@ -153,25 +153,26 @@ public:
      */
     using container_type = std::set<dof_id_type>;
   
-    // std::cout << "the value of dof_id_type is " << i << std::endl;
+    // std::cout << "the value of dof_id_type is " << i << std::endl; // typedef uint32_t(int) libMesh::dof_id_type 
+
 
     // 构造函数的重载
     FeatureData() : FeatureData(std::numeric_limits<std::size_t>::max(), Status::INACTIVE) {} // 构造函数1
 
     // 构造函数的内部赋值及初始化列表
     FeatureData(std::size_t var_index,
-                unsigned int local_index,
+                unsigned int local_index, // the current entity ID
                 processor_id_type rank, 
                 Status status)
       : FeatureData(var_index, status)
     {
-      _orig_ids = {std::make_pair(rank, local_index)};
+      _orig_ids = {std::make_pair(rank, local_index)}; // initial the original processor’s local feature ID and processor ID 
     }
 
-    FeatureData(std::size_t var_index,
-                Status status,
-                std::vector<unsigned int> adjacent_grain_id = std::vector<unsigned int>(), //添加
-                unsigned int id = invalid_id, // 默认参数
+    FeatureData(std::size_t var_index,  // 序参数索引
+                Status status, // 特征状态
+                std::vector<unsigned int> adjacent_grain_id = std::vector<unsigned int>(), // 相邻晶粒的ID
+                unsigned int id = invalid_id, // 特征ID
                 std::vector<BoundingBox> bboxes = {BoundingBox()})
       : _var_index(var_index), // The Moose variable where this feature was found (often the "order parameter")
         _adjacent_grain_id(adjacent_grain_id), // 添加
@@ -644,7 +645,7 @@ protected:
    * in a serialized datastructures.
    * This keeps our overhead down since this variable never needs to be communicated.
    */
-  std::vector<std::set<dof_id_type>> _entities_visited;
+  std::vector<std::set<dof_id_type>> _entities_visited; // 进一步，该变量跟踪执行期间访问了哪些节点。
 
   /**
    * This map keeps track of which variables own which nodes.  We need a vector of them for multimap
@@ -655,7 +656,7 @@ protected:
   std::vector<std::map<dof_id_type, int>> _var_index_maps;
 
   /// The data structure used to find neighboring elements give a node ID
-  std::unordered_map<dof_id_type, std::vector<const Elem *>> _nodes_to_elem_map;
+  std::unordered_map<dof_id_type, std::vector<const Elem *>> _nodes_to_elem_map;  // 进一步
 
   /// The number of features seen by this object per map
   std::vector<unsigned int> _feature_counts_per_map;
@@ -726,7 +727,7 @@ protected:
   /// if features intersect any boundary
   std::unordered_set<dof_id_type> _all_boundary_entity_ids;
 
-  std::map<dof_id_type, std::vector<unsigned int>> _entity_var_to_features;
+  std::map<dof_id_type, std::vector<unsigned int>> _entity_var_to_features; // 进一步
 
   std::vector<unsigned int> _empty_var_to_features;
 
