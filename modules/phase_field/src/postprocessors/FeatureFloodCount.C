@@ -1142,6 +1142,7 @@ FeatureFloodCount::prepareDataForTransfer()
   TIME_SECTION("prepareDataForTransfer", 3, "Preparing Data For Transfer");
 
   MeshBase & mesh = _mesh.getMesh();
+  // std::cout << "the mesh is " << mesh << std::endl;
 
   FeatureData::container_type local_ids_no_ghost, set_difference;
 
@@ -1181,7 +1182,7 @@ FeatureFloodCount::prepareDataForTransfer()
        * Save off the min entity id present in the feature to uniquely
        * identify the feature regardless of n_procs
        */
-      feature._min_entity_id = *feature._local_ids.begin();
+      feature._min_entity_id = *feature._local_ids.begin();  // int 
     }
   }
 }

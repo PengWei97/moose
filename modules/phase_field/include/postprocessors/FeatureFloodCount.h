@@ -124,10 +124,10 @@ public:
   /// This enumeration is used to indicate status of the grains in the _unique_grains data structure
   enum class Status : unsigned char
   {
-    CLEAR = 0x0,
-    MARKED = 0x1,
-    DIRTY = 0x2,
-    INACTIVE = 0x4
+    CLEAR = 0x0, // clear
+    MARKED = 0x1, // marked
+    DIRTY = 0x2, //dirty
+    INACTIVE = 0x4 // inactive
   };
 
   /// This enumeration is used to inidacate status of boundary intersections.
@@ -151,17 +151,19 @@ public:
      * Note: Testing has shown that the vector container is nearly 10x faster. There's really
      * no reason to use sets.
      */
-    using container_type = std::set<dof_id_type>;
+    using container_type = std::set<dof_id_type>; // typedef uint32_t(int) libMesh::dof_id_type 
   
     // std::cout << "the value of dof_id_type is " << i << std::endl; // typedef uint32_t(int) libMesh::dof_id_type 
 
 
     // 构造函数的重载
     FeatureData() : FeatureData(std::numeric_limits<std::size_t>::max(), Status::INACTIVE) {} // 构造函数1
+    // 无输入+初始化
+    // std::numeric_limits<std::size_t>::max() -- the maximum value for std::size (long unsigned int)
 
     // 构造函数的内部赋值及初始化列表
-    FeatureData(std::size_t var_index,
-                unsigned int local_index, // the current entity ID
+    FeatureData(std::size_t var_index, // 序参数索引
+                unsigned int local_index, // the current entity ID ？？
                 processor_id_type rank, 
                 Status status)
       : FeatureData(var_index, status)
@@ -178,7 +180,7 @@ public:
         _adjacent_grain_id(adjacent_grain_id), // 添加
         _id(id), // An ID for this feature
         _bboxes(bboxes), // Assume at least one bounding box
-        _min_entity_id(DofObject::invalid_id),
+        _min_entity_id(DofObject::invalid_id), // 最小的实体ID
         _vol_count(0),
         _status(status),
         _boundary_intersection(BoundaryIntersection::NONE)
@@ -283,7 +285,7 @@ public:
 
     /// Holds the local ids in the interior of a feature.
     /// This data structure is only maintained on the local processor
-    container_type _local_ids;
+    container_type _local_ids; // 局部处理上面
 
     /// Holds the ids surrounding the feature
     container_type _halo_ids;
@@ -295,7 +297,7 @@ public:
     container_type _periodic_nodes;
 
     /// The Moose variable where this feature was found (often the "order parameter")
-    std::size_t _var_index;
+    std::size_t _var_index; // long unigned int
 
     /// An ID for this feature
     unsigned int _id;
@@ -310,7 +312,7 @@ public:
     std::list<std::pair<processor_id_type, unsigned int>> _orig_ids;
 
     /// The minimum entity seen in the _local_ids, used for sorting features
-    dof_id_type _min_entity_id;
+    dof_id_type _min_entity_id; // 进一步
 
     /// The count of entities contributing to the volume calculation
     std::size_t _vol_count;
@@ -327,7 +329,7 @@ public:
 
     FeatureData duplicate() const { return FeatureData(*this); }
 
-#ifndef __INTEL_COMPILER
+#ifndef __INTEL_COMPILER // intel_compiler
     /**
      * 2016-07-14
      * The INTEL compiler we are currently using (2013 with GCC 4.8) appears to have a bug
