@@ -52,6 +52,7 @@ ComputePolycrystalElasticityTensor::computeQpElasticityTensor()
 {
   // Get list of active order parameters from grain tracker
   const auto & op_to_grains = _grain_tracker.getVarToFeatureVector(_current_elem->id());
+  
 
   // Calculate elasticity tensor
   _elasticity_tensor[_qp].zero();
@@ -59,6 +60,8 @@ ComputePolycrystalElasticityTensor::computeQpElasticityTensor()
   for (MooseIndex(op_to_grains) op_index = 0; op_index < op_to_grains.size(); ++op_index)
   {
     auto grain_id = op_to_grains[op_index];
+    std::cout << "the value of grain_id is " << grain_id << " in op_index = " << op_index << std::endl;
+    
     if (grain_id == FeatureFloodCount::invalid_id)
       continue;
 
