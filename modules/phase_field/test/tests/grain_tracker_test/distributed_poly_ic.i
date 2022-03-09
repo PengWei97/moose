@@ -1,3 +1,5 @@
+# 分布式网格-多晶初始条件
+
 [Mesh]
   # Mesh block.  Meshes can be read in or automatically generated
   type = GeneratedMesh
@@ -15,8 +17,8 @@
   # Parameters used by several kernels that are defined globally to simplify input file
   op_num = '8' # Number of order parameters used
   var_name_base = 'gr' # Base name of grains
-  order = 'CONSTANT'
-  family = 'MONOMIAL'
+  order = 'CONSTANT' // constant
+  family = 'MONOMIAL' // monomial
 []
 
 [Variables]
@@ -204,12 +206,12 @@
     flood_counter = grain_tracker
   []
   [proc_id]
-    type = ProcessorIDAux
+    type = ProcessorIDAux # Auxiliary kernel for displaying mesh partitioning. Each node or element can display its corresponding processor ID.
     variable = proc_id
     execute_on = 'initial'
   []
   [voronoi_id]
-    type = VoronoiICAux
+    type = VoronoiICAux # getGrainsBasedOnElem()
     variable = voronoi_id
     execute_on = 'initial'
     polycrystal_ic_uo = voronoi
