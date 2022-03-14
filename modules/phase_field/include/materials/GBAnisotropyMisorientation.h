@@ -39,16 +39,20 @@ private:
 
   const VariableValue & _T;
 
-  std::vector<std::vector<Real>> _sigma; // 二维矩阵
-  std::vector<std::vector<Real>> _mob;
-  std::vector<std::vector<Real>> _Q;
-  std::vector<std::vector<Real>> _kappa_gamma;
-  std::vector<std::vector<Real>> _a_g2;
+  Real _sigma; // 二维矩阵
+  Real _mob;
+  Real _Q;
+  Real _kappa;
+  Real _gamma;
+  Real _a;
+  Real _g2;
 
-  MaterialProperty<Real> & _kappa;
-  MaterialProperty<Real> & _gamma;
-  MaterialProperty<Real> & _L;
-  MaterialProperty<Real> & _mu;
+  MaterialProperty<Real> & _sigma_gb;
+  MaterialProperty<Real> & _mob_gb;
+  MaterialProperty<Real> & _kappa_gb;
+  MaterialProperty<Real> & _gamma_gb;
+  MaterialProperty<Real> & _L_gb;
+  MaterialProperty<Real> & _mu_gb;
 
   MaterialProperty<Real> & _molar_volume;
   MaterialProperty<Real> & _entropy_diff;
@@ -63,5 +67,5 @@ private:
   const std::vector<const VariableValue *> _vals;
   const std::vector<const VariableGradient *> _grad_vals;
 
-
+  const MaterialProperty<Real> & _delta_theta;
 };

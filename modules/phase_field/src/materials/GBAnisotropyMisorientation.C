@@ -39,10 +39,12 @@ GBAnisotropyMisorientation::GBAnisotropyMisorientation(const InputParameters & p
     _M_V(getParam<Real>("molar_volume_value")),
     _Anisotropic_GB_file_name(getParam<FileName>("Anisotropic_GB_file_name")),
     _T(coupledValue("T")),
-    _kappa(declareProperty<Real>("kappa_op")),
-    _gamma(declareProperty<Real>("gamma_asymm")), // gamma
-    _L(declareProperty<Real>("L")),
-    _mu(declareProperty<Real>("mu")),
+    _sigma_gb(declareProperty<Real>("sigma")),
+    _mob_gb(declareProperty<Real>("M_GB")),
+    _kappa_gb(declareProperty<Real>("kappa_op")),
+    _gamma_gb(declareProperty<Real>("gamma_asymm")), // gamma
+    _L_gb(declareProperty<Real>("L")),
+    _mu_gb(declareProperty<Real>("mu")),
     _molar_volume(declareProperty<Real>("molar_volume")),
     _entropy_diff(declareProperty<Real>("entropy_diff")),
     _act_wGB(declareProperty<Real>("act_wGB")),
@@ -51,59 +53,9 @@ GBAnisotropyMisorientation::GBAnisotropyMisorientation(const InputParameters & p
     _mu_qp(0.0),
     _op_num(coupledComponents("v")),
     _vals(coupledValues("v")),
-    _grad_vals(coupledGradients("v"))
+    _grad_vals(coupledGradients("v")),
+    _delta_theta(getMaterialProperty<Real>("delta_theta"))
 {
-
-  //  初始化晶界能、晶界迁移率、激活能、梯度自由能，梯度项-gamma，a_g^2
-  // reshape vectors
-  _sigma.resize(_op_num); // sigma, the gb energy, // unit: J/m^2
-  _mob.resize(_op_num); // mu, the gb mobility, unit: m^4/(J*s)
-  _Q.resize(_op_num); // Q, unit: eV
-  _kappa_gamma.resize(_op_num); // kappa and gamma
-  _a_g2.resize(_op_num); // ??
-
-  for (unsigned int op = 0; op < _op_num; ++op)
-  {
-    _sigma[op].resize(_op_num);
-    _mob[op].resize(_op_num);
-    _Q[op].resize(_op_num);
-    _kappa_gamma[op].resize(_op_num);
-    _a_g2[op].resize(_op_num);
-  }
-
-  // 从文件中读取晶界能、晶界迁移率和激活能
-  // Read in data from "Anisotropic_GB_file_name"
-  std::ifstream inFile(_Anisotropic_GB_file_name.c_str());
-
-  if (!inFile)
-    paramError("Anisotropic_GB_file_name", "Can't open GB anisotropy input file");
-
-  for (unsigned int i = 0; i < 2; ++i)
-    inFile.ignore(255, '\n'); // ignore line
-
-  Real data;
-  for (unsigned int i = 0; i < 3 * _op_num; ++i) // 列
-  {
-    std::vector<Real> row; // create an empty row of double values
-    for (unsigned int j = 0; j < _op_num; ++j) // 行
-    {
-      inFile >> data;
-      row.push_back(data);
-    }
-
-    if (i < _op_num)
-      _sigma[i] = row; // unit: J/m^2
-
-    else if (i < 2 * _op_num)
-      _mob[i - _op_num] = row; // unit: m^4/(J*s)
-
-    else
-      _Q[i - 2 * _op_num] = row; // unit: eV
-  }
-
-  inFile.close();
-
-
   Real sigma_init; //
   Real g2 = 0.0; 
   Real f_interf = 0.0; // f_{0, \text { interf }}(\gamma)}
@@ -114,99 +66,71 @@ GBAnisotropyMisorientation::GBAnisotropyMisorientation(const InputParameters & p
   Real y = 0.0; // 1/gamma
   Real yyy = 0.0; // 1/gamma^3
 
-  // 用于设定sigma_init初始值
-  Real sigma_big = 0.0;
-  Real sigma_small = 0.0;
 
-  // 对晶界能和晶界迁移率修改单位，并找到最大的晶界能和最小的晶界能
-  for (unsigned int m = 0; m < _op_num - 1; ++m)
-    for (unsigned int n = m + 1; n < _op_num; ++n) \\ 输出上三角的结果
-    {
+  const Real & delta_theta_HGB = 15;
+  // Grain boundary mobility according to the sigmoidal law 
+  const Real & GBmobi0_HGB = 2.5e-6 * std::exp(- 0.23 / (_kb * _T[_qp])); // the grain boudary mobility of a high angle grain boundary
+  const Real B = 5;
+  const Real n = 4;
+
+  // Grain boundary energy according to the Read-Shockley law;
+  const Real & GBEnergy_HGB = 0.708; // the grain boudary energy of a high angle grain boundary  
+
+  _mob = GBmobi0_HGB * 0.1;
+  _sigma = GBEnergy_HGB * 0.1;
+
+  if (_delta_theta[_qp] > 0)
+  {
+    _mob = GBmobi0_HGB * (1- std::exp(-B * std::pow(_delta_theta[_qp] / delta_theta_HGB, n))) + GBmobi0_HGB * 0.1; 
+    if (_delta_theta[_qp] < 15)
+      _sigma = (GBEnergy_HGB * _delta_theta[_qp] / delta_theta_HGB * std::log(1 - std::log(_delta_theta[_qp] / delta_theta_HGB)) + 0.1);
+    else
+      _sigma = (GBEnergy_HGB * 15.0 / delta_theta_HGB * std::log(1 - std::log(15.0 / delta_theta_HGB)) + 0.1);
+  }    
+
       // Convert units of mobility and energy
-      _sigma[m][n] *= _JtoeV * (_length_scale * _length_scale); // eV/nm^2
+  _sigma *= _JtoeV * (_length_scale * _length_scale); // eV/nm^2
 
-      _mob[m][n] *= _time_scale / (_JtoeV * (_length_scale * _length_scale * _length_scale *
-                                             _length_scale)); // Convert to nm^4/(eV*ns);
-
-      if (m == 0 && n == 1) // 初始化sigma_big, sigma_small
-      {
-        sigma_big = _sigma[m][n];
-        sigma_small = sigma_big;
-      }
-
-      else if (_sigma[m][n] > sigma_big)
-        sigma_big = _sigma[m][n];
-
-      else if (_sigma[m][n] < sigma_small)
-        sigma_small = _sigma[m][n];
-    }
+  _mob *= _time_scale / (_JtoeV * (_length_scale * _length_scale * _length_scale *
+                                          _length_scale)); // Convert to nm^4/(eV*ns);                                    
 
   // 设置初始晶界能和局部自由能密度函数的前置因子
-  sigma_init = (sigma_big + sigma_small) / 2.0;
-  _mu_qp = 6.0 * sigma_init / _wGB; // 3/4 * 0.125 * sigma / l, model coefficient
+  _mu_qp = 6.0 * _sigma / _wGB; // 3/4 * 0.125 * sigma / l, model coefficient
 
   // 对于晶粒m-晶粒n的晶界
-  for (unsigned int m = 0; m < _op_num - 1; ++m)
-    for (unsigned int n = m + 1; n < _op_num; ++n) // 矩阵的上三角
-    {
-      a_star = a_0; // 0.75
-      a_0 = 0.0; // a_0 = sqrt*(f_{0, interf}(gamma)) / g(gamma)
+  a_star = a_0; // 0.75
+  a_0 = 0.0; // a_0 = sqrt*(f_{0, interf}(gamma)) / g(gamma)
 
-      while (std::abs(a_0 - a_star) > 1.0e-9) // whie (a_0 != a*)
-      {
-        a_0 = a_star;
-        kappa_star = a_0 * _wGB * _sigma[m][n]; // (eq-36b)
-        g2 = _sigma[m][n] * _sigma[m][n] / (kappa_star * _mu_qp); // (eq-12)
-        y = -5.288 * g2 * g2 * g2 * g2 - 0.09364 * g2 * g2 * g2 + 9.965 * g2 * g2 - 8.183 * g2 +
-            2.007; // g^{-1} ??
-        gamma_star = 1 / y; // gamma* = g^{-1}
-        yyy = y * y * y;
-        f_interf = 0.05676 * yyy * yyy - 0.2924 * yyy * y * y + 0.6367 * yyy * y - 0.7749 * yyy +
-                   0.6107 * y * y - 0.4324 * y + 0.2792; // f_interf(gamma*)
-        a_star = std::sqrt(f_interf / g2);
-      }
+  while (std::abs(a_0 - a_star) > 1.0e-9) // whie (a_0 != a*)
+  {
+    a_0 = a_star;
+    kappa_star = a_0 * _wGB * _sigma; // (eq-36b)
+    g2 = _sigma * _sigma / (kappa_star * _mu_qp); // (eq-12)
+    y = -5.288 * g2 * g2 * g2 * g2 - 0.09364 * g2 * g2 * g2 + 9.965 * g2 * g2 - 8.183 * g2 +
+        2.007; // g^{-1} ??
+    gamma_star = 1 / y; // gamma* = g^{-1}
+    yyy = y * y * y;
+    f_interf = 0.05676 * yyy * yyy - 0.2924 * yyy * y * y + 0.6367 * yyy * y - 0.7749 * yyy +
+                0.6107 * y * y - 0.4324 * y + 0.2792; // f_interf(gamma*)
+    a_star = std::sqrt(f_interf / g2);
+  }
 
-      _kappa_gamma[m][n] = kappa_star; // upper triangle stores the discrete set of kappa values
-      _kappa_gamma[n][m] = gamma_star; // lower triangle stores the discrete set of gamma values
+   _kappa = kappa_star; // upper triangle stores the discrete set of kappa values
+  _gamma = gamma_star; // lower triangle stores the discrete set of gamma values
 
-      _a_g2[m][n] = a_star; // upper triangle stores "a" data. a*
-      _a_g2[n][m] = g2;     // lower triangle stores "g2" data. (eq-12)
-    }
+  _a = a_star; // upper triangle stores "a" data. a*
+  _g2 = g2;     // lower triangle stores "g2" data. (eq-12)
 }
 
 void
 GBAnisotropyMisorientation::computeQpProperties()
 {
-  Real sum_kappa = 0.0;
-  Real sum_gamma = 0.0;
-  Real sum_L = 0.0;
-  Real Val = 0.0;
-  Real sum_val = 0.0;
-  Real f_mob = 1.0;
-  Real gamma_value = 0.0;
-
-  for (unsigned int m = 0; m < _op_num - 1; ++m)
-  {
-    for (unsigned int n = m + 1; n < _op_num; ++n) // m<n 上三角
-    {
-      gamma_value = _kappa_gamma[n][m]; // gamma
-
-      Val = (100000.0 * ((*_vals[m])[_qp]) * ((*_vals[m])[_qp]) + 0.01) *
-            (100000.0 * ((*_vals[n])[_qp]) * ((*_vals[n])[_qp]) + 0.01);
-
-      sum_val += Val;
-      sum_kappa += _kappa_gamma[m][n] * Val; // kappa
-      sum_gamma += gamma_value * Val;
-      // Following comes from substituting Eq. (36c) from the paper into (36b)
-      sum_L += Val * _mob[m][n] * std::exp(-_Q[m][n] / (_kb * _T[_qp])) * f_mob * _mu_qp *
-               _a_g2[n][m] / _sigma[m][n]; // the sum of L
-    }
-  }
-
-  _kappa[_qp] = sum_kappa / sum_val;
-  _gamma[_qp] = sum_gamma / sum_val;
-  _L[_qp] = sum_L / sum_val;
-  _mu[_qp] = _mu_qp;
+  _sigma_gb[_qp] = _sigma;
+  _mob_gb[_qp] = _mob;
+  _kappa_gb[_qp] = _kappa;
+  _gamma_gb[_qp] = _gamma;
+  _L_gb[_qp] = _mob * std::exp(-_Q / (_kb * _T[_qp])) * _mu_qp * _g2 / _sigma;
+  _mu_gb[_qp] = _mu_qp;
 
   _molar_volume[_qp] =
       _M_V / (_length_scale * _length_scale * _length_scale); // m^3/mol converted to ls^3/mol
