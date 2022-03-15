@@ -35,10 +35,5 @@ protected:
   /// Order parameters
   const std::vector<const VariableValue *> _vals;
 
-  Real _GBEnergy;
-  Real _GBMobility;
-
-  MaterialProperty<Real> & _sigma_GB; // GB energy
-  MaterialProperty<Real> & _M_GB; // GB mobility
   MaterialProperty<Real> & _delta_theta; // GB mobility
 };

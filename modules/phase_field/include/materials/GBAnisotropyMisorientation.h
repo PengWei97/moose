@@ -35,8 +35,6 @@ private:
   const Real _time_scale;
   const Real _M_V;
 
-  const FileName _Anisotropic_GB_file_name;
-
   const VariableValue & _T;
 
   Real _sigma; // 二维矩阵

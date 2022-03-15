@@ -21,10 +21,7 @@ GBAnisotropyMisorientation::validParams()
   params.addParam<Real>("time_scale", 1.0e-9, "Time scale in s, where default is ns");
   params.addParam<Real>("molar_volume_value",
                         7.11e-6,
-                        "molar volume of material in m^3/mol, by default it's the value of copper"); // 没用
-  params.addRequiredParam<FileName>("Anisotropic_GB_file_name",
-                                    "Name of the file containing: 1)GB mobility prefactor; 2) GB "
-                                    "migration activation energy; 3)GB energy");
+                        "molar volume of material in m^3/mol, by default it's the value of copper");
   params.addRequiredCoupledVarWithAutoBuild(
       "v", "var_name_base", "op_num", "Array of coupled variables");
   return params;
@@ -37,7 +34,6 @@ GBAnisotropyMisorientation::GBAnisotropyMisorientation(const InputParameters & p
     _length_scale(getParam<Real>("length_scale")),
     _time_scale(getParam<Real>("time_scale")),
     _M_V(getParam<Real>("molar_volume_value")),
-    _Anisotropic_GB_file_name(getParam<FileName>("Anisotropic_GB_file_name")),
     _T(coupledValue("T")),
     _sigma_gb(declareProperty<Real>("sigma")),
     _mob_gb(declareProperty<Real>("M_GB")),
@@ -56,6 +52,12 @@ GBAnisotropyMisorientation::GBAnisotropyMisorientation(const InputParameters & p
     _grad_vals(coupledGradients("v")),
     _delta_theta(getMaterialProperty<Real>("delta_theta"))
 {
+
+}
+
+void
+GBAnisotropyMisorientation::computeQpProperties()
+{
   Real sigma_init; //
   Real g2 = 0.0; 
   Real f_interf = 0.0; // f_{0, \text { interf }}(\gamma)}
@@ -69,30 +71,29 @@ GBAnisotropyMisorientation::GBAnisotropyMisorientation(const InputParameters & p
 
   const Real & delta_theta_HGB = 15;
   // Grain boundary mobility according to the sigmoidal law 
-  const Real & GBmobi0_HGB = 2.5e-6 * std::exp(- 0.23 / (_kb * _T[_qp])); // the grain boudary mobility of a high angle grain boundary
+  const Real & GBmobi0_HGB = 2.5e-6 * std::exp(- 0.23 / (_kb * 450)); // the grain boudary mobility of a high angle grain boundary
   const Real B = 5;
   const Real n = 4;
 
   // Grain boundary energy according to the Read-Shockley law;
   const Real & GBEnergy_HGB = 0.708; // the grain boudary energy of a high angle grain boundary  
 
-  _mob = GBmobi0_HGB * 0.1;
-  _sigma = GBEnergy_HGB * 0.1;
-
+  _mob = 0.0; // GBmobi0_HGB;
+  _sigma = 0.0; //GBEnergy_HGB
+  
   if (_delta_theta[_qp] > 0)
   {
-    _mob = GBmobi0_HGB * (1- std::exp(-B * std::pow(_delta_theta[_qp] / delta_theta_HGB, n))) + GBmobi0_HGB * 0.1; 
+    _mob = GBmobi0_HGB * ((1- std::exp(-B * std::pow(_delta_theta[_qp] / delta_theta_HGB, n))) );  // * 4 + 1
     if (_delta_theta[_qp] < 15)
-      _sigma = (GBEnergy_HGB * _delta_theta[_qp] / delta_theta_HGB * std::log(1 - std::log(_delta_theta[_qp] / delta_theta_HGB)) + 0.1);
+      _sigma = GBEnergy_HGB * ( _delta_theta[_qp] / delta_theta_HGB * std::log(1 - std::log(_delta_theta[_qp] / delta_theta_HGB)) );
     else
-      _sigma = (GBEnergy_HGB * 15.0 / delta_theta_HGB * std::log(1 - std::log(15.0 / delta_theta_HGB)) + 0.1);
+      _sigma = GBEnergy_HGB * (15.0 / delta_theta_HGB * std::log(1 - std::log(15.0 / delta_theta_HGB)) );
   }    
 
       // Convert units of mobility and energy
   _sigma *= _JtoeV * (_length_scale * _length_scale); // eV/nm^2
 
-  _mob *= _time_scale / (_JtoeV * (_length_scale * _length_scale * _length_scale *
-                                          _length_scale)); // Convert to nm^4/(eV*ns);                                    
+  _mob *= _time_scale / (_JtoeV * (_length_scale * _length_scale * _length_scale * _length_scale)); // Convert to nm^4/(eV*ns);                                    
 
   // 设置初始晶界能和局部自由能密度函数的前置因子
   _mu_qp = 6.0 * _sigma / _wGB; // 3/4 * 0.125 * sigma / l, model coefficient
@@ -120,11 +121,7 @@ GBAnisotropyMisorientation::GBAnisotropyMisorientation(const InputParameters & p
 
   _a = a_star; // upper triangle stores "a" data. a*
   _g2 = g2;     // lower triangle stores "g2" data. (eq-12)
-}
 
-void
-GBAnisotropyMisorientation::computeQpProperties()
-{
   _sigma_gb[_qp] = _sigma;
   _mob_gb[_qp] = _mob;
   _kappa_gb[_qp] = _kappa;
