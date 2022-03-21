@@ -31,7 +31,7 @@ GBAnisotropyGrainGrowth::validParams()
   params.addParam<Real>("time_scale", 1.0e-9, "Time scale in s, where default is ns");
   params.addParam<Real>("GBsigma_HAB",0.708, "the gb energy of a high angle grain boudary");
   params.addParam<Real>("GBmob_HAB", 2.5e-6, "the gb mobility of a high angle grain boudary");
-  params.addParam<Real>("GBQ_HAB", 2.5e-6, "the gb activate energy of a high angle grain boudary");
+  params.addParam<Real>("GBQ_HAB", 0.23, "the gb activate energy of a high angle grain boudary");
   params.addParam<Real>("rate_HABvsLAB", 4, "the ratio of high-angle gb to low-angle gb");
   params.addParam<Real>(
       "delta_sigma", 0.1, "factor determining inclination dependence of GB energy");
@@ -39,8 +39,8 @@ GBAnisotropyGrainGrowth::validParams()
       "delta_mob", 0.1, "factor determining inclination dependence of GB mobility");
   params.addRequiredParam<bool>("inclination_anisotropy",
                                 "The GB anisotropy inclination would be considered if true");
-  params.addRequiredParam<bool>("_gbEnergy_anisotropy",
-                                "The GB anisotropy inclination would be considered if true");
+  params.addRequiredParam<bool>("gbEnergy_anisotropy",
+                                "The GB energy anisotropy would be considered if true");
   params.addRequiredCoupledVarWithAutoBuild(
       "v", "var_name_base", "op_num", "Array of coupled variables");
   return params;
@@ -51,7 +51,7 @@ GBAnisotropyGrainGrowth::GBAnisotropyGrainGrowth(const InputParameters & paramet
     _grain_tracker(getUserObject<GrainTracker>("grain_tracker")),
     _euler(getUserObject<EulerAngleProvider>("euler_angle_provider")),
     _wGB(getParam<Real>("wGB")),
-    _mesh_dimension(_mesh.dimension()), // ??
+    _mesh_dimension(_mesh.dimension()),
     _length_scale(getParam<Real>("length_scale")),
     _time_scale(getParam<Real>("time_scale")),
     _GBsigma_HAB(getParam<Real>("GBsigma_HAB")),
@@ -70,7 +70,7 @@ GBAnisotropyGrainGrowth::GBAnisotropyGrainGrowth(const InputParameters & paramet
     _delta_theta(declareProperty<Real>("delta_theta")),
     _kb(8.617343e-5),      // Boltzmann constant in eV/K
     _JtoeV(6.24150974e18), // Joule to eV conversion
-    _mu_qp(0.0), //??
+    _mu_qp(0.0),
     _op_num(coupledComponents("v")),
     _vals(coupledValues("v")),
     _grad_vals(coupledGradients("v"))
@@ -247,9 +247,13 @@ GBAnisotropyGrainGrowth::computeGBParamaterByMisorientaion()
         if (_gbEnergy_anisotropy)
         {
           if (_delta_theta[_qp] < delta_theta_HAB)
-            _sigma[varibaleIndex[j]][varibaleIndex[i]] = _GBsigma_HAB;
+          {
+            _sigma[varibaleIndex[i]][varibaleIndex[j]] = _GBsigma_HAB * ((_delta_theta[_qp] / delta_theta_HAB * (1 - std::log(_delta_theta[_qp] / delta_theta_HAB))) * _rate_HABvsLAB + 1 ); 
+          }
           else 
-            _sigma[varibaleIndex[j]][varibaleIndex[i]] = _GBsigma_HAB;
+          {
+            _sigma[varibaleIndex[i]][varibaleIndex[j]] = _GBsigma_HAB * ((15.0 / delta_theta_HAB * (1 - std::log(15.0 / delta_theta_HAB))) * _rate_HABvsLAB + 1 );
+          }
             
           _sigma[varibaleIndex[j]][varibaleIndex[i]] = _sigma[varibaleIndex[i]][varibaleIndex[j]];
         }
@@ -278,6 +282,7 @@ GBAnisotropyGrainGrowth::computeGBParamater()
     {
       // Convert units of mobility and energy
       _sigma[m][n] *= _JtoeV * (_length_scale * _length_scale); // eV/nm^2
+
 
       _mob[m][n] *= _time_scale / (_JtoeV * (_length_scale * _length_scale * _length_scale *
                                              _length_scale)); // Convert to nm^4/(eV*ns);
