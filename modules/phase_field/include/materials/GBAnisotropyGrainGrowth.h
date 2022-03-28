@@ -41,10 +41,12 @@ protected:
   const Real _GBsigma_HAB;
   const Real _GBmob_HAB;
   const Real _GBQ_HAB;
-  const Real _rate_HABvsLAB;
+  const Real _rate1_HABvsLAB;
+  const Real _rate2_HABvsLAB;
 
   const bool _inclination_anisotropy;
   const bool _gbEnergy_anisotropy;
+  const bool _gbMobility_anisotropy;
 
   const VariableValue & _T; // temperature
 
@@ -64,7 +66,7 @@ protected:
 
   const Real _kb;
   const Real _JtoeV;
-  Real _mu_qp; // ？？
+  Real _mu_qp; //
 
   const unsigned int _op_num;
 

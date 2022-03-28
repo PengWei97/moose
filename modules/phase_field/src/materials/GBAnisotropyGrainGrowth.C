@@ -32,7 +32,8 @@ GBAnisotropyGrainGrowth::validParams()
   params.addParam<Real>("GBsigma_HAB",0.708, "the gb energy of a high angle grain boudary");
   params.addParam<Real>("GBmob_HAB", 2.5e-6, "the gb mobility of a high angle grain boudary");
   params.addParam<Real>("GBQ_HAB", 0.23, "the gb activate energy of a high angle grain boudary");
-  params.addParam<Real>("rate_HABvsLAB", 4, "the ratio of high-angle gb to low-angle gb");
+  params.addParam<Real>("rate1_HABvsLAB", 0.5, "the ratio of low-angle gb to high-angle gb");
+  params.addParam<Real>("rate2_HABvsLAB", 0.5, "the initial ratio of low-angle gb to high-angle gb");
   params.addParam<Real>(
       "delta_sigma", 0.1, "factor determining inclination dependence of GB energy");
   params.addParam<Real>(
@@ -41,6 +42,8 @@ GBAnisotropyGrainGrowth::validParams()
                                 "The GB anisotropy inclination would be considered if true");
   params.addRequiredParam<bool>("gbEnergy_anisotropy",
                                 "The GB energy anisotropy would be considered if true");
+  params.addRequiredParam<bool>("gbMobility_anisotropy",
+                                "The GB mobility anisotropy would be considered if true");                              
   params.addRequiredCoupledVarWithAutoBuild(
       "v", "var_name_base", "op_num", "Array of coupled variables");
   return params;
@@ -57,11 +60,13 @@ GBAnisotropyGrainGrowth::GBAnisotropyGrainGrowth(const InputParameters & paramet
     _GBsigma_HAB(getParam<Real>("GBsigma_HAB")),
     _GBmob_HAB(getParam<Real>("GBmob_HAB")),
     _GBQ_HAB(getParam<Real>("GBQ_HAB")),
-    _rate_HABvsLAB(getParam<Real>("rate_HABvsLAB")),
+    _rate1_HABvsLAB(getParam<Real>("rate1_HABvsLAB")),
+    _rate2_HABvsLAB(getParam<Real>("rate2_HABvsLAB")),
     _delta_sigma(getParam<Real>("delta_sigma")),
     _delta_mob(getParam<Real>("delta_mob")),
     _inclination_anisotropy(getParam<bool>("inclination_anisotropy")),
     _gbEnergy_anisotropy(getParam<bool>("gbEnergy_anisotropy")),
+    _gbMobility_anisotropy(getParam<bool>("gbMobility_anisotropy")),
     _T(coupledValue("T")), //??
     _kappa(declareProperty<Real>("kappa_op")),
     _gamma(declareProperty<Real>("gamma_asymm")),
@@ -210,6 +215,11 @@ GBAnisotropyGrainGrowth::computeGBParamaterByMisorientaion()
   Real data_sigma;
   Real data_mob;
   Real data_Q;
+
+  Real GBsigma_LOW = _GBsigma_HAB * _rate2_HABvsLAB;;
+  Real GBmob_LOW = _GBmob_HAB * _rate2_HABvsLAB;
+  Real GBQ_LOW = _GBQ_HAB;
+
   for (unsigned int i = 0; i < _op_num; ++i) // column
   {
     std::vector<Real> row_sigma; // create an empty row of double values
@@ -217,14 +227,14 @@ GBAnisotropyGrainGrowth::computeGBParamaterByMisorientaion()
     std::vector<Real> row_Q;
     for (unsigned int j = 0; j < _op_num; ++j) // line
     {
-      data_sigma = _GBsigma_HAB;
-      data_mob = _GBmob_HAB;      
-      data_Q = _GBQ_HAB;
+      data_sigma = GBsigma_LOW;
+      data_mob = GBmob_LOW;      
+      data_Q = GBQ_LOW;
       row_sigma.push_back(data_sigma);
       row_mob.push_back(data_mob);
       row_Q.push_back(data_Q);
     } // initialize three type paramaters
-
+    
       _sigma[i] = row_sigma; // unit: J/m^2 GB energy
 
       _mob[i] = row_mob; // unit: m^4/(J*s) GB mobility
@@ -241,18 +251,21 @@ GBAnisotropyGrainGrowth::computeGBParamaterByMisorientaion()
     for(unsigned int i = 0; i < varibaleIndex.size() - 1; i++)
       for(unsigned int j = i+1; j < varibaleIndex.size(); j++)
       {
-        _mob[varibaleIndex[i]][varibaleIndex[j]] = _GBmob_HAB * ((1- std::exp(-B * std::pow(_delta_theta[_qp] / delta_theta_HAB, n))) * _rate_HABvsLAB + 1 );  // the sigmoidal law suggested by Humphreys
-        _mob[varibaleIndex[j]][varibaleIndex[i]] = _mob[varibaleIndex[i]][varibaleIndex[j]];
+        if (_gbMobility_anisotropy)
+        {
+          _mob[varibaleIndex[i]][varibaleIndex[j]] = _GBmob_HAB * ((1- std::exp(-B * std::pow(_delta_theta[_qp] / delta_theta_HAB, n))) * _rate1_HABvsLAB + _rate2_HABvsLAB );  // the sigmoidal law suggested by Humphreys
+          _mob[varibaleIndex[j]][varibaleIndex[i]] = _mob[varibaleIndex[i]][varibaleIndex[j]];
+        }
 
         if (_gbEnergy_anisotropy)
         {
           if (_delta_theta[_qp] < delta_theta_HAB)
           {
-            _sigma[varibaleIndex[i]][varibaleIndex[j]] = _GBsigma_HAB * ((_delta_theta[_qp] / delta_theta_HAB * (1 - std::log(_delta_theta[_qp] / delta_theta_HAB))) * _rate_HABvsLAB + 1 ); 
+            _sigma[varibaleIndex[i]][varibaleIndex[j]] = _GBsigma_HAB * ((_delta_theta[_qp] / delta_theta_HAB * (1 - std::log(_delta_theta[_qp] / delta_theta_HAB))) * _rate1_HABvsLAB + _rate2_HABvsLAB ); 
           }
           else 
           {
-            _sigma[varibaleIndex[i]][varibaleIndex[j]] = _GBsigma_HAB * ((15.0 / delta_theta_HAB * (1 - std::log(15.0 / delta_theta_HAB))) * _rate_HABvsLAB + 1 );
+            _sigma[varibaleIndex[i]][varibaleIndex[j]] = _GBsigma_HAB * ((15.0 / delta_theta_HAB * (1 - std::log(15.0 / delta_theta_HAB))) * _rate1_HABvsLAB + _rate2_HABvsLAB );
           }
             
           _sigma[varibaleIndex[j]][varibaleIndex[i]] = _sigma[varibaleIndex[i]][varibaleIndex[j]];
@@ -331,4 +344,3 @@ GBAnisotropyGrainGrowth::computeGBParamater()
       _a_g2[n][m] = g2;     // lower triangle stores "g2" data.
     }
 }
-
