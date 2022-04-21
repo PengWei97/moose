@@ -41,8 +41,10 @@ protected:
   const Real _GBsigma_HAB;
   const Real _GBmob_HAB;
   const Real _GBQ_HAB;
-  const Real _rate1_HABvsLAB;
-  const Real _rate2_HABvsLAB;
+  const Real _rate1_HABvsLAB_mob;
+  const Real _rate2_HABvsLAB_mob;
+  const Real _rate1_HABvsLAB_sigma;
+  const Real _rate2_HABvsLAB_sigma;
 
   const bool _inclination_anisotropy;
   const bool _gbEnergy_anisotropy;
@@ -63,7 +65,7 @@ protected:
   MaterialProperty<Real> & _L;
   MaterialProperty<Real> & _mu;
   MaterialProperty<Real> & _delta_theta; // grain boundary misorientation
-
+  
   const Real _kb;
   const Real _JtoeV;
   Real _mu_qp; //
