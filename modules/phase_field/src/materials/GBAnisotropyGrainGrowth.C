@@ -239,7 +239,7 @@ GBAnisotropyGrainGrowth::computeGBParamaterByMisorientaion()
       {
         const RealVectorValue angles_i = _euler.getEulerAngles(grainID[i]);
         const RealVectorValue angles_j = _euler.getEulerAngles(grainID[j]); // EulerAngles
-        delta_euler = std::abs(angles_i(0)-angles_j(0)); // get the misorientation based grain id
+        delta_euler = std::abs(angles_i(1)-angles_j(1))/35.0*15.0; // get the misorientation based grain id
 
         if (delta_euler > 0.0)
         {
