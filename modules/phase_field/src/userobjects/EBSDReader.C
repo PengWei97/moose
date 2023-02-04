@@ -63,9 +63,9 @@ EBSDReader::EBSDReader(const InputParameters & params)
 void
 EBSDReader::readFile()
 {
-  // No need to re-read data upon recovery
-  if (_app.isRecovering())
-    return;
+  // // No need to re-read data upon recovery
+  // if (_app.isRecovering())
+  //   return;
 
   std::string ebsd_filename;
   EBSDMeshGenerator::Geometry geometry;
