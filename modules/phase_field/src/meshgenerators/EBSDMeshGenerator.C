@@ -44,7 +44,7 @@ EBSDMeshGenerator::validParams()
 
 EBSDMeshGenerator::EBSDMeshGenerator(const InputParameters & parameters)
   : MeshGenerator(parameters),
-    _distributed(_mesh->isDistributedMesh()),
+    _distributed(true), // _mesh->isDistributedMesh()
     _filename(getParam<FileName>("filename")),
     _pre_refine(isParamValid("pre_refine") ? getParam<unsigned int>("pre_refine")
                                            : getParam<unsigned int>("uniform_refine")),
