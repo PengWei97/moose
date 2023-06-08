@@ -452,9 +452,8 @@ Parser::walkRaw(std::string /*fullpath*/, std::string /*nodepath*/, hit::Node * 
   bool is_parent;
   std::string registered_identifier = _syntax.isAssociated(section_name, &is_parent);
 
-  // We need to retrieve a list of Actions associated with the current identifier
-  auto iters = _syntax.getActions(registered_identifier);
-  if (iters.first == iters.second)
+  // Make sure at least one action is associated with the current identifier
+  if (const auto [begin, end] = _syntax.getActions(registered_identifier); begin == end)
   {
     _errmsg += hit::errormsg(n,
                              "section '[",
@@ -466,8 +465,24 @@ Parser::walkRaw(std::string /*fullpath*/, std::string /*nodepath*/, hit::Node * 
     return;
   }
 
-  for (auto it = iters.first; it != iters.second; ++it)
+  // The DynamicObjecRegistrationAction changes the action multimap and would invalidate the
+  // iterators returned by _syntax.getActions, that's why we have to loop in this awkward way.
+  std::set<const Syntax::ActionInfo *> processed_actions;
+  while (true)
   {
+    // search for an unprocessed action
+    auto [begin, end] = _syntax.getActions(registered_identifier);
+    auto it = begin;
+    for (; it != end && processed_actions.count(&it->second); ++it)
+      ;
+
+    // no more unprocessed actions
+    if (it == end)
+      break;
+
+    // mark action as processed
+    processed_actions.insert(&it->second);
+
     if (is_parent)
       continue;
     if (_syntax.isDeprecatedSyntax(registered_identifier))
@@ -616,8 +631,12 @@ Parser::hitCLIFilter(std::string appname, const std::vector<std::string> & argv)
 }
 
 void
-Parser::parse(const std::vector<std::string> & input_filenames)
+Parser::parse(const std::vector<std::string> & input_filenames, const std::string & input_text)
 {
+  // Check that if the input_text string is provided, then there is only one filename to match
+  if (!input_text.empty() && input_filenames.size() != 1)
+    mooseError("If 'input_text' is provided, then 'input_filenames' must hold only one filename");
+
   // Save the filename
   _input_filenames = input_filenames;
   if (_input_filenames.empty())
@@ -637,10 +656,14 @@ Parser::parse(const std::vector<std::string> & input_filenames)
 
   for (auto & input_filename : _input_filenames)
   {
-    MooseUtils::checkFileReadable(input_filename, true);
-
-    std::ifstream f(input_filename);
-    std::string input((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    // Parse the input text string if non-empty, otherwise read file from disk
+    std::string input(input_text);
+    if (input.empty())
+    {
+      MooseUtils::checkFileReadable(input_filename, true);
+      std::ifstream f(input_filename);
+      input = std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    }
 
     try
     {
@@ -1362,6 +1385,7 @@ Parser::extractParams(const std::string & prefix, InputParameters & p)
         setscalar(MooseFunctorName, string);
         setscalar(MaterialName, string);
         setscalar(DistributionName, string);
+        setscalar(PositionsName, string);
         setscalar(SamplerName, string);
         setscalar(TagName, string);
         setscalar(MeshGeneratorName, string);
@@ -1433,6 +1457,7 @@ Parser::extractParams(const std::string & prefix, InputParameters & p)
         setvector(MeshGeneratorName, string);
         setvector(ExtraElementIDName, string);
         setvector(ReporterName, string);
+        setvector(PositionsName, string);
         setvector(ReporterValueName, string);
         setvector(ExecutorName, string);
         setvector(NonlinearSystemName, string);
