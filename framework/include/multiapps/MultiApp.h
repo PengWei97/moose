@@ -27,6 +27,7 @@ class MooseApp;
 class Backup;
 class MultiAppTransfer;
 class MultiAppCoordTransform;
+class Positions;
 
 // libMesh forward declarations
 namespace libMesh
@@ -68,6 +69,9 @@ struct LocalRankConfig
   /// only transfer data to a given subapp once even though it may be running on
   /// multiple procs/ranks.
   bool is_first_local_rank;
+  /// For every rank working on a subapp, we store the first rank on each
+  /// process to make the communication to root simpler on the main app
+  processor_id_type my_first_rank;
 };
 
 /// Returns app partitioning information relevant to the given rank for a
@@ -81,11 +85,11 @@ struct LocalRankConfig
 /// Each proc calls this function in order to determine which (sub)apps among
 /// the global list of all subapps for a multiapp should be run by the given
 /// rank.
-LocalRankConfig rankConfig(dof_id_type rank,
-                           dof_id_type nprocs,
+LocalRankConfig rankConfig(processor_id_type rank,
+                           processor_id_type nprocs,
                            dof_id_type napps,
-                           dof_id_type min_app_procs,
-                           dof_id_type max_app_procs,
+                           processor_id_type min_app_procs,
+                           processor_id_type max_app_procs,
                            bool batch_mode = false);
 
 /**
@@ -280,6 +284,11 @@ public:
   unsigned int firstLocalApp() { return _first_local_app; }
 
   /**
+   * @return Whether this rank is the first rank of the subapp(s) it's involved in
+   */
+  bool isFirstLocalRank() const;
+
+  /**
    * Whether or not this MultiApp has an app on this processor.
    */
   bool hasApp() { return _has_an_app; }
@@ -302,7 +311,7 @@ public:
    * @param app The global app number you want the position for.
    * @return the position
    */
-  const Point & position(unsigned int app) const { return _positions[app]; }
+  const Point & position(unsigned int app) const;
 
   /**
    * "Reset" the App corresponding to the global App number
@@ -467,10 +476,15 @@ protected:
   /// The type of application to build
   std::string _app_type;
 
-  /// The positions of all of the apps
+  /// The positions of all of the apps, using input constant vectors (to be deprecated)
   std::vector<Point> _positions;
+  /// The positions of all of the apps, using the Positions system
+  std::vector<const Positions *> _positions_objs;
+  /// The offsets, in case multiple Positions objects are specified
+  std::vector<unsigned int> _positions_index_offsets;
 
-  /// Toggle use of "positions"
+  /// Toggle use of "positions". Subapps are created at each different position.
+  /// List of positions can be created using the Positions system
   const bool _use_positions;
 
   /// The input file for each app's simulation
@@ -531,10 +545,10 @@ protected:
   Point _bounding_box_padding;
 
   /// Maximum number of processors to give to each app
-  unsigned int _max_procs_per_app;
+  processor_id_type _max_procs_per_app;
 
   /// Minimum number of processors to give to each app
-  unsigned int _min_procs_per_app;
+  processor_id_type _min_procs_per_app;
 
   /// Whether or not to move the output of the MultiApp into position
   bool _output_in_position;

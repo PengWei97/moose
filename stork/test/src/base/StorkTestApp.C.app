@@ -11,12 +11,12 @@
 #include "Moose.h"
 #include "AppFactory.h"
 #include "MooseSyntax.h"
-#include "ModulesApp.h"
 
 InputParameters
 StorkTestApp::validParams()
 {
   InputParameters params = StorkApp::validParams();
+  params.set<bool>("use_legacy_material_output") = false;
   return params;
 }
 

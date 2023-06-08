@@ -28,6 +28,7 @@
 #include "DelimitedFileReader.h"
 #include "MooseAppCoordTransform.h"
 #include "MultiAppTransfer.h"
+#include "Positions.h"
 #include "Transient.h"
 
 #include "libmesh/mesh_tools.h"
@@ -64,6 +65,7 @@ MultiApp::validParams()
     app_types_strings << it->first << " ";
   MooseEnum app_types_options(app_types_strings.str(), "", true);
 
+  // Dynamic loading
   params.addParam<MooseEnum>("app_type",
                              app_types_options,
                              "The type of application to build (applications not "
@@ -81,16 +83,30 @@ MultiApp::validParams()
   params.addParam<bool>("library_load_dependencies",
                         false,
                         "Tells MOOSE to manually load library dependencies. This should not be "
-                        "necessary and is hear for debugging/troubleshooting.");
+                        "necessary and is here for debugging/troubleshooting.");
+
+  // Subapp positions
   params.addParam<std::vector<Point>>(
       "positions",
       "The positions of the App locations.  Each set of 3 values will represent a "
       "Point.  This and 'positions_file' cannot be both supplied. If this and "
-      "'positions_file' are not supplied, a single position (0,0,0) will be used");
+      "'positions_file'/'_objects' are not supplied, a single position (0,0,0) will be used");
   params.addParam<std::vector<FileName>>("positions_file",
-                                         "A filename that should be looked in for positions. Each "
-                                         "set of 3 values in that file will represent a Point.  "
-                                         "This and 'positions' cannot be both supplied");
+                                         "Filename(s) that should be looked in for positions. Each"
+                                         " set of 3 values in that file will represent a Point.  "
+                                         "This and 'positions(_objects)' cannot be both supplied");
+  params.addParam<std::vector<PositionsName>>("positions_objects",
+                                              "The name of a Positions object that will contain "
+                                              "the locations of the sub-apps created. This and "
+                                              "'positions(_file)' cannot be both supplied");
+  params.addParam<bool>(
+      "output_in_position",
+      false,
+      "If true this will cause the output from the MultiApp to be 'moved' by its position vector");
+  params.addParam<bool>(
+      "run_in_position",
+      false,
+      "If true this will cause the mesh from the MultiApp to be 'moved' by its position vector");
 
   params.addRequiredParam<std::vector<FileName>>(
       "input_files",
@@ -110,15 +126,15 @@ MultiApp::validParams()
   // Set the default execution time
   params.set<ExecFlagEnum>("execute_on", true) = EXEC_TIMESTEP_BEGIN;
 
-  params.addParam<unsigned int>("max_procs_per_app",
-                                std::numeric_limits<unsigned int>::max(),
-                                "Maximum number of processors to give to each App in this "
-                                "MultiApp.  Useful for restricting small solves to just a few "
-                                "procs so they don't get spread out");
-  params.addParam<unsigned int>("min_procs_per_app",
-                                1,
-                                "Minimum number of processors to give to each App in this "
-                                "MultiApp.  Useful for larger, distributed mesh solves.");
+  params.addParam<processor_id_type>("max_procs_per_app",
+                                     std::numeric_limits<processor_id_type>::max(),
+                                     "Maximum number of processors to give to each App in this "
+                                     "MultiApp.  Useful for restricting small solves to just a few "
+                                     "procs so they don't get spread out");
+  params.addParam<processor_id_type>("min_procs_per_app",
+                                     1,
+                                     "Minimum number of processors to give to each App in this "
+                                     "MultiApp.  Useful for larger, distributed mesh solves.");
   params.addParam<bool>(
       "wait_for_first_app_init",
       false,
@@ -127,27 +143,19 @@ MultiApp::validParams()
       "This is only needed if your sub-application needs to perform some setup "
       "actions in quiet, without other sub-applications working at the same time.");
 
-  params.addParam<bool>(
-      "output_in_position",
-      false,
-      "If true this will cause the output from the MultiApp to be 'moved' by its position vector");
-  params.addParam<bool>(
-      "run_in_position",
-      false,
-      "If true this will cause the mesh from the MultiApp to be 'moved' by its position vector");
-
   params.addParam<Real>("global_time_offset",
                         0,
                         "The time offset relative to the parent application for the purpose of "
                         "starting a subapp at a different time from the parent application. The "
                         "global time will be ahead by the offset specified here.");
+
+  // Resetting subapps
   params.addParam<std::vector<Real>>(
       "reset_time",
       std::vector<Real>(),
       "The time(s) at which to reset Apps given by the 'reset_apps' parameter.  "
       "Resetting an App means that it is destroyed and recreated, possibly "
       "modeling the insertion of 'new' material for that app.");
-
   params.addParam<std::vector<unsigned int>>(
       "reset_apps",
       "The Apps that will be reset when 'reset_time' is hit.  These are the App "
@@ -155,6 +163,7 @@ MultiApp::validParams()
       "Resetting an App means that it is destroyed and recreated, possibly modeling "
       "the insertion of 'new' material for that app.");
 
+  // Moving subapps
   params.addParam<Real>(
       "move_time",
       std::numeric_limits<Real>::max(),
@@ -164,7 +173,6 @@ MultiApp::validParams()
       "move_apps",
       "Apps, designated by their 'numbers' starting with 0 corresponding to the order "
       "of the App positions, to be moved at move_time to move_positions");
-
   params.addParam<std::vector<Point>>("move_positions",
                                       "The positions corresponding to each move_app.");
 
@@ -180,6 +188,7 @@ MultiApp::validParams()
       "to pass to the sub apps. Each line of a file is set to each sub app. If only "
       "one line is provided, it will be applied to all sub apps.");
 
+  // Fixed point iterations
   params.addRangeCheckedParam<Real>("relaxation_factor",
                                     1.0,
                                     "relaxation_factor>0 & relaxation_factor<2",
@@ -199,6 +208,12 @@ MultiApp::validParams()
       std::vector<PostprocessorName>(),
       "List of subapp postprocessors to use coupling "
       "algorithm on during Multiapp coupling iterations");
+  params.addParam<bool>("keep_solution_during_restore",
+                        false,
+                        "This is useful when doing MultiApp coupling iterations. It takes the "
+                        "final solution from the previous coupling iteration"
+                        "and re-uses it as the initial guess "
+                        "for the next coupling iteration");
 
   params.addDeprecatedParam<bool>("clone_master_mesh",
                                   false,
@@ -207,13 +222,6 @@ MultiApp::validParams()
   params.addParam<bool>(
       "clone_parent_mesh", false, "True to clone parent app mesh and use it for this MultiApp.");
 
-  params.addParam<bool>("keep_solution_during_restore",
-                        false,
-                        "This is useful when doing MultiApp coupling iterations. It takes the "
-                        "final solution from the previous coupling iteration"
-                        "and re-uses it as the initial guess "
-                        "for the next coupling iteration");
-
   params.addPrivateParam<std::shared_ptr<CommandLine>>("_command_line");
   params.addPrivateParam<bool>("use_positions", true);
   params.declareControllable("enable");
@@ -221,7 +229,8 @@ MultiApp::validParams()
   params.registerBase("MultiApp");
 
   params.addParamNamesToGroup("use_displaced_mesh wait_for_first_app_init", "Advanced");
-  params.addParamNamesToGroup("positions positions_file run_in_position output_in_position",
+  params.addParamNamesToGroup("positions positions_file positions_objects run_in_position "
+                              "output_in_position",
                               "Positions / transformations of the MultiApp frame of reference");
   params.addParamNamesToGroup("min_procs_per_app max_procs_per_app", "Parallelism");
   params.addParamNamesToGroup("reset_time reset_apps", "Reset MultiApp");
@@ -255,8 +264,8 @@ MultiApp::MultiApp(const InputParameters & parameters)
     _my_rank(0),
     _inflation(getParam<Real>("bounding_box_inflation")),
     _bounding_box_padding(getParam<Point>("bounding_box_padding")),
-    _max_procs_per_app(getParam<unsigned int>("max_procs_per_app")),
-    _min_procs_per_app(getParam<unsigned int>("min_procs_per_app")),
+    _max_procs_per_app(getParam<processor_id_type>("max_procs_per_app")),
+    _min_procs_per_app(getParam<processor_id_type>("min_procs_per_app")),
     _output_in_position(getParam<bool>("output_in_position")),
     _global_time_offset(getParam<Real>("global_time_offset")),
     _reset_times(getParam<std::vector<Real>>("reset_time")),
@@ -281,6 +290,12 @@ MultiApp::MultiApp(const InputParameters & parameters)
       parameters.isParamValid("cli_args_files"))
     paramError("cli_args",
                "'cli_args' and 'cli_args_files' cannot be specified simultaneously in MultiApp ");
+
+  if (!_use_positions && (isParamValid("positions") || isParamValid("positions_file") ||
+                          isParamValid("positions_objects")))
+    paramError("use_positions",
+               "This MultiApps has been set to not use positions, "
+               "but a 'positions' parameter has been set.");
 
   if ((_reset_apps.size() > 0 && _reset_times.size() == 0) ||
       (_reset_apps.size() == 0 && _reset_times.size() > 0))
@@ -508,10 +523,10 @@ MultiApp::fillPositions()
                "MultiApp ",
                _name);
 
-  if (isParamValid("positions") && isParamValid("positions_file"))
-    mooseError(
-        "Both 'positions' and 'positions_file' cannot be specified simultaneously in MultiApp ",
-        name());
+  if (isParamValid("positions") + isParamValid("positions_file") +
+          isParamValid("positions_objects") >
+      1)
+    mooseError("Only one 'positions' parameter may be specified");
 
   if (isParamValid("positions"))
   {
@@ -552,6 +567,52 @@ MultiApp::fillPositions()
       for (unsigned int i = 0; i < data.size(); ++i)
         if (input_files.size() != 1)
           _input_files.push_back(input_files[p_file_it]);
+    }
+  }
+  else if (isParamValid("positions_objects"))
+  {
+    const auto & positions_param_objs = getParam<std::vector<PositionsName>>("positions_objects");
+    const auto & input_files = getParam<std::vector<FileName>>("input_files");
+
+    if (input_files.size() != 1 && positions_param_objs.size() != input_files.size())
+      mooseError("Number of input_files for MultiApp ",
+                 name(),
+                 " must either be only one or match the number of positions_objects specified");
+
+    // Clear out the _input_files because we're going to rebuild it
+    if (input_files.size() != 1)
+      _input_files.clear();
+
+    // Keeps track of where each positions object start in terms of subapp numbers
+    unsigned int offset = 0;
+
+    for (const auto p_obj_it : index_range(positions_param_objs))
+    {
+      const std::string & positions_name = positions_param_objs[p_obj_it];
+      auto positions_obj = &_fe_problem.getPositionsObject(positions_name);
+
+      const auto & data = positions_obj->getPositions(true);
+
+      // Append all positions from this object
+      for (const auto & d : data)
+        _positions.push_back(d);
+
+      // Save the number of positions for this input file
+      _npositions_inputfile.push_back(data.size());
+
+      if (!positions_obj)
+        paramError("positions_objects",
+                   "'" + positions_name + "' is not of the expected type. Should be a Positions");
+
+      // Keep track of which positions is tied to what subapp
+      for (unsigned int i = 0; i < data.size(); ++i)
+      {
+        if (input_files.size() != 1)
+          _input_files.push_back(input_files[p_obj_it]);
+        _positions_objs.push_back(positions_obj);
+        _positions_index_offsets.push_back(offset);
+      }
+      offset += data.size();
     }
   }
   else
@@ -912,6 +973,12 @@ MultiApp::appTransferVector(unsigned int app, std::string var_name)
 }
 
 bool
+MultiApp::isFirstLocalRank() const
+{
+  return _rank_config.is_first_local_rank;
+}
+
+bool
 MultiApp::hasLocalApp(unsigned int global_app) const
 {
   if (_has_an_app && global_app >= _first_local_app &&
@@ -1113,11 +1180,11 @@ MultiApp::getCommandLineArgsParamHelper(unsigned int local_app)
 }
 
 LocalRankConfig
-rankConfig(dof_id_type rank,
-           dof_id_type nprocs,
+rankConfig(processor_id_type rank,
+           processor_id_type nprocs,
            dof_id_type napps,
-           dof_id_type min_app_procs,
-           dof_id_type max_app_procs,
+           processor_id_type min_app_procs,
+           processor_id_type max_app_procs,
            bool batch_mode)
 {
   if (min_app_procs > nprocs)
@@ -1130,19 +1197,25 @@ rankConfig(dof_id_type rank,
   // A "slot" is a group of procs/ranks that are grouped together to run a
   // single (sub)app/sim in parallel.
 
-  auto slot_size = std::max(std::min(nprocs / napps, max_app_procs), min_app_procs);
-  dof_id_type nslots = std::min(nprocs / slot_size, napps);
-  auto leftover_procs = nprocs - nslots * slot_size;
-  auto apps_per_slot = napps / nslots;
-  auto leftover_apps = napps % nslots;
+  const processor_id_type slot_size =
+      std::max(std::min(cast_int<processor_id_type>(nprocs / napps), max_app_procs), min_app_procs);
+  const processor_id_type nslots = std::min(
+      nprocs / slot_size,
+      cast_int<processor_id_type>(std::min(
+          static_cast<dof_id_type>(std::numeric_limits<processor_id_type>::max()), napps)));
+  mooseAssert(nprocs >= (nslots * slot_size),
+              "Ensure that leftover procs is represented by an unsigned type");
+  const processor_id_type leftover_procs = nprocs - nslots * slot_size;
+  const dof_id_type apps_per_slot = napps / nslots;
+  const dof_id_type leftover_apps = napps % nslots;
 
   std::vector<int> slot_for_rank(nprocs);
-  dof_id_type slot = 0;
-  dof_id_type procs_in_slot = 0;
-  for (dof_id_type rankiter = 0; rankiter <= rank; rankiter++)
+  processor_id_type slot = 0;
+  processor_id_type procs_in_slot = 0;
+  for (processor_id_type rankiter = 0; rankiter <= rank; rankiter++)
   {
     if (slot < nslots)
-      slot_for_rank[rankiter] = slot;
+      slot_for_rank[rankiter] = cast_int<int>(slot);
     else
       slot_for_rank[rankiter] = -1;
     procs_in_slot++;
@@ -1158,22 +1231,30 @@ rankConfig(dof_id_type rank,
 
   if (slot_for_rank[rank] < 0)
     // ranks assigned a negative slot don't have any apps running on them.
-    return {0, 0, 0, 0, false};
-  dof_id_type slot_num = slot_for_rank[rank];
+    return {0, 0, 0, 0, false, 0};
+  const processor_id_type slot_num = cast_int<processor_id_type>(slot_for_rank[rank]);
 
-  bool is_first_local_rank = rank == 0 || (slot_for_rank[rank - 1] != slot_for_rank[rank]);
-  auto n_local_apps = apps_per_slot + 1 * (slot_num < leftover_apps);
+  const bool is_first_local_rank = rank == 0 || (slot_for_rank[rank - 1] != slot_for_rank[rank]);
+  const dof_id_type n_local_apps = apps_per_slot + 1 * (slot_num < leftover_apps);
+
+  processor_id_type my_first_rank = 0;
+  for (processor_id_type rankiter = rank; rankiter > 0; rankiter--)
+    if (slot_for_rank[rank] != slot_for_rank[rankiter])
+    {
+      my_first_rank = cast_int<processor_id_type>(slot_for_rank[rankiter + 1]);
+      break;
+    }
 
   dof_id_type app_index = 0;
-  for (dof_id_type slot = 0; slot < slot_num; slot++)
+  for (processor_id_type slot = 0; slot < slot_num; slot++)
   {
-    auto num_slot_apps = apps_per_slot + 1 * (slot < leftover_apps);
+    const dof_id_type num_slot_apps = apps_per_slot + 1 * (slot < leftover_apps);
     app_index += num_slot_apps;
   }
 
   if (batch_mode)
-    return {n_local_apps, app_index, 1, slot_num, is_first_local_rank};
-  return {n_local_apps, app_index, n_local_apps, app_index, is_first_local_rank};
+    return {n_local_apps, app_index, 1, slot_num, is_first_local_rank, my_first_rank};
+  return {n_local_apps, app_index, n_local_apps, app_index, is_first_local_rank, my_first_rank};
 }
 
 void
@@ -1270,4 +1351,15 @@ MultiApp::getMultiAppName(const std::string & base_name, dof_id_type index, dof_
   multiapp_name << base_name << std::setw(std::ceil(std::log10(total))) << std::setprecision(0)
                 << std::setfill('0') << std::right << index;
   return multiapp_name.str();
+}
+
+const Point &
+MultiApp::position(unsigned int app) const
+{
+  // If we're not using positions, it won't have changed
+  if (_positions_objs.empty())
+    return _positions[app];
+  else
+    // Find which Positions object is specifying it, and query a potentially updated value
+    return _positions_objs[app]->getPosition(app - _positions_index_offsets[app], false);
 }

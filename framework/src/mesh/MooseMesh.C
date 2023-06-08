@@ -236,6 +236,7 @@ MooseMesh::MooseMesh(const MooseMesh & other_mesh)
   : MooseObject(other_mesh._pars),
     Restartable(this, "Mesh"),
     PerfGraphInterface(this, "CopiedMesh"),
+    _built_from_other_mesh(true),
     _parallel_type(other_mesh._parallel_type),
     _use_distributed_mesh(other_mesh._use_distributed_mesh),
     _distribution_overridden(other_mesh._distribution_overridden),
@@ -342,7 +343,7 @@ MooseMesh::freeBndElems()
 }
 
 bool
-MooseMesh::prepare(const bool force_mesh_prepare)
+MooseMesh::prepare(const MeshBase * const mesh_to_clone)
 {
   TIME_SECTION("prepare", 2, "Preparing Mesh", true);
 
@@ -354,7 +355,14 @@ MooseMesh::prepare(const bool force_mesh_prepare)
     // For whatever reason we do not want to allow renumbering here nor ever in the future?
     getMesh().allow_renumbering(false);
 
-  if (!_mesh->is_prepared() || force_mesh_prepare)
+  if (mesh_to_clone)
+  {
+    mooseAssert(mesh_to_clone->is_prepared(),
+                "The mesh we wish to clone from must already be prepared");
+    _mesh = mesh_to_clone->clone();
+    _moose_mesh_prepared = false;
+  }
+  else if (!_mesh->is_prepared())
   {
     _mesh->prepare_for_use();
     _moose_mesh_prepared = false;
@@ -400,14 +408,17 @@ MooseMesh::prepare(const bool force_mesh_prepare)
     _communicator.set_union(_mesh_sideset_ids);
   }
 
-  if (!_coord_system_set)
-    setCoordSystem(_provided_coord_blocks, getParam<MultiMooseEnum>("coord_type"));
-  else if (_pars.isParamSetByUser("coord_type"))
-    mooseError(
-        "Trying to set coordinate system type information based on the user input file, but "
-        "the coordinate system type information has already been set programmatically! "
-        "Either remove your coordinate system type information from the input file, or contact "
-        "your application developer");
+  if (!_built_from_other_mesh)
+  {
+    if (!_coord_system_set)
+      setCoordSystem(_provided_coord_blocks, getParam<MultiMooseEnum>("coord_type"));
+    else if (_pars.isParamSetByUser("coord_type"))
+      mooseError(
+          "Trying to set coordinate system type information based on the user input file, but "
+          "the coordinate system type information has already been set programmatically! "
+          "Either remove your coordinate system type information from the input file, or contact "
+          "your application developer");
+  }
 
   detectOrthogonalDimRanges();
 

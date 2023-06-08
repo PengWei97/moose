@@ -119,6 +119,7 @@ addActionTypes(Syntax & syntax)
 
   registerMooseObjectTask("add_nodal_kernel",             NodalKernel,            false);
 
+  registerMooseObjectTask("add_functor_material",         MaterialBase,           false);
   registerMooseObjectTask("add_material",                 MaterialBase,           false);
   registerMooseObjectTask("add_bc",                       BoundaryCondition,      false);
 
@@ -147,7 +148,9 @@ addActionTypes(Syntax & syntax)
 
   registerMooseObjectTask("add_damper",                   Damper,                 false);
   registerMooseObjectTask("setup_predictor",              Predictor,              false);
-  registerMooseObjectTask("setup_time_stepper",           TimeStepper,            false);
+  registerMooseObjectTask("add_time_steppers",            TimeStepper,            false);
+  registerMooseObjectTask("add_time_stepper",             TimeStepper,            false);
+  registerTask           ("compose_time_stepper",                                 true);
   registerMooseObjectTask("setup_time_integrator",        TimeIntegrator,         false);
 
   registerMooseObjectTask("add_preconditioning",          MoosePreconditioner,    false);
@@ -159,6 +162,7 @@ addActionTypes(Syntax & syntax)
   registerMooseObjectTask("add_postprocessor",            Postprocessor,          false);
   registerMooseObjectTask("add_vector_postprocessor",     VectorPostprocessor,    false);
   registerMooseObjectTask("add_reporter",                 Reporter,               false);
+  registerMooseObjectTask("add_positions",                Positions,              false);
 
   registerMooseObjectTask("add_indicator",                Indicator,              false);
   registerMooseObjectTask("add_marker",                   Marker,                 false);
@@ -190,6 +194,7 @@ addActionTypes(Syntax & syntax)
   registerTask("prepare_mesh", false);
   registerTask("delete_remote_elements_after_late_geometric_ghosting", false);
   registerTask("setup_mesh_complete", true); // calls prepare
+  registerTask("post_mesh_prepared", false);
   registerTask("add_geometric_rm", false);
   registerTask("attach_geometric_rm", true);
   registerTask("attach_geometric_rm_final", true);
@@ -205,6 +210,7 @@ addActionTypes(Syntax & syntax)
   registerTask("copy_nodal_vars", true);
   registerTask("copy_nodal_aux_vars", true);
   registerTask("setup_postprocessor_data", false);
+  registerTask("setup_time_steppers", true);
 
   registerTask("setup_dampers", true);
   registerTask("check_integrity", true);
@@ -275,6 +281,7 @@ addActionTypes(Syntax & syntax)
                            "(add_mortar_interface)"
                            "(uniform_refine_mesh)"
                            "(setup_mesh_complete)"
+                           "(post_mesh_prepared)"
                            "(determine_system_type)"
                            "(create_problem)"
                            "(create_problem_custom)"
@@ -304,16 +311,20 @@ addActionTypes(Syntax & syntax)
                            "(add_ic)"
                            "(add_constraint, add_field_split)"
                            "(add_preconditioning)"
-                           "(setup_time_stepper)"
+                           "(add_time_stepper, add_time_steppers)"
+                           "(compose_time_stepper)"
+                           "(setup_time_steppers)"
                            "(ready_to_init)"
                            "(setup_dampers)"
                            "(setup_residual_debug)"
                            "(add_bounds_vectors)"
+                           "(add_positions)"
                            "(add_multi_app)"
                            "(add_transfer)"
                            "(copy_nodal_vars, copy_nodal_aux_vars)"
                            "(add_material)"
                            "(add_master_action_material)"
+                           "(add_functor_material)"
                            "(add_output_aux_variables)"
                            "(add_output)"
                            "(auto_checkpoint_action)"
@@ -457,6 +468,9 @@ associateSyntaxInner(Syntax & syntax, ActionFactory & /*action_factory*/)
   registerSyntax("AddMaterialAction", "Materials/*");
   syntax.registerSyntaxType("Materials/*", "MaterialName");
 
+  registerSyntax("AddFunctorMaterialAction", "FunctorMaterials/*");
+  syntax.registerSyntaxType("FunctorMaterials/*", "MaterialName");
+
   registerSyntax("AddPostprocessorAction", "Postprocessors/*");
   syntax.registerSyntaxType("Postprocessors/*", "PostprocessorName");
   syntax.registerSyntaxType("Postprocessors/*", "UserObjectName");
@@ -466,6 +480,9 @@ associateSyntaxInner(Syntax & syntax, ActionFactory & /*action_factory*/)
 
   registerSyntax("AddReporterAction", "Reporters/*");
   syntax.registerSyntaxType("Reporters/*", "ReporterName");
+
+  registerSyntax("AddPositionsAction", "Positions/*");
+  syntax.registerSyntaxType("Positions/*", "PositionsName");
 
   registerSyntax("AddDamperAction", "Dampers/*");
 
@@ -479,7 +496,11 @@ associateSyntaxInner(Syntax & syntax, ActionFactory & /*action_factory*/)
 
   registerSyntax("CreateExecutionerAction", "Executioner");
   registerSyntax("ReadExecutorParamsAction", "Executors/*");
-  registerSyntax("SetupTimeStepperAction", "Executioner/TimeStepper");
+
+  registerSyntaxTask("AddTimeStepperAction", "Executioner/TimeSteppers/*", "add_time_steppers");
+  registerSyntaxTask("AddTimeStepperAction", "Executioner/TimeStepper", "add_time_stepper");
+  registerSyntaxTask(
+      "ComposeTimeStepperAction", "Executioner/TimeSteppers", "compose_time_stepper");
   registerSyntax("SetupTimeIntegratorAction", "Executioner/TimeIntegrator");
   syntax.registerSyntaxType("Executors/*", "ExecutorName");
 

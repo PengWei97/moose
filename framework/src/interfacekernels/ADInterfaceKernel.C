@@ -56,7 +56,7 @@ ADInterfaceKernelTempl<T>::ADInterfaceKernelTempl(const InputParameters & parame
     _grad_neighbor_value(_neighbor_var.adGradSlnNeighbor()),
     _phi_neighbor(_assembly.phiFaceNeighbor(_neighbor_var)),
     _test_neighbor(_neighbor_var.phiFaceNeighbor()),
-    _grad_test_neighbor(_neighbor_var.adGradPhiFaceNeighbor())
+    _grad_test_neighbor(_neighbor_var.gradPhiFaceNeighbor())
 
 {
   _subproblem.haveADObjects(true);
@@ -159,11 +159,10 @@ ADInterfaceKernelTempl<T>::computeElemNeighJacobian(Moose::DGJacobianType type)
   }
 
   const bool element_var_is_var = (type == Moose::ElementElement || type == Moose::ElementNeighbor);
-  _assembly.processJacobian(
-      residuals,
-      element_var_is_var ? _var.dofIndices() : _neighbor_var.dofIndicesNeighbor(),
-      _matrix_tags,
-      element_var_is_var ? _var.scalingFactor() : _neighbor_var.scalingFactor());
+  addJacobian(_assembly,
+              residuals,
+              element_var_is_var ? _var.dofIndices() : _neighbor_var.dofIndicesNeighbor(),
+              element_var_is_var ? _var.scalingFactor() : _neighbor_var.scalingFactor());
 }
 
 template <typename T>
@@ -214,11 +213,11 @@ ADInterfaceKernelTempl<T>::computeOffDiagElemNeighJacobian(Moose::DGJacobianType
   }
 
   // We assert earlier that the type cannot be Moose::ElementNeighbor (nor Moose::NeighborElement)
-  _assembly.processJacobian(
-      residuals,
-      type == Moose::ElementElement ? _var.dofIndices() : _neighbor_var.dofIndicesNeighbor(),
-      _matrix_tags,
-      type == Moose::ElementElement ? _var.scalingFactor() : _neighbor_var.scalingFactor());
+  addJacobian(_assembly,
+              residuals,
+              type == Moose::ElementElement ? _var.dofIndices()
+                                            : _neighbor_var.dofIndicesNeighbor(),
+              type == Moose::ElementElement ? _var.scalingFactor() : _neighbor_var.scalingFactor());
 }
 
 template <typename T>
