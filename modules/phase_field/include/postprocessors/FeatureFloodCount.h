@@ -84,6 +84,14 @@ public:
   /// Returns the variable representing the passed in feature
   virtual unsigned int getFeatureVar(unsigned int feature_id) const;
 
+  /// Returns the feature ID representing the passed in feature (Grain ID)
+  virtual unsigned int getFeatureID(unsigned int feature_id) const;
+
+  virtual std::vector<unsigned int> getAdjacentID(unsigned int feature_id) const;
+
+  /// Returns the number of adjacent grains for grain ID
+  virtual unsigned int getNumAdjacentGrains(unsigned int feature_id) const;
+
   /// Returns the number of coupled varaibles
   std::size_t numCoupledVars() const { return _n_vars; }
 
@@ -164,9 +172,11 @@ public:
     FeatureData(std::size_t var_index,
                 Status status,
                 unsigned int id = invalid_id,
+                std::vector<unsigned int> adjacent_id = std::vector<unsigned int>(),
                 std::vector<BoundingBox> bboxes = {BoundingBox()})
       : _var_index(var_index),
         _id(id),
+        _adjacent_id(adjacent_id),
         _bboxes(bboxes), // Assume at least one bounding box
         _min_entity_id(DofObject::invalid_id),
         _vol_count(0),
@@ -287,6 +297,9 @@ public:
 
     /// An ID for this feature
     unsigned int _id;
+
+    /// The vecor of adjacent feature ID for this feature
+    std::vector<unsigned int> _adjacent_id;    
 
     /// The vector of bounding boxes completely enclosing this feature
     /// (multiple used with periodic constraints)
