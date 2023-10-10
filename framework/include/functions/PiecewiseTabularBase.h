@@ -17,13 +17,15 @@
  * input parameter specifications. Derived classes, which control the order (constant, linear) of
  * the approximation and how the (x,y) data set is generated, should be used directly.
  */
-template <typename BaseClass>
-class PiecewiseTabularBaseTempl : public BaseClass
+class PiecewiseTabularBase : public PiecewiseBase
 {
 public:
   static InputParameters validParams();
 
-  PiecewiseTabularBaseTempl(const InputParameters & parameters);
+  PiecewiseTabularBase(const InputParameters & parameters);
+
+  /// Needed to load data from user objects that are not available at construction
+  void initialSetup() override;
 
 protected:
   /// function value scale factor
@@ -34,35 +36,22 @@ protected:
   const bool _has_axis;
   ///@}
 
-  using BaseClass::_communicator;
-  using BaseClass::_name;
-  using BaseClass::_raw_x;
-  using BaseClass::_raw_y;
-  using BaseClass::isParamValid;
-  using BaseClass::paramError;
+  /// Returns whether the raw data has been loaded already
+  bool isRawDataLoaded() const { return _raw_data_loaded; };
 
 private:
   /// Reads data from supplied CSV file.
   void buildFromFile();
+
+  /// Reads data from supplied JSON reader.
+  void buildFromJSON();
 
   /// Builds data from 'x' and 'y' parameters.
   void buildFromXandY();
 
   /// Builds data from 'xy_data' parameter.
   void buildFromXY();
-};
 
-class PiecewiseTabularBase : public PiecewiseTabularBaseTempl<PiecewiseBase>
-{
-public:
-  PiecewiseTabularBase(const InputParameters & params)
-    : PiecewiseTabularBaseTempl<PiecewiseBase>(params)
-  {
-  }
-  static InputParameters validParams()
-  {
-    return PiecewiseTabularBaseTempl<PiecewiseBase>::validParams();
-  }
+  /// Boolean to keep track of whether the data has been loaded
+  bool _raw_data_loaded;
 };
-
-typedef PiecewiseTabularBaseTempl<ADPiecewiseBase> ADPiecewiseTabularBase;

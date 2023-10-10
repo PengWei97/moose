@@ -16,6 +16,7 @@
 #include "libmesh/enum_order.h"
 #include "libmesh/enum_quadrature_type.h"
 #include "libmesh/enum_fe_family.h"
+#include "libmesh/enum_elem_type.h"
 
 // Forward declarations
 class MultiMooseEnum;
@@ -65,6 +66,13 @@ stringify(const T & t)
   return os.str();
 }
 
+// overload for boolean type instead of simply printing 0 or 1
+inline std::string
+stringify(bool v)
+{
+  return v ? "true" : "false";
+}
+
 // overloads for integer types where std::to_string gives the same result and is faster
 inline std::string
 stringify(int v)
@@ -112,6 +120,15 @@ std::string stringify(const std::string & s);
 /// Convert FEType from libMesh into string
 std::string stringify(FEFamily f);
 
+/// Convert SolutionIterationType into string
+std::string stringify(SolutionIterationType t);
+
+/// Convert ElementType into string
+std::string stringify(ElementType t);
+
+/// Convert the libmesh ElemType into string
+std::string stringify(libMesh::ElemType t);
+
 /// Add pair stringify to support maps
 template <typename T, typename U>
 std::string
@@ -136,7 +153,7 @@ stringify(const std::pair<T, U> & p, const std::string & delim = ":")
 template <template <typename...> class T, typename... U>
 std::string
 stringify(const T<U...> & c,
-          const std::string & delim = ",",
+          const std::string & delim = ", ",
           const std::string & elem_encl = "",
           bool enclose_list_in_curly_braces = false)
 {

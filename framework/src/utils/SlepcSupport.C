@@ -115,6 +115,11 @@ getSlepcEigenProblemValidParams()
   params.addParam<unsigned int>(
       "extra_power_iterations", 0, "The number of extra free power iterations");
 
+  params.addParamNamesToGroup(
+      "eigen_problem_type which_eigen_pairs n_eigen_pairs n_basis_vectors eigen_tol eigen_max_its "
+      "free_power_iterations extra_power_iterations",
+      "Eigen Solver");
+
   return params;
 }
 
@@ -486,7 +491,8 @@ setEigenSolverOptions(SolverParams & solver_params, const InputParameters & para
 void
 slepcSetOptions(EigenProblem & eigen_problem, const InputParameters & params)
 {
-  Moose::PetscSupport::petscSetOptions(eigen_problem);
+  Moose::PetscSupport::petscSetOptions(eigen_problem.getPetscOptions(),
+                                       eigen_problem.solverParams());
   // Call "SolverTolerances" first, so some solver specific tolerance such as "eps_max_it"
   // can be overriden
   setSlepcEigenSolverTolerances(eigen_problem, params);
@@ -507,6 +513,12 @@ mooseEPSFormMatrices(EigenProblem & eigen_problem, EPS eps, Vec x, void * ctx)
   PetscFunctionBegin;
 
   if (eigen_problem.constantMatrices() && eigen_problem.wereMatricesFormed())
+    PetscFunctionReturn(0);
+
+  if (eigen_problem.onLinearSolver())
+    // We reach here during linear iteration when solve type is PJFNKMO.
+    // We will use the matrices assembled at the beginning of this Newton
+    // iteration for the following residual evaluation.
     PetscFunctionReturn(0);
 
   NonlinearEigenSystem & eigen_nl = eigen_problem.getCurrentNonlinearEigenSystem();

@@ -7,8 +7,10 @@
 #* Licensed under LGPL 2.1, please see LICENSE for details
 #* https://www.gnu.org/licenses/lgpl-2.1.html
 
+from . import tagging
 from . import acronym
 from . import alert
+from . import analytics
 from . import appsyntax
 from . import autolink
 from . import bibtex

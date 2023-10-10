@@ -9,12 +9,12 @@
 
 #include "HeatTransferFromHeatStructure3D1Phase.h"
 #include "FlowChannel1Phase.h"
-#include "HeatStructureBase.h"
 #include "HeatStructureFromFile3D.h"
 #include "FlowModelSinglePhase.h"
 #include "THMMesh.h"
 #include "MooseMesh.h"
 #include "ClosuresBase.h"
+#include "HeatConductionModel.h"
 
 registerMooseObject("ThermalHydraulicsApp", HeatTransferFromHeatStructure3D1Phase);
 
@@ -43,7 +43,7 @@ HeatTransferFromHeatStructure3D1Phase::HeatTransferFromHeatStructure3D1Phase(
     _flow_channel_names(getParam<std::vector<std::string>>("flow_channels")),
     _boundary(getParam<BoundaryName>("boundary")),
     _hs_name(getParam<std::string>("hs")),
-    _fch_alignment(constMesh()),
+    _mesh_alignment(constMesh()),
     _layered_average_uo_direction(MooseEnum("x y z"))
 {
   for (const auto & fch_name : _flow_channel_names)
@@ -60,7 +60,7 @@ HeatTransferFromHeatStructure3D1Phase::getFEType()
 void
 HeatTransferFromHeatStructure3D1Phase::setupMesh()
 {
-  if (hasComponentByName<HeatStructureBase>(_hs_name))
+  if (hasComponentByName<HeatStructureFromFile3D>(_hs_name))
   {
     std::vector<dof_id_type> fchs_elem_ids;
     for (unsigned int i = 0; i < _flow_channel_names.size(); i++)
@@ -74,31 +74,20 @@ HeatTransferFromHeatStructure3D1Phase::setupMesh()
                              flow_channel.getElementIDs().end());
       }
     }
-    // Boundary info (element ID, local side number) for the heat structure side
-    std::vector<std::tuple<dof_id_type, unsigned short int>> bnd_info;
-    BoundaryID bd_id = mesh().getBoundaryID(_boundary);
-    mesh().buildBndElemList();
-    const auto & bnd_to_elem_map = mesh().getBoundariesToActiveSemiLocalElemIds();
-    auto search = bnd_to_elem_map.find(bd_id);
-    if (search == bnd_to_elem_map.end())
-      mooseDoOnce(logError("The boundary '", _boundary, "' (", bd_id, ") was not found."));
-    else
+
+    const auto & hs = getComponentByName<HeatStructureFromFile3D>(_hs_name);
+    if (hs.hasBoundary(_boundary))
     {
-      const std::unordered_set<dof_id_type> & bnd_elems = search->second;
-      for (auto elem_id : bnd_elems)
-      {
-        const Elem * elem = mesh().elemPtr(elem_id);
-        unsigned int side = mesh().sideWithBoundaryID(elem, bd_id);
-        bnd_info.push_back(std::tuple<dof_id_type, unsigned short int>(elem_id, side));
-      }
+      _mesh_alignment.initialize(fchs_elem_ids, hs.getBoundaryInfo(_boundary));
 
-      _fch_alignment.build(bnd_info, fchs_elem_ids);
-
-      for (auto & elem_id : fchs_elem_ids)
+      for (const auto & fc_elem_id : fchs_elem_ids)
       {
-        dof_id_type nearest_elem_id = _fch_alignment.getNearestElemID(elem_id);
-        if (nearest_elem_id != DofObject::invalid_id)
-          getTHMProblem().augmentSparsity(elem_id, nearest_elem_id);
+        if (_mesh_alignment.hasCoupledSecondaryElemIDs(fc_elem_id))
+        {
+          const auto & hs_elem_ids = _mesh_alignment.getCoupledSecondaryElemIDs(fc_elem_id);
+          for (const auto & hs_elem_id : hs_elem_ids)
+            getTHMProblem().augmentSparsity(fc_elem_id, hs_elem_id);
+        }
       }
     }
   }
@@ -231,7 +220,13 @@ HeatTransferFromHeatStructure3D1Phase::check() const
       clsr->checkHeatTransfer(*this, getComponentByName<FlowChannel1Phase>(_flow_channel_names[i]));
   }
 
-  if (!hasComponentByName<HeatStructureFromFile3D>(_hs_name))
+  if (hasComponentByName<HeatStructureFromFile3D>(_hs_name))
+  {
+    const auto & hs = getComponentByName<HeatStructureFromFile3D>(_hs_name);
+    if (!hs.hasBoundary(_boundary))
+      logError("The boundary '", _boundary, "' does not exist on the component '", _hs_name, "'.");
+  }
+  else
     logError("The component '", _hs_name, "' is not a HeatStructureFromFile3D component.");
 }
 
@@ -252,7 +247,7 @@ HeatTransferFromHeatStructure3D1Phase::addVariables()
   // wall temperature initial condition
   if (!getTHMProblem().hasInitialConditionsFromFile() && !_app.isRestarting())
   {
-    const HeatStructureBase & hs = getComponentByName<HeatStructureBase>(_hs_name);
+    const HeatStructureFromFile3D & hs = getComponentByName<HeatStructureFromFile3D>(_hs_name);
     getTHMProblem().addFunctionIC(_T_wall_name, hs.getInitialT(), _flow_channel_subdomains);
   }
 }
@@ -316,7 +311,7 @@ HeatTransferFromHeatStructure3D1Phase::addMooseObjects()
     const std::string class_name = "ADHeatTransferFromHeatStructure3D1PhaseUserObject";
     InputParameters params = _factory.getValidParams(class_name);
     params.set<std::vector<SubdomainName>>("block") = _flow_channel_subdomains;
-    params.set<FlowChannel3DAlignment *>("_fch_alignment") = &_fch_alignment;
+    params.set<MeshAlignment1D3D *>("_mesh_alignment") = &_mesh_alignment;
     params.set<std::vector<VariableName>>("P_hf") = {_P_hf_name};
     params.set<MaterialPropertyName>("Hw") = _Hw_1phase_name;
     params.set<MaterialPropertyName>("T") = FlowModelSinglePhase::TEMPERATURE;

@@ -49,6 +49,7 @@ SetAdaptivityOptionsAction::validParams()
       "The number of adaptive steps to use when on each timestep during a Transient simulation.");
   params.addParam<bool>(
       "recompute_markers_during_cycles", false, "Recompute markers during adaptivity cycles");
+  params.addParam<bool>("switch_h_to_p_refinement", false, "True to perform p-refinement");
   return params;
 }
 
@@ -96,7 +97,7 @@ SetAdaptivityOptionsAction::act()
 
   else if (_current_task == "add_geometric_rm")
   {
-    auto rm_params = _factory.getValidParams("MooseGhostPointNeighbors");
+    auto rm_params = _factory.getValidParams("ElementPointNeighborLayers");
 
     rm_params.set<std::string>("for_whom") = "Adaptivity";
     rm_params.set<MooseMesh *>("mesh") = _mesh.get();
@@ -106,7 +107,7 @@ SetAdaptivityOptionsAction::act()
     if (rm_params.areAllRequiredParamsValid())
     {
       auto rm_obj = _factory.create<RelationshipManager>(
-          "MooseGhostPointNeighbors", "adaptivity_geometric_ghosting", rm_params);
+          "ElementPointNeighborLayers", "adaptivity_geometric_ghosting", rm_params);
 
       // Delete the resources created on behalf of the RM if it ends up not being added to the
       // App.
@@ -114,7 +115,7 @@ SetAdaptivityOptionsAction::act()
         _factory.releaseSharedObjects(*rm_obj);
     }
     else
-      mooseError("Invalid initialization of MooseGhostPointNeighbors");
+      mooseError("Invalid initialization of ElementPointNeighborLayers");
   }
 
   else if (_current_task == "set_adaptivity_options")
@@ -137,5 +138,7 @@ SetAdaptivityOptionsAction::act()
     adapt.setInterval(getParam<unsigned int>("interval"));
 
     adapt.setRecomputeMarkersFlag(getParam<bool>("recompute_markers_during_cycles"));
+    if (getParam<bool>("switch_h_to_p_refinement"))
+      adapt.switchHToPRefinement();
   }
 }

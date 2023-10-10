@@ -7,6 +7,7 @@
 //* Licensed under LGPL 2.1, please see LICENSE for details
 //* https://www.gnu.org/licenses/lgpl-2.1.html
 
+#include "OptimizationReporterBase.h"
 #include "ParameterMeshOptimization.h"
 
 #include "AddVariableAction.h"
@@ -18,13 +19,12 @@ registerMooseObject("OptimizationApp", ParameterMeshOptimization);
 InputParameters
 ParameterMeshOptimization::validParams()
 {
-  InputParameters params = OptimizationReporterBase::validParams();
+  InputParameters params = OptimizationDataTempl<OptimizationReporterBase>::validParams();
+
   params.addClassDescription(
       "Computes objective function, gradient and contains reporters for communicating between "
       "optimizeSolve and subapps using mesh-based parameter definition.");
 
-  params.addRequiredParam<std::vector<ReporterValueName>>(
-      "parameter_names", "List of parameter names, one for each group of parameters.");
   params.addRequiredParam<std::vector<FileName>>(
       "parameter_meshes", "Exodus file containing meshes describing parameters.");
 
@@ -33,149 +33,265 @@ ParameterMeshOptimization::validParams()
   params.addParam<MultiMooseEnum>(
       "parameter_families",
       families,
-      "Specifies the family of FE shape functions for each parameter. If a single value is "
-      "specified, then that value is used for all parameters.");
+      "Specifies the family of FE shape functions for each group of parameters. If a single value "
+      "is "
+      "specified, then that value is used for all groups of parameters.");
   const auto order = AddVariableAction::getNonlinearVariableOrders();
   MultiMooseEnum orders(order.getRawNames(), "FIRST");
   params.addParam<MultiMooseEnum>(
       "parameter_orders",
       orders,
-      "Specifies the order of FE shape functions for each parameter. If a single value is "
-      "specified, then that value is used for all parameters.");
+      "Specifies the order of FE shape functions for each group of parameters. If a single value "
+      "is "
+      "specified, then that value is used for all groups of parameters.");
 
   params.addParam<unsigned int>(
       "num_parameter_times", 1, "The number of time points the parameters represent.");
 
-  params.addParam<std::vector<Real>>("initial_condition",
-                                     std::vector<Real>(),
-                                     "Spatially constant initial condition for each parameter.");
-  params.addParam<std::vector<Real>>(
-      "lower_bounds", std::vector<Real>(), "Spatially constant lower bound for each parameter.");
-  params.addParam<std::vector<Real>>(
-      "upper_bounds", std::vector<Real>(), "Spatially constant upper bound for each parameter.");
+  params.addParam<std::vector<Real>>("constant_group_initial_condition",
+                                     "Constant initial condition for each group of parameters.");
+  params.addParam<std::vector<Real>>("constant_group_lower_bounds",
+                                     "Constant lower bound for each group of parameters.");
+  params.addParam<std::vector<Real>>("constant_group_upper_bounds",
+                                     "Constant upper bound for each group of parameters.");
+  params.addParam<std::vector<std::string>>(
+      "initial_condition_mesh_variable",
+      "Name of variable on parameter mesh to use as initial condition.");
+  params.addParam<std::vector<std::string>>(
+      "lower_bound_mesh_variable", "Name of variable on parameter mesh to use as lower bound.");
+  params.addParam<std::vector<std::string>>(
+      "upper_bound_mesh_variable", "Name of variable on parameter mesh to use as upper bound.");
+  params.addParam<std::vector<unsigned int>>(
+      "exodus_timesteps_for_parameter_mesh_variable",
+      "Timesteps to read all parameter group bounds and initial conditions from Exodus mesh.  The "
+      "options are to give no timestep, a single timestep or \"num_parameter_times\" timesteps.  "
+      "No timestep results in the final timestep from the mesh being used.  A single timestep "
+      "results in values at that timestep being used for all timesteps.  \"num_parameter_times\" "
+      "timesteps results in values from the mesh at those steps being used.  The same timesteps "
+      "are used for all parameter groups and all meshes, the capability to define different "
+      "timesteps for different meshes is not supported.");
 
   return params;
 }
 
 ParameterMeshOptimization::ParameterMeshOptimization(const InputParameters & parameters)
-  : OptimizationReporterBase(parameters),
-    _parameter_names(getParam<std::vector<ReporterValueName>>("parameter_names")),
-    _nparams(_parameter_names.size()),
-    _nvalues(_nparams),
-    _parameters(_nparams),
-    _gradients(_nparams),
-    _lower_bounds(getParam<std::vector<Real>>("lower_bounds")),
-    _upper_bounds(getParam<std::vector<Real>>("upper_bounds"))
+  : OptimizationDataTempl<OptimizationReporterBase>(parameters)
 {
+  _nvalues.resize(_nparams, 0);
+  // Fill the mesh information
   const auto & meshes = getParam<std::vector<FileName>>("parameter_meshes");
   const auto & families = getParam<MultiMooseEnum>("parameter_families");
   const auto & orders = getParam<MultiMooseEnum>("parameter_orders");
-  const auto & initial_condition = getParam<std::vector<Real>>("initial_condition");
   const auto & ntimes = getParam<unsigned int>("num_parameter_times");
 
-  // Size checks
+  // Fill input file parameter bounds and IC information
+  const std::vector<Real> empty_vec = {};
+  std::vector<Real> constant_group_initial_condition(
+      isParamValid("constant_group_initial_condition")
+          ? getParam<std::vector<Real>>("constant_group_initial_condition")
+          : empty_vec);
+  std::vector<Real> constant_group_lower_bounds(
+      isParamValid("constant_group_lower_bounds")
+          ? getParam<std::vector<Real>>("constant_group_lower_bounds")
+          : empty_vec);
+  std::vector<Real> constant_group_upper_bounds(
+      isParamValid("constant_group_upper_bounds")
+          ? getParam<std::vector<Real>>("constant_group_upper_bounds")
+          : empty_vec);
+
+  // Fill exodus parameter bounds and IC information
+  const std::vector<std::string> empty_string_vec(_nparams);
+  std::vector<std::string> initial_condition_mesh_variable(
+      isParamValid("initial_condition_mesh_variable")
+          ? getParam<std::vector<std::string>>("initial_condition_mesh_variable")
+          : empty_string_vec);
+  std::vector<std::string> lower_bound_mesh_variable(
+      isParamValid("lower_bound_mesh_variable")
+          ? getParam<std::vector<std::string>>("lower_bound_mesh_variable")
+          : empty_string_vec);
+  std::vector<std::string> upper_bound_mesh_variable(
+      isParamValid("upper_bound_mesh_variable")
+          ? getParam<std::vector<std::string>>("upper_bound_mesh_variable")
+          : empty_string_vec);
+
+  std::vector<unsigned int> exodus_timestep;
+  if (isParamValid("exodus_timesteps_for_parameter_mesh_variable"))
+    exodus_timestep =
+        getParam<std::vector<unsigned int>>("exodus_timesteps_for_parameter_mesh_variable");
+  else
+    exodus_timestep = {std::numeric_limits<unsigned int>::max()};
+
+  // now do a bunch of error checking
+  // Size checks for data
   if (meshes.size() != _nparams)
-    paramError("parameter_meshes", "There must be a mesh associated with each parameter.");
+    paramError("parameter_meshes",
+               "There must be a mesh associated with each group of parameters.");
   if (families.size() > 1 && families.size() != _nparams)
-    paramError("parameter_families", "There must be a family associated with each parameter.");
+    paramError("parameter_families",
+               "There must be a family associated with each group of parameters.");
   if (orders.size() > 1 && orders.size() != _nparams)
-    paramError("parameter_orders", "There must be an order associated with each parameter.");
-  if (!initial_condition.empty() && initial_condition.size() != _nparams)
-    paramError("initial_condition",
-               "There must be an initial condition associated with each parameter.");
-  if (!_lower_bounds.empty() && _lower_bounds.size() != _nparams)
-    paramError("lower_bounds", "There must be a lower bound associated with each parameter.");
-  if (!_upper_bounds.empty() && _upper_bounds.size() != _nparams)
-    paramError("upper_bounds", "There must be an upper bound associated with each parameter.");
+    paramError("parameter_orders",
+               "There must be an order associated with each group of parameters.");
+
+  // Size checks for input file parameter data
+  if (!constant_group_initial_condition.empty() &&
+      constant_group_initial_condition.size() != _nparams)
+    paramError("constant_group_initial_condition",
+               "There must be an initial condition associated with each group of parameters.");
+  else if (!constant_group_lower_bounds.empty() && constant_group_lower_bounds.size() != _nparams)
+    paramError("constant_group_lower_bounds",
+               "There must be a lower bound associated with each parameter.");
+  else if (!constant_group_upper_bounds.empty() && constant_group_upper_bounds.size() != _nparams)
+    paramError("constant_group_upper_bounds",
+               "There must be an upper bound associated with each parameter.");
+
+  // error checking that initial conditions and bounds are only read from a single location
+  if (!initial_condition_mesh_variable[0].empty() && !constant_group_initial_condition.empty())
+    paramError("constant_group_initial_condition",
+               "Initial conditions for all parameter groups can only be defined by "
+               "initial_condition_mesh_variable or "
+               "constant_group_initial_condition but not both.");
+  else if (!lower_bound_mesh_variable[0].empty() && !constant_group_lower_bounds.empty())
+    paramError(
+        "constant_group_lower_bounds",
+        "Lower bounds for all parameter groups can only be defined by lower_bound_mesh_variable or "
+        "constant_group_lower_bounds but not both.");
+  else if (!upper_bound_mesh_variable[0].empty() && !constant_group_upper_bounds.empty())
+    paramError(
+        "constant_group_upper_bounds",
+        "Upper bounds for all parameter groups can only be defined by upper_bound_mesh_variable or "
+        "constant_group_upper_bounds but not both.");
+
+  // Make sure they did not specify too many timesteps
+  if (isParamValid("exodus_timesteps_for_parameter_mesh_variable") &&
+      ((lower_bound_mesh_variable[0].empty() + upper_bound_mesh_variable[0].empty() +
+        initial_condition_mesh_variable[0].empty()) == 3))
+    paramError("\"exodus_timesteps_for_parameter_mesh_variable\" should only be specified if "
+               "reading values from a mesh.");
+  else if (exodus_timestep.size() != ntimes && exodus_timestep.size() != 1)
+    paramError("exodus_timesteps_for_parameter_mesh_variable",
+               "Number of timesteps to read mesh data specified by "
+               "\"exodus_timesteps_for_parameter_mesh_variable\" incorrect. "
+               "\"exodus_timesteps_for_parameter_mesh_variable\" can specify a single timestep or "
+               "\"num_parameter_times\" timesteps.");
 
   _ndof = 0;
   for (const auto & i : make_range(_nparams))
   {
+    // store off all the variable names that you might want to read from the mesh
+    std::vector<std::string> var_names;
+    if (!initial_condition_mesh_variable[i].empty())
+      var_names.push_back(initial_condition_mesh_variable[i]);
+    if (!lower_bound_mesh_variable[i].empty())
+      var_names.push_back(lower_bound_mesh_variable[i]);
+    if (!upper_bound_mesh_variable[i].empty())
+      var_names.push_back(upper_bound_mesh_variable[i]);
+
     const std::string family = families.size() > 1 ? families[i] : families[0];
     const std::string order = orders.size() > 1 ? orders[i] : orders[0];
     const FEType fetype(Utility::string_to_enum<Order>(order),
                         Utility::string_to_enum<FEFamily>(family));
 
-    ParameterMesh pmesh(fetype, meshes[i]);
+    ParameterMesh pmesh(fetype, meshes[i], var_names);
     _nvalues[i] = pmesh.size() * ntimes;
     _ndof += _nvalues[i];
 
-    _parameters[i] =
-        &declareValueByName<std::vector<Real>>(_parameter_names[i], REPORTER_MODE_REPLICATED);
-    _parameters[i]->assign(_nvalues[i], initial_condition.empty() ? 0.0 : initial_condition[i]);
-    _gradients[i] = &declareValueByName<std::vector<Real>>("grad_" + _parameter_names[i],
-                                                           REPORTER_MODE_REPLICATED);
+    // read and assign initial conditions
+    const Real defaultIC = 0.0;
+    const Real constant_valueIC(
+        constant_group_initial_condition.empty() ? defaultIC : constant_group_initial_condition[i]);
+    std::vector<Real> initial_condition = parseData(
+        exodus_timestep, pmesh, constant_valueIC, initial_condition_mesh_variable[i], ntimes);
+    _parameters[i]->assign(initial_condition.begin(), initial_condition.end());
+
+    // read and assign lower bound
+    const Real defaultLB = std::numeric_limits<Real>::lowest();
+    const Real constant_valueLB(
+        constant_group_lower_bounds.empty() ? defaultLB : constant_group_lower_bounds[i]);
+    std::vector<Real> lower_bound =
+        parseData(exodus_timestep, pmesh, constant_valueLB, lower_bound_mesh_variable[i], ntimes);
+    _lower_bounds.insert(_lower_bounds.end(), lower_bound.begin(), lower_bound.end());
+
+    // read and assign upper bound
+    const Real defaultUB = std::numeric_limits<Real>::max();
+    const Real constant_valueUB(
+        constant_group_upper_bounds.empty() ? defaultUB : constant_group_upper_bounds[i]);
+    std::vector<Real> upper_bound =
+        parseData(exodus_timestep, pmesh, constant_valueUB, upper_bound_mesh_variable[i], ntimes);
+    _upper_bounds.insert(_upper_bounds.end(), upper_bound.begin(), upper_bound.end());
+
+    // resize gradient vector to be filled later
     _gradients[i]->resize(_nvalues[i]);
   }
 }
-
-void
-ParameterMeshOptimization::setInitialCondition(libMesh::PetscVector<Number> & x)
+std::vector<Real>
+ParameterMeshOptimization::parseData(const std::vector<unsigned int> & exodus_timestep,
+                                     const ParameterMesh & pmesh,
+                                     Real constantDataFromInput,
+                                     const std::string & meshVarName,
+                                     unsigned int ntimes) const
 {
-  x.init(_ndof);
-
-  dof_id_type n = 0;
-  for (const auto & param : _parameters)
-    for (const auto & val : *param)
-      x.set(n++, val);
-
-  x.close();
-}
-
-void
-ParameterMeshOptimization::updateParameters(const libMesh::PetscVector<Number> & x)
-{
-  dof_id_type n = 0;
-  for (auto & param : _parameters)
-    for (auto & val : *param)
-      val = x(n++);
-}
-
-void
-ParameterMeshOptimization::computeGradient(libMesh::PetscVector<Number> & gradient) const
-{
-  for (const auto & p : make_range(_nparams))
-    if (_gradients[p]->size() != _nvalues[p])
-      mooseError("The gradient for parameter ",
-                 _parameter_names[p],
-                 " has changed, expected ",
-                 _nvalues[p],
-                 " versus ",
-                 _gradients[p]->size(),
-                 ".");
-
-  dof_id_type n = 0;
-  for (const auto & grad : _gradients)
-    for (const auto & val : *grad)
-      gradient.set(n++, val);
-
-  gradient.close();
-}
-
-Real
-ParameterMeshOptimization::getLowerBound(dof_id_type i) const
-{
-  return _lower_bounds.empty() ? -std::numeric_limits<Real>::max()
-                               : _lower_bounds[getParameterIndex(i)];
-}
-
-Real
-ParameterMeshOptimization::getUpperBound(dof_id_type i) const
-{
-  return _upper_bounds.empty() ? std::numeric_limits<Real>::max()
-                               : _upper_bounds[getParameterIndex(i)];
-}
-
-unsigned int
-ParameterMeshOptimization::getParameterIndex(dof_id_type i) const
-{
-  dof_id_type dof = 0;
-  for (unsigned int p = 0; p < _nparams; ++p)
+  unsigned int numberOfControllableParameters = pmesh.size() * ntimes;
+  std::vector<Real> parsedData;
+  // read from mesh
+  if (!meshVarName.empty())
   {
-    dof += _nvalues[p];
-    if (i < dof)
-      return p;
+    for (auto const & step : exodus_timestep)
+    {
+      std::vector<Real> data = pmesh.getParameterValues(meshVarName, step);
+      parsedData.insert(parsedData.end(), data.begin(), data.end());
+    }
+    if (parsedData.size() != numberOfControllableParameters)
+      mooseError("Number of parameters assigned by ",
+                 meshVarName,
+                 " is not equal to the number of parameters on the mesh.  Mesh contains ",
+                 numberOfControllableParameters,
+                 " parameters and ",
+                 meshVarName,
+                 " assigned ",
+                 parsedData.size(),
+                 " parameters.");
   }
-  mooseError("DoF index ", i, " is outside of expected paramter vector of size ", _ndof, ".");
-  return 0;
+  else // read in constant or default values
+    parsedData.resize(parsedData.size() + numberOfControllableParameters, constantDataFromInput);
+
+  return parsedData;
+}
+
+// void
+// ParameterMeshOptimization::execute()
+// {
+//   computeMisfit();
+// }
+
+Real
+ParameterMeshOptimization::computeObjective()
+{
+  // This will only be executed if measurement_values are available on the main app
+  for (const auto i : index_range(_measurement_values))
+    _misfit_values[i] = _simulation_values[i] - _measurement_values[i];
+
+  Real val = 0.0;
+  for (auto & misfit : _misfit_values)
+    val += misfit * misfit;
+
+  if (_tikhonov_coeff > 0.0)
+  {
+    Real param_norm_sqr = 0;
+    for (const auto & data : _parameters)
+      for (const auto & val : *data)
+        param_norm_sqr += val * val;
+
+    val += _tikhonov_coeff * param_norm_sqr;
+  }
+
+  return val * 0.5;
+}
+
+// function only used for test objects
+void
+ParameterMeshOptimization::setSimulationValuesForTesting(std::vector<Real> & data)
+{
+  _simulation_values.clear();
+  _simulation_values = data;
 }

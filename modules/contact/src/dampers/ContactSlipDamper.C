@@ -82,33 +82,25 @@ void
 ContactSlipDamper::timestepSetup()
 {
   GeometricSearchData & displaced_geom_search_data = _displaced_problem->geomSearchData();
-  std::map<std::pair<unsigned int, unsigned int>, PenetrationLocator *> * penetration_locators =
-      &displaced_geom_search_data._penetration_locators;
+  const auto & penetration_locators = displaced_geom_search_data._penetration_locators;
 
-  for (pl_iterator plit = penetration_locators->begin(); plit != penetration_locators->end();
-       ++plit)
+  for (const auto & pl : penetration_locators)
   {
-    PenetrationLocator & pen_loc = *plit->second;
+    PenetrationLocator & pen_loc = *pl.second;
 
     if (operateOnThisInteraction(pen_loc))
     {
-      std::vector<dof_id_type> & secondary_nodes = pen_loc._nearest_node._secondary_nodes;
-
-      for (unsigned int i = 0; i < secondary_nodes.size(); i++)
-      {
-        dof_id_type secondary_node_num = secondary_nodes[i];
-
+      for (const auto & secondary_node_num : pen_loc._nearest_node._secondary_nodes)
         if (pen_loc._penetration_info[secondary_node_num])
         {
           PenetrationInfo & info = *pen_loc._penetration_info[secondary_node_num];
-          const Node * node = info._node;
+          const Node & node = _displaced_problem->mesh().nodeRef(secondary_node_num);
 
-          if (node->processor_id() == processor_id())
+          if (node.processor_id() == processor_id())
             //              && info.isCaptured())                  //TODO maybe just set this
             //              everywhere?
             info._slip_reversed = false;
         }
-      }
     }
   }
 }
@@ -133,28 +125,21 @@ ContactSlipDamper::computeDamping(const NumericVector<Number> & solution,
   _num_slip_reversed = 0;
 
   GeometricSearchData & displaced_geom_search_data = _displaced_problem->geomSearchData();
-  std::map<std::pair<unsigned int, unsigned int>, PenetrationLocator *> * penetration_locators =
-      &displaced_geom_search_data._penetration_locators;
+  const auto & penetration_locators = displaced_geom_search_data._penetration_locators;
 
-  for (pl_iterator plit = penetration_locators->begin(); plit != penetration_locators->end();
-       ++plit)
+  for (const auto & pl : penetration_locators)
   {
-    PenetrationLocator & pen_loc = *plit->second;
+    PenetrationLocator & pen_loc = *pl.second;
 
     if (operateOnThisInteraction(pen_loc))
     {
-      std::vector<dof_id_type> & secondary_nodes = pen_loc._nearest_node._secondary_nodes;
-
-      for (unsigned int i = 0; i < secondary_nodes.size(); i++)
-      {
-        dof_id_type secondary_node_num = secondary_nodes[i];
-
+      for (const auto & secondary_node_num : pen_loc._nearest_node._secondary_nodes)
         if (pen_loc._penetration_info[secondary_node_num])
         {
           PenetrationInfo & info = *pen_loc._penetration_info[secondary_node_num];
-          const Node * node = info._node;
+          const Node & node = _displaced_problem->mesh().nodeRef(secondary_node_num);
 
-          if (node->processor_id() == processor_id())
+          if (node.processor_id() == processor_id())
           {
             if (info.isCaptured())
             {
@@ -204,7 +189,7 @@ ContactSlipDamper::computeDamping(const NumericVector<Number> & solution,
                     (tangential_it_slip.norm() - _max_iterative_slip) / tangential_it_slip.norm();
 
               if (_debug_output && node_damping_factor < 1.0)
-                _console << "Damping node: " << node->id()
+                _console << "Damping node: " << node.id()
                          << " prev iter slip: " << info._incremental_slip_prev_iter
                          << " curr iter slip: " << info._incremental_slip
                          << " slip_tol: " << info._slip_tol
@@ -215,7 +200,6 @@ ContactSlipDamper::computeDamping(const NumericVector<Number> & solution,
             }
           }
         }
-      }
     }
   }
   _console << std::flush;

@@ -1,6 +1,6 @@
 [Tests]
   design = 'meshgenerators/PatternedHexMeshGenerator.md'
-  issues = '#18628 #20148 #20514'
+  issues = '#18628 #20148 #20514 #23367 #24508'
   [hexagon_boundary]
     type = 'Exodiff'
     exodiff_opts = '-pedantic'
@@ -23,7 +23,8 @@
     exodiff_opts = '-pedantic'
     input = 'patterned_2d.i'
     exodiff = 'patterned_hex_no_interface.e'
-    cli_args = 'Mesh/pattern/background_intervals=2 Mesh/pattern/background_block_id=25
+    cli_args = 'Mesh/hex_1/create_outward_interface_boundaries=false
+                Mesh/pattern/background_intervals=2 Mesh/pattern/background_block_id=25
                 Mesh/pattern/background_block_name="assem_block"
                 Mesh/pattern/hexagon_size=18
                 Mesh/pattern/duct_sizes=17
@@ -38,7 +39,6 @@
   []
   [hexagon_boundary_no_deform]
     type = 'Exodiff'
-    exodiff_opts = '-pedantic'
     input = 'patterned_2d.i'
     exodiff = 'patterned_hex_no_deform.e'
     cli_args = 'Mesh/pattern/hexagon_size=15
@@ -53,6 +53,14 @@
     exodiff = 'patterned_none.e'
     cli_args = 'Mesh/pattern/pattern_boundary=none --mesh-only "patterned_none.e"'
     requirement ='The system shall stitch hexagon meshes to form a large mesh without extra boundary.'
+    recover = false
+  []
+  [sim_hex]
+    type = 'Exodiff'
+    input = 'sim_patterned.i'
+    exodiff = 'sim_patterned_in.e'
+    cli_args = '--mesh-only'
+    requirement ='The system shall stitch simple hexagon meshes to form a large mesh without extra boundary.'
     recover = false
   []
   [patterned_pattern]
@@ -140,6 +148,24 @@
     expect_err = 'This parameter and duct_block_names must be provided simultaneously.'
     requirement ='The system shall throw an error if background_block_name and duct_block_names are not provided simultaneously if the hexagonal mesh has ducts.'
   []
+  [err_duct_oversize]
+    type = 'RunException'
+    input = 'patterned_2d.i'
+    cli_args = 'Mesh/pattern/background_intervals=2 Mesh/pattern/duct_block_ids=20 Mesh/pattern/background_block_id=15
+                Mesh/pattern/hexagon_size=18 Mesh/pattern/duct_sizes=19 Mesh/pattern/duct_intervals=2
+                --mesh-only "patterned_err.e"'
+    expect_err = 'The duct sizes should not exceed the size of the hexagonal boundary.'
+    requirement ='The system shall throw an error if the specified duct size exceeds the external hexagonal boundary.'
+  []
+  [err_duct_descending_sizes]
+    type = 'RunException'
+    input = 'patterned_2d.i'
+    cli_args = 'Mesh/pattern/background_intervals=2 Mesh/pattern/duct_block_ids="20 21" Mesh/pattern/background_block_id=15
+                Mesh/pattern/hexagon_size=18 Mesh/pattern/duct_sizes="17.5 17" Mesh/pattern/duct_intervals="2 2"
+                --mesh-only "patterned_err.e"'
+    expect_err = 'This parameter must be strictly ascending.'
+    requirement = 'The system shall throw an error if the specified hexagonal duct size is not strictly ascending.'
+  []
   [err_duct_ids]
     type = 'RunException'
     input = 'patterned_2d.i'
@@ -211,5 +237,15 @@
                 --mesh-only "patterned_err.e"'
     expect_err = 'the assembly is cut off so much that the internal structure that should not be altered is compromised.'
     requirement ='The system shall throw an error if the input hexagonal mesh geometry that should not be deformed is cut off.'
+  []
+  [err_sim_hex_with_boundary]
+    type = 'RunException'
+    input = 'sim_patterned.i'
+    cli_args = 'Mesh/pattern/pattern_boundary=hexagon
+                Mesh/pattern/hexagon_size=10.0
+                --mesh-only "patterned_err.e"'
+    expect_err = 'for each input mesh, the number of sectors on each side must be greater than unity'
+    requirement = 'The system shall throw an error if hexagon boundary needs to be generated for simple unit hexagon mesh.'
+    recover = false
   []
 []

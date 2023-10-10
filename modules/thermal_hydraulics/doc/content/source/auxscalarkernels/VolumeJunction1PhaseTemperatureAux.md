@@ -1,18 +1,14 @@
-<!-- MOOSE Documentation Stub: Remove this when content is added. -->
+# VolumeJunction1PhaseTemperatureAux
 
-# VolumeJunction1PhasePressureAux
+!syntax description /AuxScalarKernels/VolumeJunction1PhaseTemperatureAux
 
-!alert construction title=Undocumented Class
-The VolumeJunction1PhasePressureAux has not been documented. The content contained on this page includes the
-typical automatic documentation associated with a MooseObject; however, what is contained is
-ultimately determined by what is necessary to make the documentation clear for users.
+The temperature is computed from the specific volume and specific internal energy of the fluid
+using the [!param](/AuxScalarKernels/VolumeJunction1PhaseTemperatureAux/fp) parameter fluid properties.
 
-!syntax description /AuxScalarKernels/VolumeJunction1PhasePressureAux
+This object is automatically added to the simulation by the [VolumeJunction1Phase.md] component.
 
-!syntax parameters /AuxScalarKernels/VolumeJunction1PhasePressureAux
+!syntax parameters /AuxScalarKernels/VolumeJunction1PhaseTemperatureAux
 
-!syntax inputs /AuxScalarKernels/VolumeJunction1PhasePressureAux
+!syntax inputs /AuxScalarKernels/VolumeJunction1PhaseTemperatureAux
 
-!syntax children /AuxScalarKernels/VolumeJunction1PhasePressureAux
-
-!bibtex bibliography
+!syntax children /AuxScalarKernels/VolumeJunction1PhaseTemperatureAux

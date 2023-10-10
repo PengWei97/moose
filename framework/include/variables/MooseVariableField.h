@@ -159,6 +159,11 @@ public:
    */
   virtual const MooseArray<ADReal> & adDofValues() const = 0;
 
+  /**
+   * Return the AD neighbor dof values
+   */
+  virtual const MooseArray<ADReal> & adDofValuesNeighbor() const = 0;
+
   ///@{
   /**
    * Methods for retrieving values of variables at the nodes in a MooseArray for AuxKernelBase
@@ -280,6 +285,11 @@ public:
   virtual const FieldVariablePhiSecond & secondPhiNeighbor() const = 0;
 
   /**
+   * Return the variable's shape functions on a lower-dimensional element
+   */
+  virtual const FieldVariablePhiValue & phiLower() const = 0;
+
+  /**
    * Set local DOF values and evaluate the values on quadrature points
    */
   virtual void setDofValues(const DenseVector<OutputData> & values) = 0;
@@ -335,9 +345,10 @@ public:
   virtual const DoFValue & nodalVectorTagValue(TagID tag) const = 0;
   virtual const DoFValue & vectorTagDofValue(TagID tag) const = 0;
 
-  void meshChanged() override;
-  void residualSetup() override;
-  void jacobianSetup() override;
+  virtual void meshChanged() override;
+  virtual void residualSetup() override;
+  virtual void jacobianSetup() override;
+  virtual void timestepSetup() override;
 
   using MooseVariableFieldBase::hasBlocks;
   /*
@@ -361,17 +372,20 @@ protected:
   using ElemQpArg = Moose::ElemQpArg;
   using ElemSideQpArg = Moose::ElemSideQpArg;
   using ElemPointArg = Moose::ElemPointArg;
+  using StateArg = Moose::StateArg;
 
-  ValueType evaluate(const ElemQpArg & elem_qp, unsigned int state) const override final;
-  ValueType evaluate(const ElemSideQpArg & elem_side_qp, unsigned int state) const override final;
-  ValueType evaluate(const ElemPointArg & elem_point, unsigned int state) const override final;
+  ValueType evaluate(const ElemQpArg & elem_qp, const StateArg & state) const override final;
+  ValueType evaluate(const ElemSideQpArg & elem_side_qp,
+                     const StateArg & state) const override final;
+  ValueType evaluate(const ElemPointArg & elem_point, const StateArg & state) const override final;
 
-  GradientType evaluateGradient(const ElemQpArg & elem_qp, unsigned int state) const override;
+  GradientType evaluateGradient(const ElemQpArg & elem_qp, const StateArg & state) const override;
   GradientType evaluateGradient(const ElemSideQpArg & elem_side_qp,
-                                unsigned int state) const override final;
+                                const StateArg & state) const override final;
 
-  DotType evaluateDot(const ElemQpArg & elem_qp, unsigned int state) const override final;
-  DotType evaluateDot(const ElemSideQpArg & elem_side_qp, unsigned int state) const override final;
+  DotType evaluateDot(const ElemQpArg & elem_qp, const StateArg & state) const override final;
+  DotType evaluateDot(const ElemSideQpArg & elem_side_qp,
+                      const StateArg & state) const override final;
 
   /// the time integrator used for computing time derivatives
   const TimeIntegrator * const _time_integrator;
@@ -380,14 +394,13 @@ protected:
   mutable ADReal _ad_real_dummy = 0;
 
 private:
-#ifdef MOOSE_GLOBAL_AD_INDEXING
   /**
    * Compute the solution, gradient, and time derivative with provided shape functions
    */
   template <typename Shapes, typename Solution, typename GradShapes, typename GradSolution>
   void computeSolution(const Elem * elem,
                        const QBase *,
-                       unsigned int state,
+                       const StateArg & state,
                        const Shapes & phi,
                        Solution & local_soln,
                        const GradShapes & grad_phi,
@@ -397,13 +410,12 @@ private:
   /**
    * Evaluate solution and gradient for the \p elem_qp argument
    */
-  void evaluateOnElement(const ElemQpArg & elem_qp, const unsigned int state) const;
+  void evaluateOnElement(const ElemQpArg & elem_qp, const StateArg & state) const;
 
   /**
    * Evaluate solution and gradient for the \p elem_side_qp argument
    */
-  void evaluateOnElementSide(const ElemSideQpArg & elem_side_qp, const unsigned int state) const;
-#endif
+  void evaluateOnElementSide(const ElemSideQpArg & elem_side_qp, const StateArg & state) const;
 
   /// Keep track of the current elem-qp functor element in order to enable local caching (e.g. if we
   /// call evaluate on the same element, but just with a different quadrature point, we can return

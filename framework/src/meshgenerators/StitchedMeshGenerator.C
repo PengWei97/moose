@@ -34,6 +34,10 @@ StitchedMeshGenerator::validParams()
       "algorithm",
       algorithm,
       "Control the use of binary search for the nodes of the stitched surfaces.");
+  params.addParam<bool>("prevent_boundary_ids_overlap",
+                        true,
+                        "Whether to re-number boundaries in stitched meshes to prevent merging of "
+                        "unrelated boundaries");
   params.addClassDescription(
       "Allows multiple mesh files to be stitched together to form a single mesh.");
 
@@ -47,7 +51,8 @@ StitchedMeshGenerator::StitchedMeshGenerator(const InputParameters & parameters)
     _clear_stitched_boundary_ids(getParam<bool>("clear_stitched_boundary_ids")),
     _stitch_boundaries_pairs(
         getParam<std::vector<std::vector<std::string>>>("stitch_boundaries_pairs")),
-    _algorithm(parameters.get<MooseEnum>("algorithm"))
+    _algorithm(parameters.get<MooseEnum>("algorithm")),
+    _prevent_boundary_ids_overlap(getParam<bool>("prevent_boundary_ids_overlap"))
 {
 }
 
@@ -85,15 +90,23 @@ StitchedMeshGenerator::generate()
       {
         std::stringstream error;
 
-        error << "Boundary " << boundary_pair[0] << " doesn't exist on the first mesh in " << name()
-              << "\n";
-        error << "Boundary names that do exist: \n";
+        error << "Boundary " << boundary_pair[0] << " doesn't exist on mesh '" << _input_names[0]
+              << "' in generator " << name() << "\n";
+        error << "Boundary (sideset) names that do exist: \n";
         error << " ID : Name\n";
 
         auto & sideset_id_name_map = mesh->get_boundary_info().get_sideset_name_map();
 
         for (auto & ss_name_map_pair : sideset_id_name_map)
           error << " " << ss_name_map_pair.first << " : " << ss_name_map_pair.second << "\n";
+
+        error << "\nBoundary (nodeset) names that do exist: \n";
+        error << " ID : Name\n";
+
+        auto & nodeset_id_name_map = mesh->get_boundary_info().get_nodeset_name_map();
+
+        for (auto & ns_name_map_pair : nodeset_id_name_map)
+          error << " " << ns_name_map_pair.first << " : " << ns_name_map_pair.second << "\n";
 
         paramError("stitch_boundaries_pairs", error.str());
       }
@@ -113,9 +126,9 @@ StitchedMeshGenerator::generate()
 
         std::stringstream error;
 
-        error << "Boundary " << boundary_pair[1] << " doesn't exist on mesh " << i + 1 << " in "
-              << name() << "\n";
-        error << "Boundary names that do exist: \n";
+        error << "Boundary " << boundary_pair[1] << " doesn't exist on mesh '" << _input_names[i]
+              << "' in generator " << name() << "\n";
+        error << "Boundary (sideset) names that do exist: \n";
         error << " ID : Name\n";
 
         auto & sideset_id_name_map = meshes[i]->get_boundary_info().get_sideset_name_map();
@@ -123,11 +136,53 @@ StitchedMeshGenerator::generate()
         for (auto & ss_name_map_pair : sideset_id_name_map)
           error << " " << ss_name_map_pair.first << " : " << ss_name_map_pair.second << "\n";
 
+        error << "\nBoundary (nodeset) names that do exist: \n";
+        error << " ID : Name\n";
+
+        auto & nodeset_id_name_map = mesh->get_boundary_info().get_nodeset_name_map();
+
+        for (auto & ns_name_map_pair : nodeset_id_name_map)
+          error << " " << ns_name_map_pair.first << " : " << ns_name_map_pair.second << "\n";
+
         paramError("stitch_boundaries_pairs", error.str());
       }
     }
 
     const bool use_binary_search = (_algorithm == "BINARY");
+
+    // Avoid chaotic boundary merging due to overlapping ids in meshes by simply renumbering the
+    // boundaries in the meshes we are going to stitch onto the base mesh
+    // This is only done if there is an overlap
+    if (_prevent_boundary_ids_overlap)
+    {
+      // Meshes must be prepared to get the global boundary ids and global boundary ids
+      // must be used in parallel to be sure to renumber boundaries consistently across processes
+      if (!mesh->is_prepared())
+        mesh->prepare_for_use();
+      if (!meshes[i]->is_prepared())
+        meshes[i]->prepare_for_use();
+
+      const auto & base_mesh_bids = mesh->get_boundary_info().get_global_boundary_ids();
+      const auto stitched_mesh_bids = meshes[i]->get_boundary_info().get_global_boundary_ids();
+      // Check for an overlap
+      bool overlap_found = false;
+      for (const auto & bid : stitched_mesh_bids)
+        if (base_mesh_bids.count(bid))
+          overlap_found = true;
+
+      if (overlap_found)
+      {
+        const auto max_boundary_id = *base_mesh_bids.rbegin();
+        BoundaryID new_index = 1;
+        for (const auto bid : stitched_mesh_bids)
+        {
+          const auto new_bid = max_boundary_id + (new_index++);
+          meshes[i]->get_boundary_info().renumber_id(bid, new_bid);
+          if (bid == second)
+            second = new_bid;
+        }
+      }
+    }
 
     mesh->stitch_meshes(*meshes[i],
                         first,
@@ -138,5 +193,6 @@ StitchedMeshGenerator::generate()
                         use_binary_search);
   }
 
+  mesh->set_isnt_prepared();
   return dynamic_pointer_cast<MeshBase>(mesh);
 }

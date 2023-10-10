@@ -65,7 +65,7 @@ JSONOutput::filename()
 void
 JSONOutput::outputSystemInformation()
 {
-  storeHelper(_json, _app);
+  nlohmann::to_json(_json, _app);
 }
 
 void
@@ -142,9 +142,9 @@ JSONOutput::outputReporters()
                         .attributes();
         auto qid = _problem_ptr->theWarehouse().queryID(attr);
         _problem_ptr->theWarehouse().queryInto(qid, objs, true);
-        mooseAssert(objs.size() <= 1,
-                    "Multiple Reporter objects with the same name located, how did you do that?");
 
+        // There can now be multiple reporter objects with the same name, but
+        // there will only be one reporter that stores all the data.
         if (!objs.empty())
         {
           auto & reporter = *objs.front();
@@ -177,10 +177,10 @@ JSONOutput::outputReporters()
 }
 
 void
-JSONOutput::output(const ExecFlagType & type)
+JSONOutput::output()
 {
   _has_distributed = false;
-  AdvancedOutput::output(type);
+  AdvancedOutput::output();
   if (processor_id() == 0 || _has_distributed)
   {
     std::ofstream out(filename().c_str());

@@ -5,8 +5,7 @@
     exodiff ='test_out.e'
     cli_args = '-r 1'
     recover = false
-    mesh_mode = 'replicated'
-    ad_indexing_type = 'global'
+    max_parallel = 8 # https://github.com/idaholab/moose/issues/24537
 
     issues = "#226"
     design = "THMCreateMeshAction.md"

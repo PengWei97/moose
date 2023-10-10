@@ -8,8 +8,9 @@
     requirement = "The system shall be able to use Weller's reconstruction method to build cell "
                   "vector values from face fluxes with a second order convergence."
     method = '!dbg'
-    ad_indexing_type = 'global'
     required_python_packages = 'pandas matplotlib'
+    # skip test if test is being run out-of-tree. Issue Ref: #25279
+    installation_type = in_tree
     min_parallel = 2
   []
 []

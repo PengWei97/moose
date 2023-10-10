@@ -32,8 +32,9 @@ GeometricCutUserObject::validParams()
   return params;
 }
 
-GeometricCutUserObject::GeometricCutUserObject(const InputParameters & parameters)
-  : CrackFrontPointsProvider(parameters), _heal_always(getParam<bool>("heal_always"))
+GeometricCutUserObject::GeometricCutUserObject(const InputParameters & parameters,
+                                               const bool uses_mesh)
+  : CrackFrontPointsProvider(parameters, uses_mesh), _heal_always(getParam<bool>("heal_always"))
 {
   _xfem = MooseSharedNamespace::dynamic_pointer_cast<XFEM>(_fe_problem.getXFEM());
   if (_xfem == nullptr)
@@ -44,7 +45,7 @@ GeometricCutUserObject::GeometricCutUserObject(const InputParameters & parameter
   auto new_xfem_epl = std::make_shared<XFEMElementPairLocator>(_xfem, _interface_id);
   _fe_problem.geomSearchData().addElementPairLocator(_interface_id, new_xfem_epl);
 
-  if (_fe_problem.getDisplacedProblem() != NULL)
+  if (_fe_problem.getDisplacedProblem() != nullptr)
   {
     auto new_xfem_epl2 = std::make_shared<XFEMElementPairLocator>(_xfem, _interface_id, true);
     _fe_problem.getDisplacedProblem()->geomSearchData().addElementPairLocator(_interface_id,

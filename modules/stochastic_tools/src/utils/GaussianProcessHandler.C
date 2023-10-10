@@ -64,7 +64,8 @@ GaussianProcessHandler::setupCovarianceMatrix(const RealEigenMatrix & training_p
                                               const RealEigenMatrix & training_data,
                                               const GPOptimizerOptions & opts)
 {
-  const unsigned int batch_size = opts.batch_size > 0 ? opts.batch_size : training_params.rows();
+  const bool batch_decision = opts.batch_size > 0 && opts.batch_size <= training_params.rows();
+  const unsigned int batch_size = batch_decision ? opts.batch_size : training_params.rows();
   _K.resize(batch_size, batch_size);
 
   if (opts.opt_type == "tao")
@@ -170,11 +171,15 @@ GaussianProcessHandler::tuneHyperParamsTAO(const RealEigenMatrix & training_para
   ierr = TaoSetFromOptions(tao);
   CHKERRQ(ierr);
 
-  // Define petsc vetor to hold tunalbe hyper-params
+  // Define petsc vector to hold tunable hyper-params
   libMesh::PetscVector<Number> theta(_tao_comm, _num_tunable);
   ierr = formInitialGuessTAO(theta.vec());
   CHKERRQ(ierr);
+#if !PETSC_VERSION_LESS_THAN(3, 17, 0)
+  ierr = TaoSetSolution(tao, theta.vec());
+#else
   ierr = TaoSetInitialVector(tao, theta.vec());
+#endif
   CHKERRQ(ierr);
 
   // Get Hyperparameter bounds.
@@ -185,8 +190,12 @@ GaussianProcessHandler::tuneHyperParamsTAO(const RealEigenMatrix & training_para
   ierr = TaoSetVariableBounds(tao, lower.vec(), upper.vec());
   CHKERRQ(ierr);
 
-  // Set Objective and Graident Callback ierr =
-  TaoSetObjectiveAndGradientRoutine(tao, formFunctionGradientWrapper, (void *)this);
+  // Set Objective and Gradient Callback
+#if !PETSC_VERSION_LESS_THAN(3, 17, 0)
+  ierr = TaoSetObjectiveAndGradient(tao, NULL, formFunctionGradientWrapper, (void *)this);
+#else
+  ierr = TaoSetObjectiveAndGradientRoutine(tao, formFunctionGradientWrapper, (void *)this);
+#endif
   CHKERRQ(ierr);
 
   // Solve

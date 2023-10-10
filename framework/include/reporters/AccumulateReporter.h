@@ -20,14 +20,14 @@ class AccumulateReporter : public GeneralReporter
 public:
   static InputParameters validParams();
   AccumulateReporter(const InputParameters & parameters);
-  virtual void initialSetup() override;
   virtual void initialize() override {}
   virtual void execute() override;
   virtual void finalize() override {}
+  virtual void declareLateValues() override;
 
 protected:
   /**
-   * Helper for declaring an accumalative reporter value
+   * Helper for declaring an accumulative reporter value
    * This will fill in _accumulated_values if the reporter value is found
    */
   template <typename T>

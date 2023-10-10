@@ -1,18 +1,17 @@
-<!-- MOOSE Documentation Stub: Remove this when content is added. -->
-
 # PrandtlNumberMaterial
 
-!alert construction title=Undocumented Class
-The PrandtlNumberMaterial has not been documented. The content contained on this page includes the
-typical automatic documentation associated with a MooseObject; however, what is contained is
-ultimately determined by what is necessary to make the documentation clear for users.
-
 !syntax description /Materials/PrandtlNumberMaterial
+
+The Prandtl number $Pr$ is computed as:
+
+!equation
+Pr = \dfrac{c_p \mu}{k}
+
+with $c_p$ the specific isobaric heat capacity, $\mu$ the dynamic viscosity, and $k$ the thermal
+conductivity.
 
 !syntax parameters /Materials/PrandtlNumberMaterial
 
 !syntax inputs /Materials/PrandtlNumberMaterial
 
 !syntax children /Materials/PrandtlNumberMaterial
-
-!bibtex bibliography

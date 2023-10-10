@@ -38,8 +38,9 @@ template <bool is_ad>
 Real
 ElementIntegralFunctorPostprocessorTempl<is_ad>::computeQpIntegral()
 {
-  Moose::ElemQpArg elem_qp = {_current_elem, _qp, _qrule};
-  return MetaPhysicL::raw_value(_prefactor(elem_qp) * _functor(elem_qp));
+  Moose::ElemQpArg elem_qp = {_current_elem, _qp, _qrule, _q_point[_qp]};
+  return MetaPhysicL::raw_value(_prefactor(elem_qp, determineState()) *
+                                _functor(elem_qp, determineState()));
 }
 
 template class ElementIntegralFunctorPostprocessorTempl<false>;

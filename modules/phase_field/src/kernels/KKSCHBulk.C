@@ -39,9 +39,9 @@ KKSCHBulk::validParams()
 KKSCHBulk::KKSCHBulk(const InputParameters & parameters)
   : CHBulk<Real>(parameters),
     _ca_var(coupled("ca")),
-    _ca_name(getVar("ca", 0)->name()),
+    _ca_name(coupledName("ca", 0)),
     _cb_var(coupled("cb")),
-    _cb_name(getVar("cb", 0)->name()),
+    _cb_name(coupledName("cb", 0)),
     _prop_h(getMaterialProperty<Real>("h_name")),
     _second_derivative_Fa(getMaterialPropertyDerivative<Real>("fa_name", _ca_name, _ca_name)),
     _second_derivative_Fb(getMaterialPropertyDerivative<Real>("fb_name", _cb_name, _cb_name))
@@ -96,7 +96,7 @@ KKSCHBulk::computeGradDFDCons(PFFunctionType type)
       return res;
 
     case Jacobian:
-      // the non linear variable is c, but the free energy only contains the
+      // the nonlinear variable is c, but the free energy only contains the
       // phase concentrations. Equation (23) in the KKS paper gives the chain-
       // rule derivative dca/dc
       /* Real dcadc = _second_derivative_Fb[_qp]

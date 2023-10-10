@@ -52,7 +52,8 @@ public:
   virtual void initialize() override;
   virtual void execute() override;
   virtual void finalize() override;
-  virtual Real getValue() override;
+  using Postprocessor::getValue;
+  virtual Real getValue() const override;
 
   /// Return the number of active features
   std::size_t getNumberActiveFeatures() const;
@@ -115,6 +116,7 @@ public:
     HALOS,
     CENTROID,
     ACTIVE_BOUNDS,
+    INTERSECTS_SPECIFIED_BOUNDARY,
   };
 
   // Retrieve field information
@@ -319,7 +321,7 @@ public:
     /// The status of a feature (used mostly in derived classes like the GrainTracker)
     Status _status;
 
-    /// Enumaration indicating boundary intersection status
+    /// Enumeration indicating boundary intersection status
     BoundaryIntersection _boundary_intersection;
 
     FeatureData duplicate() const { return FeatureData(*this); }
@@ -552,29 +554,6 @@ protected:
    * the proper global number for a feature when using multimap mode
    */
   void updateRegionOffsets();
-
-  /**
-   * This method detects whether two sets intersect without building a result set.
-   * It exits as soon as any intersection is detected.
-   */
-  template <class InputIterator>
-  static bool setsIntersect(InputIterator first1,
-                            InputIterator last1,
-                            InputIterator first2,
-                            InputIterator last2)
-  {
-    while (first1 != last1 && first2 != last2)
-    {
-      if (*first1 == *first2)
-        return true;
-
-      if (*first1 < *first2)
-        ++first1;
-      else if (*first1 > *first2)
-        ++first2;
-    }
-    return false;
-  }
 
   /*************************************************
    *************** Data Structures *****************

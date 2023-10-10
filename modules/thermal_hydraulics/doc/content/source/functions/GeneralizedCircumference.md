@@ -1,18 +1,19 @@
-<!-- MOOSE Documentation Stub: Remove this when content is added. -->
-
 # GeneralizedCircumference
 
-!alert construction title=Undocumented Class
-The GeneralizedCircumference has not been documented. The content contained on this page includes the
-typical automatic documentation associated with a MooseObject; however, what is contained is
-ultimately determined by what is necessary to make the documentation clear for users.
-
 !syntax description /Functions/GeneralizedCircumference
+
+The expression for the generalized circumference is:
+
+!equation
+circumference = \sqrt{4 \pi A + (\dfrac{dA}{dx})^2}
+
+with $A$ the local area variable, usually defined by the [Components](syntax/Components/index.md).
+
+!alert note
+The function providing the area must have the gradient routine implemented.
 
 !syntax parameters /Functions/GeneralizedCircumference
 
 !syntax inputs /Functions/GeneralizedCircumference
 
 !syntax children /Functions/GeneralizedCircumference
-
-!bibtex bibliography

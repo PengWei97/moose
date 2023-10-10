@@ -127,8 +127,7 @@ ComputeNodalKernelJacobiansThread::onNode(ConstNodeRange::const_iterator & node_
         _num_cached = 0;
         // vectors are thread-safe, but matrices are not yet
         Threads::spin_mutex::scoped_lock lock(Threads::spin_mtx);
-        _fe_problem.assembly(_tid, _fe_problem.currentNonlinearSystem().number())
-            .addCachedJacobian();
+        _fe_problem.addCachedJacobian(_tid);
       }
     }
   }
@@ -137,4 +136,17 @@ ComputeNodalKernelJacobiansThread::onNode(ConstNodeRange::const_iterator & node_
 void
 ComputeNodalKernelJacobiansThread::join(const ComputeNodalKernelJacobiansThread & /*y*/)
 {
+}
+
+void
+ComputeNodalKernelJacobiansThread::printGeneralExecutionInformation() const
+{
+  if (!_fe_problem.shouldPrintExecution(_tid) || !_nkernel_warehouse->hasActiveObjects())
+    return;
+
+  const auto & console = _fe_problem.console();
+  const auto & execute_on = _fe_problem.getCurrentExecuteOnFlag();
+  console << "[DBG] Executing nodal kernels contribution to Jacobian on nodes on " << execute_on
+          << std::endl;
+  console << _nkernel_warehouse->activeObjectsToFormattedString() << std::endl;
 }

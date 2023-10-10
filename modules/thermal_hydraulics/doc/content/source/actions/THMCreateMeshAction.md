@@ -1,14 +1,11 @@
-<!-- MOOSE Documentation Stub: Remove this when content is added. -->
-
 # THMCreateMeshAction
-
-!alert construction title=Undocumented Class
-The THMCreateMeshAction has not been documented. The content contained on this page includes the
-typical automatic documentation associated with an Action; however, what is contained is ultimately
-determined by what is necessary to make the documentation clear for users.
 
 !syntax description /Components/THMCreateMeshAction
 
-!syntax parameters /Components/THMCreateMeshAction
+If created by this action, the mesh created is a [THMMesh.md]. If created by this action,
+the problem created is a [THMProblem.md].
 
-!bibtex bibliography
+This enables input files to not contain a `[Mesh]` block and have a default, empty,
+mesh created to satisfy objects that require the presence of a mesh.
+
+!syntax parameters /Components/THMCreateMeshAction

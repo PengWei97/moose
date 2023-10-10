@@ -16,12 +16,6 @@
 #include <iomanip>
 #include <iterator>
 
-// Used for terminal width
-#ifndef __WIN32__
-#include <sys/ioctl.h>
-#endif
-#include <cstdlib>
-
 const unsigned short FormattedTable::_column_width = 15;
 const unsigned short FormattedTable::_min_pps_width = 40;
 
@@ -258,9 +252,9 @@ FormattedTable::printTable(std::ostream & out,
   unsigned short term_width;
 
   if (suggested_term_width == "ENVIRONMENT")
-    term_width = getTermWidth(true);
+    term_width = MooseUtils::getTermWidth(true);
   else if (suggested_term_width == "AUTO")
-    term_width = getTermWidth(false);
+    term_width = MooseUtils::getTermWidth(false);
   else
     term_width = MooseUtils::stringToInteger(suggested_term_width);
 
@@ -581,50 +575,6 @@ FormattedTable::fillEmptyValues()
       if (!it.second[col_name])
         it.second[col_name] =
             std::dynamic_pointer_cast<TableValueBase>(std::make_shared<TableValue<char>>('0'));
-}
-
-unsigned short
-FormattedTable::getTermWidth(bool use_environment) const
-{
-#ifndef __WIN32__
-  struct winsize w;
-#else
-  struct
-  {
-    unsigned short ws_col;
-  } w;
-#endif
-  /**
-   * Initialize the value we intend to populate just in case
-   * the system call fails
-   */
-  w.ws_col = std::numeric_limits<unsigned short>::max();
-
-  if (use_environment)
-  {
-    char * pps_width = std::getenv("MOOSE_PPS_WIDTH");
-    if (pps_width != NULL)
-    {
-      std::stringstream ss(pps_width);
-      ss >> w.ws_col;
-    }
-  }
-  else
-  {
-#ifndef __WIN32__
-    try
-    {
-      ioctl(0, TIOCGWINSZ, &w);
-    }
-    catch (...)
-#endif
-    {
-      // Something bad happened, make sure we have a sane value
-      w.ws_col = std::numeric_limits<unsigned short>::max();
-    }
-  }
-
-  return w.ws_col;
 }
 
 MooseEnum

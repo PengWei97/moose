@@ -89,14 +89,14 @@ Material::subdomainSetup()
 
     MaterialProperties & props = materialData().props();
     for (const auto & prop_id : _supplied_prop_ids)
-      props[prop_id]->resize(nqp);
+      props[prop_id].resize(nqp);
 
     _qp = 0;
     computeQpProperties();
 
     for (const auto & prop_id : _supplied_prop_ids)
       for (decltype(nqp) qp = 1; qp < nqp; ++qp)
-        props[prop_id]->qpCopy(qp, props[prop_id], 0);
+        props[prop_id].qpCopy(qp, props[prop_id], 0);
   }
 }
 
@@ -108,7 +108,7 @@ Material::computeProperties()
 
   // Reference to *all* the MaterialProperties in the MaterialData object, not
   // just the ones for this Material.
-  MaterialProperties & props = _material_data->props();
+  MaterialProperties & props = _material_data.props();
 
   // If this Material ist set to be constant over elements, we take the
   // value computed for _qp == 0 and use it at all the quadrature points
@@ -124,7 +124,7 @@ Material::computeProperties()
     {
       auto nqp = _qrule->n_points();
       for (decltype(nqp) qp = 1; qp < nqp; ++qp)
-        props[prop_id]->qpCopy(qp, props[prop_id], 0);
+        props[prop_id].qpCopy(qp, props[prop_id], 0);
     }
   }
   else

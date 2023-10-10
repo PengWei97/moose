@@ -13,8 +13,9 @@
     cli_args = "Executioner/tao_solver=taolmvm"
     max_threads = 1
     valgrind = none
-    ad_indexing_type = 'global'
     recover = false
+    # skip test if test is being run out-of-tree. Issue Ref: #25279
+    installation_type = in_tree
   []
   [Newton]
     detail = " matrix free hessian and Newton algorithm"
@@ -25,7 +26,8 @@
     csvdiff = main_out_OptimizationReporter_0001.csv
     cli_args = "Executioner/tao_solver=taonls"
     max_threads = 1
-    ad_indexing_type = 'global'
     recover = false
+    # skip test if test is being run out-of-tree. Issue Ref: #25279
+    installation_type = in_tree
   []
 []

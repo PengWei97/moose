@@ -216,7 +216,7 @@ TEST(MooseCoordTest, testLengthUnit)
     mesh->setMeshBase(std::move(lm_mesh));
   }
 
-  mesh->prepare();
+  mesh->prepare(nullptr);
 
   EXPECT_TRUE(mesh->lengthUnit() == MooseUnits("1*m"));
 }

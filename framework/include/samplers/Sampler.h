@@ -17,6 +17,8 @@
 #include "PerfGraphInterface.h"
 #include "SamplerInterface.h"
 #include "MultiApp.h"
+#include "VectorPostprocessorInterface.h"
+#include "ReporterInterface.h"
 
 /**
  * This is the base class for Samplers as used within the Stochastic Tools module.
@@ -42,7 +44,9 @@ class Sampler : public MooseObject,
                 public SetupInterface,
                 public DistributionInterface,
                 public PerfGraphInterface,
-                public SamplerInterface
+                public SamplerInterface,
+                public VectorPostprocessorInterface,
+                public ReporterInterface
 {
 public:
   enum class SampleMode
@@ -126,6 +130,11 @@ public:
     mooseError("This method should be overridden in adaptive sampling classes.");
     return false;
   }
+
+  /**
+   * Return the parallel communicator
+   */
+  libMesh::Parallel::Communicator & getLocalComm() { return _local_comm; }
 
 protected:
   /**
@@ -300,7 +309,6 @@ private:
   friend void FEProblemBase::addSampler(const std::string & type,
                                         const std::string & name,
                                         InputParameters & parameters);
-
   /**
    * Store the state of the MooseRandom generator so that new calls to
    * getGlobalSamples/getLocalSamples methods will create new numbers.

@@ -12,28 +12,13 @@ import subprocess
 from mooseutils import colorText
 from collections import OrderedDict
 import json
+import yaml
 import sys
 
 TERM_COLS = int(os.getenv('MOOSE_TERM_COLS', '110'))
 TERM_FORMAT = os.getenv('MOOSE_TERM_FORMAT', 'njcst')
 
 MOOSE_OPTIONS = {
-    'ad_mode' :   { 're_option' : r'#define\s+MOOSE_SPARSE_AD\s+(\d+)',
-                    'default'   : 'NONSPARSE',
-                    'options'   :
-                    { 'SPARSE'    : '1',
-                      'NONSPARSE' : '0'
-                    }
-                  },
-
-    'ad_indexing_type' : { 're_option' : r'#define\s+MOOSE_GLOBAL_AD_INDEXING\s+(\d+)',
-                           'default'   : 'LOCAL',
-                           'options'   :
-                           { 'GLOBAL'  : '1',
-                             'LOCAL'   : '0'
-                           }
-    },
-
     'ad_size' : { 're_option' : r'#define\s+MOOSE_AD_MAX_DOFS_PER_ELEM\s+(\d+)',
                            'default'   : '50'
     },
@@ -260,7 +245,7 @@ def formatStatusMessage(job, status, message, options):
 
     # Add caveats if requested
     if job.isPass() and options.extra_info:
-        for check in list(options._checks.keys()):
+        for check in options._checks.keys():
             if job.specs.isValid(check) and not 'ALL' in job.specs[check]:
                 job.addCaveats(check)
 
@@ -396,6 +381,11 @@ def getPlatforms():
     else:
         platforms.add(raw_uname[0].upper())
     return platforms
+
+def getMachine():
+    machine = set(['ALL'])
+    machine.add(platform.machine().upper())
+    return machine
 
 def runExecutable(libmesh_dir, location, bin, args):
     # Installed location of libmesh executable
@@ -740,31 +730,13 @@ def getInitializedSubmodules(root_dir):
     # This ignores submodules that have a '-' at the beginning which means they are not initialized
     return re.findall(r'^[ +]\S+ (\S+)', output, flags=re.MULTILINE)
 
-def checkInstalled(root_dir):
+def checkInstalled(executable, app_name):
     """
-    Returns a set containing 'ALL' and whether or not the TestHarness
-    is running in an "installed" directory. Since we don't have a fool-proof
-    way of knowing whether a binary is installed or not... Actually we really
-    don't have even a "bad" way of telling. People can install tests just about
-    anywhere that they can write too so we'll see all sorts of good and bad
-    practices. So, for now, let's just detect whether or not we are in a Git
-    repository since usually installed tests won't be in a git area.
-
-    - If somebody tarballs MOOSE up, this report an incorrect result
-    - If somebody installs tests into their git repository, this report an incorrect results
-
-    Neither of these cases a significant risk.
+    Read resource file and determine if binary was relocated
     """
-
     option_set = set(['ALL'])
-
-    # If we are in a git repo assume we are not installed
-    output = str(runCommand("git submodule status", cwd=root_dir))
-    if output.startswith("ERROR"):
-        option_set.add('TRUE')
-    else:
-        option_set.add('FALSE')
-
+    resource_content = readResourceFile(executable, app_name)
+    option_set.add(resource_content.get('installation_type', 'ALL').upper())
     return option_set
 
 def addObjectsFromBlock(objs, node, block_name):
@@ -819,12 +791,32 @@ def getExeObjects(exe):
     addObjectsFromBlock(obj_names, data, "blocks")
     return obj_names
 
+def readResourceFile(exe, app_name):
+    resource_path = os.path.join(os.path.dirname(os.path.abspath(exe)),
+                                 f'{app_name}.yaml')
+    if os.path.exists(resource_path):
+        try:
+            with open(resource_path, 'r', encoding='utf-8') as stream:
+                return yaml.safe_load(stream)
+        except yaml.YAMLError:
+            print(f'resource file parse failure: {resource_path}')
+            sys.exit(1)
+    return {}
+
+# TODO: Deprecate when we can remove getExeObjects
 def getExeRegisteredApps(exe):
     """
     Gets a list of registered applications
     """
     data = getExeJSON(exe)
     return data.get('global', {}).get('registered_apps', [])
+
+def getRegisteredApps(exe, app_name):
+    """
+    Gets a list of registered applications
+    """
+    resource_content = readResourceFile(exe, app_name)
+    return resource_content.get('registered_apps', [])
 
 def checkOutputForPattern(output, re_pattern):
     """

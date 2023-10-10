@@ -25,9 +25,9 @@
   type = OptimizationReporter
   parameter_names = diffusivity_values
   num_values = 2 # diffusivity in the bottom material and in the top material of model.i
-  initial_condition = '3 4' # the expected result is about '1 10' so this initial condition is not too bad
-  lower_bounds = '1 1'
-  upper_bounds = '20 20'
+  initial_condition = '15 15' # the expected result is about '1 10' so this initial condition is not too bad
+  lower_bounds = '1'
+  upper_bounds = '50'
   measurement_file = 'synthetic_data.csv'
   file_value = 'temperature'
 []
@@ -38,7 +38,7 @@
   # petsc_options_iname = '-tao_fd_gradient -tao_gatol'
   # petsc_options_value = ' true            0.001'
   type = Optimize
-  tao_solver = taoblmvm
+  tao_solver = taobqnktr
   petsc_options_iname = '-tao_gatol'
   petsc_options_value = '1e-3'
   ## THESE OPTIONS ARE FOR TESTING THE ADJOINT GRADIENT
@@ -114,7 +114,7 @@
     type = MultiAppReporterTransfer
     from_multi_app = adjoint
     from_reporters = 'gradvec/inner_product'
-    to_reporters = 'OptimizationReporter/adjoint'
+    to_reporters = 'OptimizationReporter/grad_diffusivity_values'
   []
 []
 

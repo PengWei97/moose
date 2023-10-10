@@ -54,8 +54,8 @@ Console::validParams()
                              pps_fit_mode,
                              "Specifies the wrapping mode for post-processor tables that are "
                              "printed to the screen (ENVIRONMENT: Read \"MOOSE_PPS_WIDTH\" for "
-                             "desired width, AUTO: Attempt to determine width automatically "
-                             "(serial only), <n>: Desired width");
+                             "desired width (if not set, defaults to AUTO), AUTO: Attempt to "
+                             "determine width automatically (serial only), <n>: Desired width");
 
   // Verbosity
   params.addParam<bool>("verbose", false, "Print detailed diagnostics on timestep calculation");
@@ -66,6 +66,11 @@ Console::validParams()
   params.addParam<unsigned int>(
       "time_precision",
       "The number of significant digits that are printed on time related outputs");
+  MooseEnum time_format("plain=0 second=1 minute=2 hour=3 day=4 dtime=5", "plain");
+  params.addParam<MooseEnum>(
+      "time_format",
+      time_format,
+      "The format for the printed times ('dtime' means a format like 1d 01:01:0.1)");
 
   // Performance Logging
   params.addDeprecatedParam<bool>("perf_log",
@@ -123,15 +128,21 @@ Console::validParams()
                                   "'execution', 'output')");
 
   // Advanced group
-  params.addParamNamesToGroup("max_rows verbose show_multiapp_name system_info", "Advanced");
+  params.addParamNamesToGroup("verbose show_multiapp_name system_info", "Advanced");
 
   // Performance log group
-  params.addParamNamesToGroup("perf_log solve_log perf_header", "Perf Log");
-  params.addParamNamesToGroup("libmesh_log", "Performance Log");
+  params.addParamNamesToGroup("perf_log solve_log perf_header libmesh_log", "Perf Log");
 
   // Variable norms group
   params.addParamNamesToGroup("outlier_variable_norms all_variable_norms outlier_multiplier",
-                              "Norms");
+                              "Variable and Residual Norms");
+
+  // Number formatting
+  params.addParamNamesToGroup("scientific_time time_precision time_format",
+                              "Time output formatting");
+
+  // Table of postprocessor output formatting
+  params.addParamNamesToGroup("max_rows fit_mode", "Table formatting");
 
   /*
    * The following modifies the default behavior from base class parameters. Notice the extra flag
@@ -176,6 +187,7 @@ Console::Console(const InputParameters & parameters)
     _outlier_variable_norms(getParam<bool>("outlier_variable_norms")),
     _outlier_multiplier(getParam<std::vector<Real>>("outlier_multiplier")),
     _precision(isParamValid("time_precision") ? getParam<unsigned int>("time_precision") : 0),
+    _time_format(getParam<MooseEnum>("time_format").getEnum<TimeFormatEnum>()),
     _console_buffer(_app.getOutputWarehouse().consoleBuffer()),
     _old_linear_norm(std::numeric_limits<Real>::max()),
     _old_nonlinear_norm(std::numeric_limits<Real>::max()),
@@ -295,8 +307,10 @@ Console::timestepSetup()
 }
 
 void
-Console::output(const ExecFlagType & type)
+Console::output()
 {
+  const auto & type = _current_execute_flag;
+
   // Return if the current output is not on the desired interval
   if (type != EXEC_FINAL && !onInterval())
     return;
@@ -407,39 +421,33 @@ Console::writeTimestepInformation(bool output_dt)
   {
     // Write time step and time information
     oss << "\nTime Step " << timeStep();
-
-    // Set precision
-    if (_precision > 0)
-      oss << std::setw(_precision) << std::setprecision(_precision) << std::setfill('0')
-          << std::showpoint;
-
-    // Show scientific notation
-    if (_scientific_time)
-      oss << std::scientific;
+    unsigned int time_step_digits = oss.str().length() - 11;
 
     // Print the time
-    oss << ", time = " << time();
+    oss << ", time = " << formatTime(getOutputTime());
 
     if (output_dt)
     {
       if (!_verbose)
         // Show the time delta information
-        oss << ", dt = " << std::left << dt();
+        oss << ", dt = " << std::left << formatTime(dt());
 
       // Show old time information, if desired on separate lines
       else
       {
+        unsigned int fillsize = 19 + time_step_digits;
         oss << '\n'
-            << std::right << std::setw(21) << std::setfill(' ') << "old time = " << std::left
-            << timeOld() << '\n';
+            << std::right << std::setw(fillsize) << std::setfill(' ') << "old time = " << std::left
+            << formatTime(timeOld()) << '\n';
 
         // Show the time delta information
-        oss << std::right << std::setw(21) << std::setfill(' ') << "dt = " << std::left << dt()
-            << '\n';
+        oss << std::right << std::setw(fillsize) << std::setfill(' ') << "dt = " << std::left
+            << formatTime(dt()) << '\n';
 
         // Show the old time delta information, if desired
         if (_verbose)
-          oss << std::right << std::setw(21) << std::setfill(' ') << "old dt = " << _dt_old << '\n';
+          oss << std::right << std::setw(fillsize) << std::setfill(' ')
+              << "old dt = " << formatTime(_dt_old) << '\n';
       }
     }
 
@@ -448,6 +456,64 @@ Console::writeTimestepInformation(bool output_dt)
     // Output to the screen
     _console << oss.str() << std::flush;
   }
+}
+
+std::string
+Console::formatTime(const Real t) const
+{
+  std::ostringstream oss;
+  if (_time_format != TimeFormatEnum::DTIME)
+  {
+    if (_precision > 0)
+      oss << std::setw(_precision) << std::setprecision(_precision) << std::setfill('0')
+          << std::showpoint;
+    if (_scientific_time)
+      oss << std::scientific;
+
+    if (_time_format == TimeFormatEnum::PLAIN)
+      oss << t;
+    else if (_time_format == TimeFormatEnum::SECOND)
+      oss << t << "s";
+    else if (_time_format == TimeFormatEnum::MINUTE)
+      oss << t / 60 << "m";
+    else if (_time_format == TimeFormatEnum::HOUR)
+      oss << t / 3600 << "h";
+    else if (_time_format == TimeFormatEnum::DAY)
+      oss << t / 86400 << "d";
+  }
+  else
+  {
+    Real abst = t;
+    if (t < 0)
+    {
+      oss << "-";
+      abst = -t;
+    }
+    int days = std::floor(abst / 24 / 3600);
+    int hours = std::floor(abst / 3600 - days * 24);
+    int mins = std::floor(abst / 60 - days * 24 * 60 - hours * 60);
+    Real second = abst - days * 24 * 3600 - hours * 3600 - mins * 60;
+
+    if (days != 0)
+      oss << days << "d";
+    if (hours != 0 || mins != 0 || second != 0)
+    {
+      if (days != 0)
+        oss << " ";
+      oss << std::setfill('0') << std::setw(2) << hours << ":" << std::setfill('0') << std::setw(2)
+          << mins << ":";
+
+      if (second < 10)
+        oss << "0";
+      if (_precision > 0)
+        oss << std::setw(_precision) << std::setprecision(_precision) << std::setfill('0')
+            << std::showpoint;
+      if (_scientific_time)
+        oss << std::scientific;
+      oss << second;
+    }
+  }
+  return oss.str();
 }
 
 void
@@ -688,10 +754,13 @@ Console::write(std::string message, bool indent /*=true*/)
   if (_write_file)
     _file_output_stream << message;
 
-  bool this_message_ends_in_newline = message.empty() ? true : message.back() == '\n';
+  // The empty case gets the right behavior, even though the boolean is technically wrong
+  bool this_message_ends_in_newline = message.empty() ? true : (message.back() == '\n');
+  bool this_message_starts_with_newline = message.empty() ? true : (message.front() == '\n');
 
   // Apply MultiApp indenting
-  if (_last_message_ended_in_newline && indent && _app.multiAppLevel() > 0)
+  if ((this_message_starts_with_newline || _last_message_ended_in_newline) && indent &&
+      _app.multiAppLevel() > 0)
     MooseUtils::indentMessage(_app.name(), message);
 
   // Write message to the screen

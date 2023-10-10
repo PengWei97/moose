@@ -21,8 +21,17 @@ HSBoundaryExternalAppConvection::validParams()
   params.addParam<VariableName>("T_ext", "T_ext", "Temperature from external application");
   params.addParam<VariableName>(
       "htc_ext", "htc_ext", "Heat transfer coefficient from external application");
-  params.addParam<PostprocessorName>("scale_pp",
-                                     "Post-processor by which to scale boundary condition");
+  params.addDeprecatedParam<PostprocessorName>(
+      "scale_pp",
+      "Post-processor by which to scale boundary condition",
+      "The 'scale' parameter is replacing the 'scale_pp' parameter. 'scale' is a function "
+      "parameter instead of a post-processor parameter. If you need to scale from a post-processor "
+      "value, use a PostprocessorFunction.");
+  params.addParam<FunctionName>("scale", 1.0, "Function by which to scale the boundary condition");
+  params.addParam<bool>(
+      "scale_heat_rate_pp",
+      true,
+      "If true, the scaling function is applied to the heat rate post-processor.");
 
   params.addClassDescription("Heat structure boundary condition to perform convective heat "
                              "transfer with an external application");
@@ -38,24 +47,11 @@ HSBoundaryExternalAppConvection::HSBoundaryExternalAppConvection(const InputPara
 }
 
 void
-HSBoundaryExternalAppConvection::check() const
-{
-  HSBoundary::check();
-
-  if (isParamValid("scale_pp"))
-  {
-    const PostprocessorName & pp_name = getParam<PostprocessorName>("scale_pp");
-    if (!getTHMProblem().hasPostprocessor(pp_name))
-      logError("The post-processor name provided for the parameter 'scale_pp' is '" + pp_name +
-               "', but no post-processor of this name exists.");
-  }
-}
-
-void
 HSBoundaryExternalAppConvection::addVariables()
 {
-  const HeatStructureBase & hs = getComponent<HeatStructureBase>("hs");
-  const std::vector<SubdomainName> & subdomain_names = hs.getSubdomainNames();
+  const HeatStructureInterface & hs = getComponent<HeatStructureInterface>("hs");
+  const std::vector<SubdomainName> & subdomain_names =
+      hs.getGeometricalComponent().getSubdomainNames();
 
   getTHMProblem().addSimVariable(
       false, _T_ext_var_name, HeatConductionModel::feType(), subdomain_names);
@@ -66,7 +62,7 @@ HSBoundaryExternalAppConvection::addVariables()
 void
 HSBoundaryExternalAppConvection::addMooseObjects()
 {
-  const HeatStructureBase & hs = getComponent<HeatStructureBase>("hs");
+  const HeatStructureInterface & hs = getComponent<HeatStructureInterface>("hs");
   const HeatStructureCylindricalBase * hs_cyl =
       dynamic_cast<const HeatStructureCylindricalBase *>(&hs);
   const bool is_cylindrical = hs_cyl != nullptr;
@@ -81,10 +77,10 @@ HSBoundaryExternalAppConvection::addMooseObjects()
     pars.set<std::vector<VariableName>>("htc_ext") = {_htc_ext_var_name};
     if (is_cylindrical)
     {
-      pars.set<Point>("axis_point") = hs.getPosition();
-      pars.set<RealVectorValue>("axis_dir") = hs.getDirection();
-      pars.set<Real>("offset") = hs_cyl->getInnerRadius() - hs_cyl->getAxialOffset();
+      pars.set<Point>("axis_point") = hs_cyl->getPosition();
+      pars.set<RealVectorValue>("axis_dir") = hs_cyl->getDirection();
     }
+    pars.set<FunctionName>("scale") = getParam<FunctionName>("scale");
     if (isParamValid("scale_pp"))
       pars.set<PostprocessorName>("scale_pp") = getParam<PostprocessorName>("scale_pp");
 
@@ -100,9 +96,10 @@ HSBoundaryExternalAppConvection::addMooseObjects()
     pars.set<std::vector<VariableName>>("T") = {HeatConductionModel::TEMPERATURE};
     pars.set<std::vector<VariableName>>("T_ext") = {_T_ext_var_name};
     pars.set<std::vector<VariableName>>("htc_ext") = {_htc_ext_var_name};
-    pars.set<Point>("axis_point") = hs.getPosition();
-    pars.set<RealVectorValue>("axis_dir") = hs.getDirection();
-    pars.set<Real>("offset") = hs_cyl->getInnerRadius() - hs_cyl->getAxialOffset();
+    pars.set<Point>("axis_point") = hs_cyl->getPosition();
+    pars.set<RealVectorValue>("axis_dir") = hs_cyl->getDirection();
+    if (getParam<bool>("scale_heat_rate_pp"))
+      pars.set<FunctionName>("scale") = getParam<FunctionName>("scale");
     pars.set<ExecFlagEnum>("execute_on") = {EXEC_INITIAL, EXEC_TIMESTEP_END};
     getTHMProblem().addPostprocessor(class_name, genSafeName(name(), "integral"), pars);
   }

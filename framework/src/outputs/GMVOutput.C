@@ -29,7 +29,7 @@ GMVOutput::validParams()
   params.addClassDescription("Object for outputting data in the GMV format");
 
   // Need a layer of geometric ghosting for mesh serialization
-  params.addRelationshipManager("MooseGhostPointNeighbors",
+  params.addRelationshipManager("ElementPointNeighborLayers",
                                 Moose::RelationshipManagerType::GEOMETRIC);
 
   // Return the InputParameters
@@ -42,7 +42,7 @@ GMVOutput::GMVOutput(const InputParameters & parameters)
 }
 
 void
-GMVOutput::output(const ExecFlagType & /*type*/)
+GMVOutput::output()
 {
   GMVIO out(_es_ptr->get_mesh());
   out.write_equation_systems(filename(), *_es_ptr);

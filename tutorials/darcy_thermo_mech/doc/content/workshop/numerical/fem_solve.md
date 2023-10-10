@@ -42,7 +42,7 @@ Gaussian Quadrature can exactly integrate polynomials of order $2n-1$ with $n$ q
 
 !---
 
-Quadrature applied to [ref_elems] yields an equation that can be analyzed numerically:
+Applying the quadrature to [ref_elems] we can simply compute:
 
 !equation
 \sum_e \int_{\hat{\Omega}_e} f(\vec{\xi}) \left|\mathcal{J}_e\right| \;\text{d}\vec{\xi} \approx
@@ -92,6 +92,8 @@ f'(x_n) \delta x_{n+1} &= -f(x_n) \\
 x_{n+1} &= x_n + \delta x_{n+1}
 \end{aligned}
 
+!media darcy_thermo_mech/newtons_method.png style=width:50%;margin-left:auto;margin-right:auto;display:block;
+
 !---
 
 ## Newton's Method in MOOSE
@@ -138,6 +140,20 @@ Available options include:
 
 ## +JFNK+
 
+Uses a Krylov subspace-based linear solver
+
+!equation id=krylov-space
+\begin{aligned}
+K_j = \{\mathbf{r}, \mathbf{J}\mathbf{r},\mathbf{J}^2\mathbf{r},...,\mathbf{J}^{j-1}\mathbf{r}\}
+\end{aligned}
+
+The action of the Jacobian is approximated by:
+
+!equation id=jfnk
+\begin{aligned}
+\mathbf{J}\mathbf{v} \approx \frac{\mathbf{R}(\mathbf{u}+\epsilon \mathbf{v})-\mathbf{R}(\mathbf{u})}{\epsilon}
+\end{aligned}
+
 The `Kernel` method `computeQpResidual` is called to compute
 $\vec{R}(\vec{u}_n)$ during the nonlinear step ([newton]).
 
@@ -148,12 +164,20 @@ to approximate the action of the Jacobian on the Krylov vector.
 
 ## +PJFNK+
 
+The action of the preconditioned Jacobian is approximated by:
+
+!equation id=pjfnk
+\begin{aligned}
+\mathbf{JP}^{-1}\mathbf{v} \approx \frac{\mathbf{R}(\mathbf{u}+\epsilon \mathbf{P}^{-1}\mathbf{v})-\mathbf{R}(\mathbf{u})}{\epsilon}
+\end{aligned}
+
 The `Kernel` method `computeQpResidual` is called to compute
 $\vec{R}(\vec{u}_n)$ during the nonlinear step ([newton]).
 
 During each linear step of PJFNK, the `computeQpResidual` method is called to approximate the action
 of the Jacobian on the Krylov vector. The `computeQpJacobian` and `computeQpOffDiagJacobian` methods
 are used to compute values for the preconditioning matrix.
+
 
 !---
 
@@ -166,6 +190,27 @@ The `computeQpJacobian` and `computeQpOffDiagJacobian` methods are used to compu
 preconditioning matrix. It is assumed that the preconditioning matrix is the
 Jacobian matrix, thus the residual and Jacobian calculations are able to remain constant
 during linear iterations.
+
+!---
+
+## Preconditioning
+
+Select a preconditioner using PETSC options, either in the executioner or in the `[Preconditioning]` block:
+
+```language=cpp
+[Executioner]
+  type = Steady
+  petsc_options_iname = '-pc_type -pc_hypre_type'
+  petsc_options_value = 'hypre boomeramg'
+```
+
+Some examples:
+
+- LU : form the actual Jacobian inverse, useful for small to medium problems but does not scale well
+- Hypre BoomerAMG : algebraic multi-grid, works well for diffusive problems
+- Jacobi : preconditions with the diagonal, row sum, or row max of Jacobian
+
+For parallel preconditioners, the sub-block (on-process) preconditioners can be controlled with the PETSc option `-sub_pc_type`. E.g. for a parallel block Jacobi preconditioner (-pc_type bjacobi) the sub-block preconditioner could be set to ILU or LU etc. with `-sub_pc_type ilu`, `-sub_pc_type lu`, etc.
 
 !---
 
@@ -182,7 +227,7 @@ Integrals are computed numerically using quadrature.
 
 Newton's method provides a mechanism for solving a system of nonlinear equations.
 
-The Preconditioned Jacobian Free Newton Krylov (JFNK) method allows us to avoid explicitly forming
+The Preconditioned Jacobian Free Newton Krylov (PJFNK) method allows us to avoid explicitly forming
 the Jacobian matrix while still computing its action.
 
 !---
@@ -198,6 +243,27 @@ time+.
 In terms of computing performance, presently AD Jacobians are slower to compute than hand-coded
 Jacobians, but they parallelize extremely well and can benefit from using a `NEWTON` solve, which
 often results in decreased solve time overall.
+
+!---
+
+Relies on two techniques:
+
+- chain rule
+
+!equation
+\dfrac{\partial f(g(x))}{\partial x} = \dfrac{\partial f(g(x))}{\partial g(x)} \dfrac{\partial g(x)}{\partial x}
+
+- operator overloading
+
+!equation
+\bold{x} = (x, \dfrac{\partial x}{\partial x}, \dfrac{\partial x}{\partial y}) = (x, 1, 0) \\
+\bold{y} = (y, \dfrac{\partial y}{\partial x}, \dfrac{\partial y}{\partial y}) = (y, 0, 1) \\
+x + y = (x + y, 1, 1) \\
+x * y = (x * y, y, x)
+
+One thing to note is that the derivatives are with regards to the degrees of freedom, but
+the residual is computed at quadrature points! There are therefore often several non-zero coefficients
+even for simply $\_u[\_qp]$ (value of variable `u` at a quadrature point).
 
 !---
 
@@ -240,6 +306,12 @@ Thus, the $i^{th}$ component of the residual vector is:
 \end{aligned}
 
 !---
+
+!equation
+\begin{aligned}
+\vec{R}_i(u_h) = \left(\nabla\psi_i, k\nabla u_h \right) - \langle\psi_i, k\nabla u_h\cdot \hat{n} \rangle +
+\left(\psi_i, \vec{\beta} \cdot \nabla u_h\right) - \left(\psi_i, f\right)
+\end{aligned}
 
 Using the previously-defined rules in [diff_u] and [grad_u] for $\frac{\partial u_h}{\partial u_j}$
 and $\frac{\partial \left(\nabla u_h\right)}{\partial u_j}$, the $(i,j)$ entry of the Jacobian is

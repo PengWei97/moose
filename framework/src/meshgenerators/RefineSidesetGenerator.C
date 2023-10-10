@@ -30,7 +30,8 @@ RefineSidesetGenerator::validParams()
   params.addParam<bool>(
       "enable_neighbor_refinement",
       true,
-      "Toggles whether neighboring level one elements should be refined or not. Defaults to true");
+      "Toggles whether neighboring level one elements should be refined or not. Defaults to true. "
+      "False may lead to unsupported mesh non-conformality without great care.");
   MultiMooseEnum boundary_side("primary secondary both", "both");
   params.addParam<MultiMooseEnum>("boundary_side",
                                   boundary_side,
@@ -48,6 +49,9 @@ RefineSidesetGenerator::RefineSidesetGenerator(const InputParameters & parameter
     _enable_neighbor_refinement(getParam<bool>("enable_neighbor_refinement")),
     _boundary_side(getParam<MultiMooseEnum>("boundary_side"))
 {
+  if (_boundaries.size() != _refinement.size())
+    paramError("refinement",
+               "The boundaries and refinement parameter vectors should be the same size");
 }
 
 std::unique_ptr<MeshBase>
@@ -80,9 +84,25 @@ RefineSidesetGenerator::recursive_refine(std::vector<boundary_id_type> boundary_
   // as we are done.
   if (ref_step == max)
     return dynamic_pointer_cast<MeshBase>(mesh);
-  mesh->prepare_for_use();
+
+  const bool old_allow_remote_element_removal = mesh->allow_remote_element_removal();
+  if (mesh->is_serial())
+    // If our mesh is already serial then we will keep it that way to avoid doing communication
+    mesh->allow_remote_element_removal(false);
+  if (!mesh->is_prepared())
+    mesh->prepare_for_use();
+
   std::vector<std::tuple<dof_id_type, unsigned short int, boundary_id_type>> sideList =
       mesh->get_boundary_info().build_active_side_list();
+
+  // If on one process a sideset element is semilocal, then any semilocal active neighbors might be
+  // marked for refinement. However, if on another process that sideset element is *not* semilocal,
+  // then obviously no neighboring elements can be marked for refinement. With no communication this
+  // can lead to elements on the former process being flagged for refinement while on the latter
+  // they will be marked to do nothing. This is a violation of parallel consistency, so we make sure
+  // to communicate neighbors that need to be refined
+  std::vector<dof_id_type> neighbors_to_refine;
+
   for (std::size_t i = 0; i < boundary_ids.size(); i++)
   {
     if (refinement[i] > 0 && refinement[i] > ref_step)
@@ -103,13 +123,21 @@ RefineSidesetGenerator::recursive_refine(std::vector<boundary_id_type> boundary_
             if (neighbor)
             {
               if (neighbor->active())
+              {
                 neighbor->set_refinement_flag(Elem::REFINE);
+                if (!mesh->is_serial())
+                  neighbors_to_refine.push_back(neighbor->id());
+              }
               else
               {
                 std::vector<Elem *> family_tree;
                 neighbor->active_family_tree_by_neighbor(family_tree, elem);
                 for (auto child_elem : family_tree)
+                {
                   child_elem->set_refinement_flag(Elem::REFINE);
+                  if (!mesh->is_serial())
+                    neighbors_to_refine.push_back(child_elem->id());
+                }
               }
             }
           }
@@ -117,10 +145,25 @@ RefineSidesetGenerator::recursive_refine(std::vector<boundary_id_type> boundary_
       }
     }
   }
+
+  if (!mesh->is_serial())
+  {
+    mesh->comm().allgather(neighbors_to_refine);
+    std::sort(neighbors_to_refine.begin(), neighbors_to_refine.end());
+    auto new_last = std::unique(neighbors_to_refine.begin(), neighbors_to_refine.end());
+    neighbors_to_refine.erase(new_last, neighbors_to_refine.end());
+    for (const auto id : neighbors_to_refine)
+      if (Elem * const elem = mesh->query_elem_ptr(id))
+        elem->set_refinement_flag(Elem::REFINE);
+  }
+
   MeshRefinement refinedmesh(*mesh);
   if (!_enable_neighbor_refinement)
     refinedmesh.face_level_mismatch_limit() = 0;
+
+  // This calls prepare_for_use
   refinedmesh.refine_elements();
+  mesh->allow_remote_element_removal(old_allow_remote_element_removal);
   ref_step++;
   return recursive_refine(boundary_ids, mesh, refinement, max, ref_step);
 }

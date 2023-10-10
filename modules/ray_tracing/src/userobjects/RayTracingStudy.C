@@ -95,6 +95,13 @@ RayTracingStudy::validParams()
   ExecFlagEnum & exec_enum = params.set<ExecFlagEnum>("execute_on", true);
   exec_enum.addAvailableFlags(EXEC_PRE_KERNELS);
 
+  params.addParamNamesToGroup(
+      "always_cache_traces data_on_cache_traces aux_data_on_cache_traces segments_on_cache_traces",
+      "Trace cache");
+  params.addParamNamesToGroup("warn_non_planar warn_subdomain_hmax", "Tracing Warnings");
+  params.addParamNamesToGroup("ray_kernel_coverage_check verify_rays verify_trace_intersections",
+                              "Checks and verifications");
+
   // Whether or not each Ray must be registered using the registerRay() API
   params.addPrivateParam<bool>("_use_ray_registration", true);
   // Whether or not to bank Rays on completion
@@ -1432,9 +1439,10 @@ RayTracingStudy::verifyUniqueRayIDs(const std::vector<std::shared_ptr<Ray>>::con
   {
     // Package our local IDs and send to rank 0
     std::map<processor_id_type, std::vector<RayID>> send_ids;
-    send_ids.emplace(std::piecewise_construct,
-                     std::forward_as_tuple(0),
-                     std::forward_as_tuple(local_rays.begin(), local_rays.end()));
+    if (local_rays.size())
+      send_ids.emplace(std::piecewise_construct,
+                       std::forward_as_tuple(0),
+                       std::forward_as_tuple(local_rays.begin(), local_rays.end()));
     local_rays.clear();
 
     // Mapping on rank 0 from ID -> processor ID

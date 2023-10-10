@@ -18,6 +18,7 @@
 #include "MooseError.h"
 
 #include "libmesh/fe_type.h"
+#include "libmesh/enum_fe_family.h"
 
 // libMesh forward declarations
 namespace libMesh
@@ -111,13 +112,18 @@ public:
    * Is this variable nodal
    * @return true if it nodal, otherwise false
    */
-  virtual bool isNodal() const { return true; }
+  virtual bool isNodal() const { mooseError("Base class cannot determine this"); }
 
   /**
    * Does this variable have DoFs on nodes
    * @return true if it does, false if not.
    */
-  virtual bool hasDoFsOnNodes() const { return true; }
+  virtual bool hasDoFsOnNodes() const { mooseError("Base class cannot determine this"); };
+
+  /**
+   * Return the continuity of this variable
+   */
+  virtual FEContinuity getContinuity() const { mooseError("Base class cannot determine this"); };
 
   /**
    * The DofMap associated with the system this variable is in.

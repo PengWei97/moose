@@ -31,6 +31,28 @@ together pieces of meshes, etc. There are several built-in generators but this s
 may or may not consumer the output from other generators and produce a single mesh. They can be chained together
 through dependencies so that complex meshes may be built up from a series of simple processes.
 
+### Mesh Generator development
+
+Mesh generator developers should call `mesh->set_isnt_prepared()` at the end of
+the `generate` routine unless they are confident that their mesh is indeed
+prepared. Examples of actions that render the mesh unprepared are
+
+- Translating, rotating, or scaling the mesh. This will conceptually change the
+  mesh bounding box, invalidate the point locator, and potentially change the
+  spatial dimension of the mesh (e.g. rotating a line from the x-axis into the
+  xy plane, etc.)
+- Adding elements. These elements will need their neighbor links set in order
+  for things like finite volume to work
+- Changing element subdomains. This will invalidate the mesh subdomain cached
+  data on the `libMesh::MeshBase` object
+- Changing boundary IDs. This invalidates global data (e.g. data aggregated
+  across all processes) in the `libMesh::BoundaryInfo` object
+
+When in doubt, the mesh is likely not prepared. Calling `set_isnt_prepared` is a
+defensive action that at worst will incur an unnecessary `prepare_for_use`,
+which may slow down the simulation setup, and at best may save follow-on mesh
+generators or simulation execution from undesirable behavior.
+
 ### DAG and final mesh selection
 
 When chaining together several MeshGenerators, you are implicitly creating a DAG (directed acyclic graph).
@@ -50,7 +72,32 @@ with Peacock) or used in other MOOSE input files for further combination/modific
 This can be achieved by using the command line option `--mesh-only`.  By default `--mesh-only` will write a
 mesh file with `_in.e` (the opposite of the `_out.e` that is appended from the output system)
 appended to the input file name.  You can also optionally provide a mesh filename to
-write out using `--mesh-only output_file.e`.
+write out using `--mesh-only output_file.e`. When using the `--mesh-only` option, by default any extra element integers
+defined on the mesh will also be outputted to the output Exodus file. To prevent extra element ids from being
+output, the parameter `output_extra_element_ids` should be set to `false` in the `[Outputs]` block of the
+input file as shown below:
+
+```
+[Outputs]
+  [out]
+    type = Exodus
+    output_extra_element_ids = false
+  []
+[]
+```
+
+Alternatively, if only a subset of extra element ids should be outputted to the Exodus file, the parameter
+`extra_element_ids_to_output` should be set in the `[Outputs]` block of the input file like so:
+
+```
+[Outputs]
+  [out]
+    type = Exodus
+    output_extra_element_ids = true
+    extra_element_ids_to_output = 'id_to_output1 id_to_output2 ...'
+  []
+[]
+```
 
 Here are a couple of examples showing the usage of `--mesh-only`:
 
@@ -101,7 +148,7 @@ the mesh to the first rank for output. In the largest case this may cause your s
 out of memory, in smaller cases, it may just cause unnecessary communication to serialize your
 parallel data structure. The solution is to use "nemesis" output.
 
-Nemesis creates separate Exodus files that are automatically read by paraview and displayed as
+Nemesis creates separate Exodus files that are automatically read by Paraview and displayed as
 if a normal Exodus mesh had been output. The output files have the following naming convention:
 
 ```
@@ -178,9 +225,11 @@ Often times, we do not want to use subdomain IDs for these tasks because otherwi
 MooseMesh[MooseMesh.md] has a parameter `extra_integers` to allow users to introduce more integer IDs for elements each identified with a name in the parameter.
 When this parameter is specified, extra integers will be made available for all elements through `Assembly` in MOOSE objects such as kernels, aux kernels, materials, initial conditions, element user objects, etc.
 To retrieve the integer on an element, one needs to simply call
+
 ```
 getElementID(integer_name_parameter, comp),
 ```
+
 within the initialization list of your constructor.
 `integer_name_parameter` is the name of the parameter in type of `std::vector<ExtraElementIDName>` of this object listing all integer names.
 `comp` is the index into the integer names if multiple are specified for `integer_name_parameter`.
@@ -198,3 +247,102 @@ Mesh meta data can only be declared in the constructors of mesh generators so th
 Mesh meta data can be useful for setting up specific postprocessors, kernels, etc. that require certain geometry information.
 Mesh meta data are not possible or extremely hard to be derived directly from libMesh mesh object.
 A simple example of mesh meta data is the `num_elements_x` provided by [GeneratedMeshGenerator](GeneratedMeshGenerator.md), which can be used as an indicator for a mesh regular in x direction.
+
+## Debugging in-MOOSE mesh generation id=troubleshooting
+
+!alert note
+The MOOSE mesh generation [tutorial](tutorial04_meshing/index.md optional=true) is the most comprehensive resource on learning how to mesh within MOOSE. We summarize here
+only a few techniques.
+
+Mesh generation in MOOSE is a sequential tree-based process. Mesh generators are executed sorted by dependencies,
+and the output of each generator may be fed to multiple other generators. To succeed in this process, you must decompose
+the creation of the mesh into many individual steps. To debug this process, one can:
+
+- use the `show_info(=true)` input parameter on each mesh generator. This will output numerous pieces of metadata about the mesh
+  at each stage of the generation process. You can check there if all the subdomains that you expected at this stage
+  are present in the mesh and if they are of the expected size, both in terms of number of elements but also bounding box.
+- use the `output` input parameter on the mesh generator right before the problematic stage. This will output the mesh,
+  by default using the [Exodus.md] format with the name `<mesh_generator_name>_in.e`, so you may visualize it
+  before it gets acted upon by the next mesh generator(s).
+
+For a narrow selection of mesh issues, listed in its documentation, the [MeshDiagnosticsGenerator.md] may be used to detect
+unsupported features in meshes.
+
+## Examining meshes id=examination
+
+The results of finite element/volume simulations are highly dependent on the quality of the mesh(es) used.
+It happens regularly that results are excellent and meeting all predictions using a regular Cartesian grid mesh,
+but significantly deteriorate or do not converge on the real system mesh, often created outside MOOSE.
+
+We point out in this section a few things to look for.
+- Sidesets in MOOSE are oriented. If you place a Neumann/flux boundary condition on a sideset, the direction of
+  the flux will depend on the orientation of the sideset.
+- MOOSE generally does not support non-conformal meshes for regular kernels, except when they arise from online mesh refinement.
+  When inspecting your mesh, you should not see any hanging nodes or surfaces not exactly touching. If you are using such
+  a mesh, you **MUST** use interface kernels, mortar or other advanced numerical treatments.
+- Many physics will give better results with high element quality and smooth distributions of element volumes.
+  You may examine the spatial distribution of these quantities using the [ElementQualityAux.md] and [VolumeAux.md]
+  respectively.
+
+## Coordinate Systems id=coordinate_systems
+
+The following are the coordinate systems currently available in MOOSE:
+
+- `XYZ`: 3D Cartesian.
+- `RZ`: 2D axisymmetric coordinates.
+- `RSPHERICAL`: 1D spherical coordinates with the origin at $(0,0,0)$.
+
+Coordinate systems may be specified in the input file or within code.
+
+### Specifying coordinate systems in the input file
+
+In an input file, coordinate systems may be specified in the [Mesh](Mesh/index.md)
+block.
+First, [!param](/Mesh/GeneratedMesh/coord_type) is used to specify the coordinate
+system type. If you would like to use multiple coordinate systems in your
+application, you can supply multiple entries in this parameter. Then you must
+specify [!param](/Mesh/GeneratedMesh/coord_block) to specify the corresponding
+blocks to which each coordinate system applies.
+
+If the `RZ` coordinate system is used, there are two options for how to specify
+the coordinate axis(es) in an input file:
+
+- Specify [!param](/Mesh/GeneratedMesh/rz_coord_axis) to choose a single `RZ`
+  coordinate system, using the $\hat{x}$ or $\hat{y}$ direction and starting at $(0,0,0)$.
+  If the former is used, then the axial coordinate is $x$, and the radial coordinate
+  is $y$; if the latter is used, these are switched.
+- Specify the following three parameters:
+
+  - [!param](/Mesh/GeneratedMesh/rz_coord_blocks): The list of blocks using an
+    `RZ` coordinate system (all must be specified).
+  - [!param](/Mesh/GeneratedMesh/rz_coord_origins): The list of origin points
+    for the axisymmetric axes corresponding to each block in [!param](/Mesh/GeneratedMesh/rz_coord_blocks).
+  - [!param](/Mesh/GeneratedMesh/rz_coord_directions): The list of direction vectors
+    for the axisymmetric axes corresponding to each block in [!param](/Mesh/GeneratedMesh/rz_coord_blocks).
+    Note that these direction vectors need not be unit vectors, just nonzero vectors.
+
+The second option has greater flexibility, as it allows the following, which the
+first option does not:
+
+- Multiple axisymmetric coordinate systems can be defined.
+- Any point can be used for the origin of the coordinate system, not just $(0,0,0)$.
+- Any direction can be used for the axisymmetric axis, not just the $\hat{x}$ or $\hat{y}$ direction.
+
+Note that the [Transfers](Transfers/index.md) ability for the second option is
+more limited
+
+### Specifying coordinate systems within code
+
+To specify coordinate systems within code, `MooseMesh::setCoordSystem(blocks, coord_sys)` is used,
+where `blocks` and `coord_sys` have the same behavior as the [!param](/Mesh/GeneratedMesh/coord_block)
+and [!param](/Mesh/GeneratedMesh/coord_type) parameters, respectively.
+
+If the `RZ` coordinate system is used, there are two options for how to specify
+the coordinate axis(es) within the code, just like in the input file:
+
+- Call `MooseMesh::setAxisymmetricCoordAxis(rz_coord_axis)`, where
+  `rz_coord_axis` is like [!param](/Mesh/GeneratedMesh/rz_coord_axis).
+- Call `MooseMesh::setGeneralAxisymmetricCoordAxes(blocks, axes)`, where
+  `blocks` is similar to [!param](/Mesh/GeneratedMesh/rz_coord_blocks)
+  and `axes` pairs up the origins and directions, similar to combining the parameters
+  [!param](/Mesh/GeneratedMesh/rz_coord_origins) and [!param](/Mesh/GeneratedMesh/rz_coord_directions).

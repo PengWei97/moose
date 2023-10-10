@@ -11,11 +11,18 @@
   elements = 'Mo Ru'
   output_phases = 'BCCN HCPN'
   output_species = 'BCCN:Mo HCPN:Mo BCCN:Ru HCPN:Ru'
-  element_potentials = 'cp:Mo cp:Ru'
+  output_element_potentials = 'mu:Mo mu:Ru'
+  output_vapor_pressures = 'vp:gas_ideal:Mo'
+  output_element_phases = 'ep:BCCN:Mo'
 []
 
 [ChemicalComposition]
   thermofile = Kaye_NobleMetals.dat
+  tunit = K
+  punit = atm
+  munit = moles
+  temperature = 2250
+  output_species_unit = mole_fraction
 []
 
 [ICs]
@@ -28,30 +35,6 @@
     type = FunctionIC
     variable = Ru
     function = '0.2*(1-x)+4.5*x'
-  []
-[]
-
-[UserObjects]
-  [data]
-    type = ThermochimicaNodalData
-    temperature = 2250
-    elements = 'Mo Ru'
-    output_phases = 'BCCN HCPN'
-    execute_on = 'INITIAL TIMESTEP_END'
-    reinit_requested = false # changes parallel results slightly
-  []
-[]
-
-[AuxVariables]
-  [n]
-  []
-[]
-
-[AuxKernels]
-  [thermochimica]
-    type = ThermochimicaAux
-    variable = n
-    thermo_nodal_data_uo = data
   []
 []
 

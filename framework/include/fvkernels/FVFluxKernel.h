@@ -59,7 +59,7 @@ protected:
   /// Calculates and returns "grad_u dot normal" on the face to be used for
   /// diffusive terms.  If using any cross-diffusion corrections, etc. all
   /// those calculations will be handled for appropriately by this function.
-  virtual ADReal gradUDotNormal() const;
+  virtual ADReal gradUDotNormal(const Moose::StateArg & time) const;
 
   /// Kernels are called even on boundaries in case one is for a variable with
   /// a dirichlet BC - in which case we need to run the kernel with a
@@ -136,16 +136,6 @@ protected:
   std::unordered_set<BoundaryID> _boundaries_to_force;
 
 private:
-  /// Computes the Jacobian contribution for every coupled variable.
-  ///
-  /// @param type Either ElementElement, ElementNeighbor, NeighborElement, or NeighborNeighbor. As an
-  /// example ElementNeighbor means the derivatives of the elemental residual with respect to the
-  /// neighbor degrees of freedom.
-  ///
-  /// @param residual The already computed residual (probably done with \p computeQpResidual) that
-  /// also holds derivative information for filling in the Jacobians.
-  void computeJacobianType(Moose::DGJacobianType type, const ADReal & residual);
-
   /// Whether to force execution of flux kernels on all external boundaries
   const bool _force_boundary_execution;
 

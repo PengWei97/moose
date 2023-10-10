@@ -48,7 +48,6 @@
     to_multi_app = runner
     sampler = hypercube
     parameters = 'Materials/constant/prop_values Kernels/source/value BCs/right/value BCs/left/value'
-    to_control = 'stochastic'
   []
   [results]
     type = SamplerReporterTransfer
@@ -87,7 +86,6 @@
 
 [Executioner]
   type = Transient
-  solve_type = NEWTON
   num_steps = 4
   dt = 0.25
 []

@@ -18,6 +18,7 @@
 #include "Moose.h"
 #include "ADReal.h"
 #include "ExecutablePath.h"
+#include "ConsoleUtils.h"
 
 #include "libmesh/compare_types.h"
 #include "libmesh/bounding_box.h"
@@ -91,11 +92,9 @@ std::string docsDir(const std::string & app_name);
 std::string replaceAll(std::string str, const std::string & from, const std::string & to);
 
 /**
- * Replaces "LATEST" placeholders with the latest checkpoint file name.  If base_only is true, then
- * only return the base-name of the checkpoint directory - otherwise, a full mesh
- * checkpoint file path is returned.
+ * Replaces "LATEST" placeholders with the latest checkpoint file name.
  */
-std::string convertLatestCheckpoint(std::string orig, bool base_only = true);
+std::string convertLatestCheckpoint(std::string orig);
 
 /// Computes and returns the Levenshtein distance between strings s1 and s2.
 int levenshteinDist(const std::string & s1, const std::string & s2);
@@ -286,6 +285,11 @@ std::string baseName(const std::string & name);
  * Get the hostname the current process is running on
  */
 std::string hostname();
+
+/**
+ * Returns the width of the terminal using sys/ioctl
+ */
+unsigned short getTermWidth(bool use_environment);
 
 /**
  * @returns A cleaner representation of the c++ type \p cpp_type.
@@ -646,7 +650,7 @@ isZero(const T & value, const Real tolerance = TOLERANCE * TOLERANCE * TOLERANCE
 /**
  * Function to dump the contents of MaterialPropertyStorage for debugging purposes
  * @param props The storage item to dump, this should be
- * MaterialPropertyStorage.props()/propsOld()/propsOlder().
+ * MaterialPropertyStorage.props(state)
  *
  * Currently this only words for scalar material properties. Something to do as needed would be to
  * create a method in MaterialProperty
@@ -661,10 +665,11 @@ void MaterialPropertyStorageDump(
  * @param message The message that will be indented
  * @param color The color to apply to the prefix (default CYAN)
  * @param indent_first_line If true this will indent the first line too (default)
+ * @param post_prefix A string to append right after the prefix, defaults to a column and a space
  *
  * Takes a message like the following and indents it with another color code (see below)
  *
- * Input messsage:
+ * Input message:
  * COLOR_YELLOW
  * *** Warning ***
  * Something bad has happened and we want to draw attention to it with color
@@ -678,7 +683,7 @@ void MaterialPropertyStorageDump(
  * COLOR_DEFAULT
  *
  * Also handles single line color codes
- * COLOR_CYAN sub_app: 0 Nonline |R| = COLOR_GREEN 1.0e-10 COLOR_DEFAULT
+ * COLOR_CYAN sub_app: 0 Nonlinear |R| = COLOR_GREEN 1.0e-10 COLOR_DEFAULT
  *
  * Not indenting the first line is useful in the case where the first line is actually finishing
  * the line before it.
@@ -686,10 +691,11 @@ void MaterialPropertyStorageDump(
 void indentMessage(const std::string & prefix,
                    std::string & message,
                    const char * color = COLOR_CYAN,
-                   bool dont_indent_first_line = true);
+                   bool dont_indent_first_line = true,
+                   const std::string & post_prefix = ": ");
 
 /**
- * remove ANSI escape sequences for teminal color from msg
+ * remove ANSI escape sequences for terminal color from msg
  */
 std::string & removeColor(std::string & msg);
 
@@ -703,17 +709,17 @@ bool pathIsDirectory(const std::string & path);
  * the routine. The names returned will be the paths to the files relative to the current
  * directory.
  * @param directory_list The list of directories to retrieve files from.
+ * @param file_only Whether or not to list only files
  */
-std::list<std::string> getFilesInDirs(const std::list<std::string> & directory_list);
+std::list<std::string> getFilesInDirs(const std::list<std::string> & directory_list,
+                                      const bool files_only = true);
 
 /**
- * Returns the most recent checkpoint or mesh file given a list of files.
+ * Returns the most recent checkpoint prefix (the four numbers at the begining)
  * If a suitable file isn't found the empty string is returned
  * @param checkpoint_files the list of files to analyze
  */
-std::string getLatestMeshCheckpointFile(const std::list<std::string> & checkpoint_files);
-
-std::string getLatestAppCheckpointFileBase(const std::list<std::string> & checkpoint_files);
+std::string getLatestCheckpointFilePrefix(const std::list<std::string> & checkpoint_files);
 
 /*
  * Checks to see if a string matches a search string
@@ -1006,13 +1012,7 @@ template <typename T>
 struct canBroadcast
 {
   static constexpr bool value = std::is_base_of<TIMPI::DataType, TIMPI::StandardType<T>>::value ||
-                                std::is_same<T, std::string>::value;
-};
-template <typename T>
-struct canBroadcast<std::vector<T>>
-{
-  static constexpr bool value = std::is_base_of<TIMPI::DataType, TIMPI::StandardType<T>>::value ||
-                                std::is_same<T, std::string>::value;
+                                TIMPI::Has_buffer_type<TIMPI::Packing<T>>::value;
 };
 
 ///@{ Comparison helpers that support the MooseUtils::Any wildcard which will match any value
@@ -1072,12 +1072,6 @@ findPair(C & container, const M1 & first, const M2 & second)
  * @return Valid bounding box
  */
 BoundingBox buildBoundingBox(const Point & p1, const Point & p2);
-
-template <typename Consumers>
-std::deque<MaterialBase *>
-buildRequiredMaterials(const Consumers & mat_consumers,
-                       const std::vector<std::shared_ptr<MaterialBase>> & mats,
-                       const bool allow_stateful);
 
 /**
  * Utility class template for a semidynamic vector with a maximum size N
@@ -1165,6 +1159,44 @@ get(const std::shared_ptr<T> & s)
   return s.get();
 }
 
+/**
+ * This method detects whether two sets intersect without building a result set.
+ * It exits as soon as any intersection is detected.
+ */
+template <class InputIterator>
+bool
+setsIntersect(InputIterator first1, InputIterator last1, InputIterator first2, InputIterator last2)
+{
+  while (first1 != last1 && first2 != last2)
+  {
+    if (*first1 == *first2)
+      return true;
+
+    if (*first1 < *first2)
+      ++first1;
+    else if (*first1 > *first2)
+      ++first2;
+  }
+  return false;
+}
+
+template <class T>
+bool
+setsIntersect(const T & s1, const T & s2)
+{
+  return setsIntersect(s1.begin(), s1.end(), s2.begin(), s2.end());
+}
+
+/**
+ * Courtesy https://stackoverflow.com/a/8889045 and
+ * https://en.cppreference.com/w/cpp/string/byte/isdigit
+ * @return Whether every character in the string is a digit
+ */
+inline bool
+isDigits(const std::string & str)
+{
+  return std::all_of(str.begin(), str.end(), [](unsigned char c) { return std::isdigit(c); });
+}
 } // MooseUtils namespace
 
 /**

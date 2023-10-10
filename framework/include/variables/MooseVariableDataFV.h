@@ -13,6 +13,7 @@
 #include "MooseTypes.h"
 #include "MeshChangedInterface.h"
 #include "MooseVariableDataBase.h"
+#include "TheWarehouse.h"
 
 #include "libmesh/tensor_tools.h"
 #include "libmesh/vector_value.h"
@@ -20,6 +21,7 @@
 #include "libmesh/type_n_tensor.h"
 #include "libmesh/fe_type.h"
 #include "libmesh/dof_map.h"
+#include "libmesh/enum_fe_family.h"
 #include "DualRealOps.h"
 #include "SubProblem.h"
 
@@ -37,6 +39,20 @@ class MooseVariableFV;
 namespace libMesh
 {
 class QBase;
+}
+
+namespace Moose
+{
+template <typename T>
+void
+initDofIndices(T & data, const Elem & elem)
+{
+  if (data._prev_elem != &elem)
+  {
+    data._dof_map.dof_indices(&elem, data._dof_indices, data._var_num);
+    data._prev_elem = &elem;
+  }
+}
 }
 
 template <typename OutputType>
@@ -75,6 +91,7 @@ public:
 
   bool isNodal() const override { return false; }
   bool hasDoFsOnNodes() const override { return false; }
+  FEContinuity getContinuity() const override { return DISCONTINUOUS; }
 
   /**
    * Returns whether this data structure needs automatic differentiation calculations
@@ -368,6 +385,11 @@ private:
   /// A dummy ADReal variable
   ADReal _ad_real_dummy = 0;
 
+  /// Cached warehouse query for FVElementalKernels
+  TheWarehouse::QueryCache<> _fv_elemental_kernel_query_cache;
+  /// Cached warehouse query for FVFluxKernels
+  TheWarehouse::QueryCache<> _fv_flux_kernel_query_cache;
+
   using MooseVariableDataBase<OutputType>::_var;
   using MooseVariableDataBase<OutputType>::_sys;
   using MooseVariableDataBase<OutputType>::_subproblem;
@@ -417,6 +439,8 @@ private:
   using MooseVariableDataBase<OutputType>::_nodal_value_dot_old;
   using MooseVariableDataBase<OutputType>::_nodal_value_dotdot_old;
   using MooseVariableDataBase<OutputType>::_required_vector_tags;
+
+  friend void Moose::initDofIndices<>(MooseVariableDataFV<OutputType> &, const Elem &);
 };
 
 /////////////////////// General template definitions //////////////////////////////////////
@@ -459,6 +483,9 @@ template <typename OutputType>
 const ADTemplateVariableValue<OutputType> &
 MooseVariableDataFV<OutputType>::adUDotDot() const
 {
+  // Generally speaking, we need u dot information when computing u dot dot
+  adUDot();
+
   _need_ad = _need_ad_u_dotdot = true;
 
   if (!safeToComputeADUDot())

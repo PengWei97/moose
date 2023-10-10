@@ -1,18 +1,12 @@
-<!-- MOOSE Documentation Stub: Remove this when content is added. -->
-
 # SumIC
 
-!alert construction title=Undocumented Class
-The SumIC has not been documented. The content contained on this page includes the
-typical automatic documentation associated with a MooseObject; however, what is contained is
-ultimately determined by what is necessary to make the documentation clear for users.
-
 !syntax description /ICs/SumIC
+
+The value of the other variables in the sum is naturally equal to their initial conditions,
+as initial conditions are only run once at the beginning of the simulation.
 
 !syntax parameters /ICs/SumIC
 
 !syntax inputs /ICs/SumIC
 
 !syntax children /ICs/SumIC
-
-!bibtex bibliography

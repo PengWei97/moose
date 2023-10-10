@@ -1,10 +1,8 @@
 # Do not alter <VERSION>, <SKIP_DOCS>. These are template tokens altered
 # on the fly by civet recipes. The only modifiable item in moose/ is the
-# conda_build_config.yaml file (moose_libmesh)
+# conda_build_config.yaml file (moose_dev)
 {% set VERSION = "<VERSION>" %}
 {% set SKIP_DOCS = "<SKIP_DOCS>" %}
-{% set build = 0 %}
-{% set strbuild = "build_" + build|string %}
 
 package:
   name: moose
@@ -12,12 +10,10 @@ package:
 
 source:
   - path: ../../../moose
-  - patches:
-      - gap_heat_transfer_umat.patch
 
 build:
-  number: {{ build }}
-  string: {{ strbuild }}
+  number: 0
+  string: build_0
   skip: true # [win]
   pin_depends: strict
   script_env:
@@ -26,20 +22,17 @@ build:
 
 requirements:
   build:
-    - {{ moose_libmesh }}
-    - {{ moose_python }}
-    - moose-tools
+    - {{ moose_dev }}
 
   run:
-    - {{ moose_libmesh }}
-    - {{ moose_python }}
-    - moose-tools
+    - {{ moose_dev }}
 
 test:
   script: run_test.sh
   commands:
     - $PREFIX/moose/bin/combined-opt -h
     - $PREFIX/bin/moose-opt -h
+    - $PREFIX/bin/moose -h
 
 about:
   home: https://mooseframework.org/

@@ -20,15 +20,11 @@ ParsedAux::validParams()
   params.addClassDescription(
       "Sets a field variable value to the evaluation of a parsed expression.");
 
-  params.addDeprecatedCustomTypeParam<std::string>("function",
-                                                   "FunctionExpression",
-                                                   "Parsed function expression to compute",
-                                                   "'function' is deprecated, use 'expression'");
-  // TODO Make required once deprecation is handled, see #19119
-  params.addCustomTypeParam<std::string>(
-      "expression", "FunctionExpression", "Parsed function expression to compute");
-  params.addDeprecatedCoupledVar("args", "coupled_variables", "Vector of coupled variable names");
-  params.addCoupledVar("coupled_variables", "Vector of coupled variable names");
+  params.addRequiredCustomTypeParam<std::string>(
+      "function", "FunctionExpression", "Parsed function expression to compute");
+  params.deprecateParam("function", "expression", "02/07/2024");
+  params.addCoupledVar("args", "Vector of coupled variable names");
+  params.deprecateCoupledVar("args", "coupled_variables", "02/07/2024");
 
   params.addParam<bool>(
       "use_xyzt",
@@ -46,21 +42,17 @@ ParsedAux::validParams()
 ParsedAux::ParsedAux(const InputParameters & parameters)
   : AuxKernel(parameters),
     FunctionParserUtils(parameters),
-    _function(getRenamedParam<std::string>("function", "expression")),
-    _nargs(isCoupled("args") ? coupledComponents("args") : coupledComponents("coupled_variables")),
-    _args(isCoupled("args") ? coupledValues("args") : coupledValues("coupled_variables")),
+    _function(getParam<std::string>("expression")),
+    _nargs(coupledComponents("coupled_variables")),
+    _args(coupledValues("coupled_variables")),
     _use_xyzt(getParam<bool>("use_xyzt"))
 {
   // build variables argument
   std::string variables;
 
   // coupled field variables
-  if (isCoupled("args"))
-    for (std::size_t i = 0; i < _nargs; ++i)
-      variables += (i == 0 ? "" : ",") + getFieldVar("args", i)->name();
-  else
-    for (std::size_t i = 0; i < _nargs; ++i)
-      variables += (i == 0 ? "" : ",") + getFieldVar("coupled_variables", i)->name();
+  for (std::size_t i = 0; i < _nargs; ++i)
+    variables += (i == 0 ? "" : ",") + getFieldVar("coupled_variables", i)->name();
 
   // "system" variables
   const std::vector<std::string> xyzt = {"x", "y", "z", "t"};
@@ -90,7 +82,17 @@ ParsedAux::ParsedAux(const InputParameters & parameters)
 
   // just-in-time compile
   if (_enable_jit)
+  {
+    // let rank 0 do the JIT compilation first
+    if (_communicator.rank() != 0)
+      _communicator.barrier();
+
     _func_F->JITCompile();
+
+    // wait for ranks > 0 to catch up
+    if (_communicator.rank() == 0)
+      _communicator.barrier();
+  }
 
   // reserve storage for parameter passing buffer
   _func_params.resize(_nargs + (_use_xyzt ? 4 : 0));

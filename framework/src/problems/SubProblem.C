@@ -70,6 +70,8 @@ SubProblem::SubProblem(const InputParameters & parameters)
   _active_sc_var_coupleable_vector_tags.resize(n_threads);
 
   _functors.resize(n_threads);
+  _pbblf_functors.resize(n_threads);
+  _functor_to_request_info.resize(n_threads);
 }
 
 SubProblem::~SubProblem() {}
@@ -140,6 +142,18 @@ SubProblem::getVectorTag(const TagID tag_id) const
     mooseError("Vector tag with ID ", tag_id, " does not exist");
 
   return _vector_tags[tag_id];
+}
+
+std::vector<VectorTag>
+SubProblem::getVectorTags(const std::set<TagID> & tag_ids) const
+{
+  mooseAssert(verifyVectorTags(), "Vector tag storage invalid");
+
+  std::vector<VectorTag> tags;
+  tags.reserve(tag_ids.size());
+  for (const auto & tag_id : tag_ids)
+    tags.push_back(getVectorTag(tag_id));
+  return tags;
 }
 
 const std::vector<VectorTag> &
@@ -432,17 +446,12 @@ SubProblem::getMaterialPropertyBlockNames(const std::string & prop_name)
   for (const auto & block_id : blocks)
   {
     SubdomainName name;
-    if (block_id == Moose::ANY_BLOCK_ID)
-      name = "ANY_BLOCK_ID";
-    else
+    name = mesh().getMesh().subdomain_name(block_id);
+    if (name.empty())
     {
-      name = mesh().getMesh().subdomain_name(block_id);
-      if (name.empty())
-      {
-        std::ostringstream oss;
-        oss << block_id;
-        name = oss.str();
-      }
+      std::ostringstream oss;
+      oss << block_id;
+      name = oss.str();
     }
     block_names.push_back(name);
   }
@@ -565,9 +574,6 @@ SubProblem::storeBoundaryDelayedCheckMatProp(const std::string & requestor,
 void
 SubProblem::checkBlockMatProps()
 {
-  // Variable for storing the value for ANY_BLOCK_ID/ANY_BOUNDARY_ID
-  SubdomainID any_id = Moose::ANY_BLOCK_ID;
-
   // Variable for storing all available blocks/boundaries from the mesh
   std::set<SubdomainID> all_ids(mesh().meshSubdomains());
 
@@ -579,11 +585,7 @@ SubProblem::checkBlockMatProps()
     // The current id for the property being checked (BoundaryID || BlockID)
     SubdomainID check_id = check_it.first;
 
-    // In the case when the material being checked has an ID is set to ANY, then loop through all
-    // the possible ids and verify that the material property is defined.
     std::set<SubdomainID> check_ids = {check_id};
-    if (check_id == any_id)
-      check_ids = all_ids;
 
     // Loop through all the block/boundary ids
     for (const auto & id : check_ids)
@@ -595,9 +597,7 @@ SubProblem::checkBlockMatProps()
         // and any block/boundary
         // and not is not a zero material property.
         if (_map_block_material_props[id].count(prop_it.second) == 0 &&
-            _map_block_material_props[any_id].count(prop_it.second) == 0 &&
-            _zero_block_material_props[id].count(prop_it.second) == 0 &&
-            _zero_block_material_props[any_id].count(prop_it.second) == 0)
+            _zero_block_material_props[id].count(prop_it.second) == 0)
         {
           std::string check_name = restrictionSubdomainCheckName(id);
           if (check_name.empty())
@@ -616,7 +616,7 @@ SubProblem::checkBlockMatProps()
 void
 SubProblem::checkBoundaryMatProps()
 {
-  // Variable for storing the value for ANY_BLOCK_ID/ANY_BOUNDARY_ID
+  // Variable for storing the value for ANY_BOUNDARY_ID
   BoundaryID any_id = Moose::ANY_BOUNDARY_ID;
 
   // Variable for storing all available blocks/boundaries from the mesh
@@ -772,7 +772,7 @@ SubProblem::getVariableHelper(THREAD_ID tid,
     else
       mooseError("Unknown variable " + var_name);
   }
-  else if (expected_var_type == Moose::VarKindType::VAR_NONLINEAR &&
+  else if (expected_var_type == Moose::VarKindType::VAR_NONLINEAR && var_in_nl &&
            nls[nl_sys_num]->hasVariable(var_name))
     var = &(nls[nl_sys_num]->getVariable(tid, var_name));
   else if (expected_var_type == Moose::VarKindType::VAR_AUXILIARY && aux.hasVariable(var_name))
@@ -847,8 +847,10 @@ SubProblem::reinitElemFaceRef(const Elem * elem,
   // With the dof indices set in the moose variables, now let's properly size
   // our local residuals/Jacobians
   auto & current_assembly = assembly(tid, currentNlSysNum());
-  current_assembly.prepareJacobianBlock();
-  current_assembly.prepareResidual();
+  if (currentlyComputingJacobian() || currentlyComputingResidualAndJacobian())
+    current_assembly.prepareJacobianBlock();
+  if (!currentlyComputingJacobian())
+    current_assembly.prepareResidual();
 }
 
 void
@@ -967,15 +969,38 @@ SubProblem::addAlgebraicGhostingFunctor(GhostingFunctor & algebraic_gf, bool to_
 }
 
 void
-SubProblem::addAlgebraicGhostingFunctor(std::shared_ptr<GhostingFunctor> algebraic_gf, bool to_mesh)
+SubProblem::cloneCouplingGhostingFunctor(GhostingFunctor & coupling_gf, bool to_mesh)
 {
-  EquationSystems & eq = es();
-  const auto n_sys = eq.n_systems();
-  if (!n_sys)
+  const auto num_nl_sys = numNonlinearSystems();
+
+  auto pr = _root_coupling_gf_to_sys_clones.emplace(
+      &coupling_gf, std::vector<std::shared_ptr<GhostingFunctor>>(num_nl_sys - 1));
+  mooseAssert(pr.second, "We are adding a duplicate coupling functor");
+  auto & clones_vec = pr.first->second;
+
+  for (MooseIndex(num_nl_sys) i = 1; i < num_nl_sys; ++i)
+  {
+    DofMap & dof_map = systemBaseNonlinear(i).system().get_dof_map();
+    std::shared_ptr<GhostingFunctor> clone_coupling_gf = coupling_gf.clone();
+    std::dynamic_pointer_cast<RelationshipManager>(clone_coupling_gf)
+        ->init(*coupling_gf.get_mesh(), &dof_map);
+    dof_map.add_coupling_functor(clone_coupling_gf, to_mesh);
+    clones_vec[i - 1] = clone_coupling_gf;
+  }
+}
+
+void
+SubProblem::addCouplingGhostingFunctor(GhostingFunctor & coupling_gf, bool to_mesh)
+{
+  const auto num_nl_sys = numNonlinearSystems();
+  if (!num_nl_sys)
     return;
 
-  eq.get_system(0).get_dof_map().add_algebraic_ghosting_functor(algebraic_gf, to_mesh);
-  cloneAlgebraicGhostingFunctor(*algebraic_gf, to_mesh);
+  systemBaseNonlinear(0).system().get_dof_map().add_coupling_functor(coupling_gf, to_mesh);
+  if (num_nl_sys == 1)
+    return;
+
+  cloneCouplingGhostingFunctor(coupling_gf, to_mesh);
 }
 
 void
@@ -1028,7 +1053,6 @@ SubProblem::automaticScaling() const
   return systemBaseNonlinear(0).automaticScaling();
 }
 
-#ifdef MOOSE_GLOBAL_AD_INDEXING
 void
 SubProblem::hasScalingVector()
 {
@@ -1036,7 +1060,6 @@ SubProblem::hasScalingVector()
     for (const auto nl_sys_num : make_range(numNonlinearSystems()))
       assembly(tid, nl_sys_num).hasScalingVector();
 }
-#endif
 
 void
 SubProblem::clearAllDofIndices()
@@ -1049,7 +1072,7 @@ SubProblem::clearAllDofIndices()
 void
 SubProblem::timestepSetup()
 {
-  for (auto & map : _functors)
+  for (auto & map : _pbblf_functors)
     for (auto & pr : map)
       pr.second->timestepSetup();
 }
@@ -1057,7 +1080,7 @@ SubProblem::timestepSetup()
 void
 SubProblem::customSetup(const ExecFlagType & exec_type)
 {
-  for (auto & map : _functors)
+  for (auto & map : _pbblf_functors)
     for (auto & pr : map)
       pr.second->customSetup(exec_type);
 }
@@ -1065,7 +1088,7 @@ SubProblem::customSetup(const ExecFlagType & exec_type)
 void
 SubProblem::residualSetup()
 {
-  for (auto & map : _functors)
+  for (auto & map : _pbblf_functors)
     for (auto & pr : map)
       pr.second->residualSetup();
 }
@@ -1073,7 +1096,7 @@ SubProblem::residualSetup()
 void
 SubProblem::jacobianSetup()
 {
-  for (auto & map : _functors)
+  for (auto & map : _pbblf_functors)
     for (auto & pr : map)
       pr.second->jacobianSetup();
 }
@@ -1088,13 +1111,24 @@ SubProblem::initialSetup()
   }
 
   for (const auto & functors : _functors)
-    for (const auto & pr : functors)
-      if (pr.second->wrapsNull())
-        mooseError("No functor ever provided with name '",
-                   removeSubstring(pr.first, "wraps_"),
-                   "', which was requested by '",
-                   MooseUtils::join(libmesh_map_find(_functor_to_requestors, pr.first), ","),
-                   "'.");
+    for (const auto & [functor_wrapper_name, functor_wrapper] : functors)
+    {
+      const auto & [true_functor_type, non_ad_functor, ad_functor] = functor_wrapper;
+      mooseAssert(non_ad_functor->wrapsNull() == ad_functor->wrapsNull(), "These must agree");
+      const auto functor_name = removeSubstring(functor_wrapper_name, "wraps_");
+      if (non_ad_functor->wrapsNull())
+        mooseError(
+            "No functor ever provided with name '",
+            functor_name,
+            "', which was requested by '",
+            MooseUtils::join(libmesh_map_find(_functor_to_requestors, functor_wrapper_name), ","),
+            "'.");
+      if (true_functor_type == TrueFunctorIs::NONAD ? non_ad_functor->ownsWrappedFunctor()
+                                                    : ad_functor->ownsWrappedFunctor())
+        mooseError("Functor envelopes should not own the functors they wrap, but '",
+                   functor_name,
+                   "' is owned by the wrapper. Please open a MOOSE issue for help resolving this.");
+    }
 }
 
 void

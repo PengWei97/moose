@@ -140,17 +140,14 @@ Nemesis::outputScalarVariables()
 }
 
 void
-Nemesis::output(const ExecFlagType & type)
+Nemesis::output()
 {
-  if (!shouldOutput(type))
-    return;
-
   // Clear the global variables (postprocessors and scalars)
   _global_names.clear();
   _global_values.clear();
 
   // Call the output methods
-  AdvancedOutput::output(type);
+  AdvancedOutput::output();
 
   // Set up the whitelist of nodal variable names to write.
   _nemesis_io_ptr->set_output_variables(
@@ -158,7 +155,7 @@ Nemesis::output(const ExecFlagType & type)
 
   // Write nodal data
   _nemesis_io_ptr->write_timestep(
-      filename(), *_es_ptr, _nemesis_num, time() + _app.getGlobalTimeOffset());
+      filename(), *_es_ptr, _nemesis_num, getOutputTime() + _app.getGlobalTimeOffset());
   _nemesis_initialized = true;
 
   // Write elemental data

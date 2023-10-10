@@ -36,6 +36,10 @@ else
     FCFLAGS="${FCFLAGS} -I$PREFIX/include"
 fi
 
+# Remove std=C++17 from CXXFLAGS as we specify the C++ dialect for PETSc as C++17 in configure_petsc.
+# Specifying both causes an error as of PETSc 3.17.
+CXXFLAGS=${CXXFLAGS//-std=c++[0-9][0-9]}
+
 source $PETSC_DIR/configure_petsc.sh
 configure_petsc \
     --COPTFLAGS=-O3 \
@@ -43,11 +47,7 @@ configure_petsc \
     --FOPTFLAGS=-O3 \
     --with-x=0 \
     --with-ssl=0 \
-    CC="$CC" \
-    CXX="$CXX" \
-    FC="$FC" \
-    F90="$F90" \
-    F77="$F77" \
+    --with-mpi-dir=$PREFIX \
     AR="$AR" \
     RANLIB="$RANLIB" \
     CFLAGS="$CFLAGS" \
@@ -88,12 +88,7 @@ for path in $PETSC_DIR $BUILD_PREFIX; do
 done
 
 make
-
-# FIXME: Workaround mpiexec setting O_NONBLOCK in std{in|out|err}
-# See https://github.com/conda-forge/conda-smithy/pull/337
-# See https://github.com/pmodels/mpich/pull/2755
-make check MPIEXEC="${RECIPE_DIR}/mpiexec.sh"
-
+make check
 make install
 
 # Remove unneeded files

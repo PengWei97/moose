@@ -1,18 +1,23 @@
-<!-- MOOSE Documentation Stub: Remove this when content is added. -->
-
 # ADHeatConductionTimeDerivativeRZ
 
-!alert construction title=Undocumented Class
-The ADHeatConductionTimeDerivativeRZ has not been documented. The content contained on this page includes the
-typical automatic documentation associated with a MooseObject; however, what is contained is
-ultimately determined by what is necessary to make the documentation clear for users.
-
 !syntax description /Kernels/ADHeatConductionTimeDerivativeRZ
+
+The equation term added is the same as for the [HeatConductionTimeDerivative.md] kernel,
+except that the residual and Jacobian contributions are integrated with cylindrical coordinates, the axis and origin
+of which are being defined through input parameters.
+
+!alert warning
+This kernel is meant to be used in XY coordinates that are interpreted as general cylindrical coordinates.
+With the recent development of general RZ coordinates, this object along with all THM's "RZ"-specific
+objects will soon be deprecated in favor of more general RZ-coordinate objects.
+Stay tuned!
+
+!alert note
+In THM, most kernels are added automatically by components. This kernel is created by the
+[HeatConductionModel.md] which is used in boundary heat structures.
 
 !syntax parameters /Kernels/ADHeatConductionTimeDerivativeRZ
 
 !syntax inputs /Kernels/ADHeatConductionTimeDerivativeRZ
 
 !syntax children /Kernels/ADHeatConductionTimeDerivativeRZ
-
-!bibtex bibliography

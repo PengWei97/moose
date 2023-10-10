@@ -15,7 +15,7 @@
 #include "libmesh/stored_range.h"
 
 // Forward declarations
-class DiracKernel;
+class DiracKernelBase;
 template <typename T>
 class MooseObjectTagWarehouse;
 template <typename T>
@@ -43,13 +43,19 @@ public:
   void join(const ComputeDiracThread & /*y*/);
 
 protected:
+  /// Output a message indicating execution on this execution flag
+  void printGeneralExecutionInformation() const override;
+
+  /// Output the order of execution of objects within the current subdomain
+  void printBlockExecutionInformation() const override;
+
   bool _is_jacobian;
   NonlinearSystemBase & _nl;
 
   const std::set<TagID> & _tags;
 
   /// Storage for DiracKernel objects
-  MooseObjectTagWarehouse<DiracKernel> & _dirac_kernels;
+  MooseObjectTagWarehouse<DiracKernelBase> & _dirac_kernels;
 
-  MooseObjectWarehouse<DiracKernel> * _dirac_warehouse;
+  MooseObjectWarehouse<DiracKernelBase> * _dirac_warehouse;
 };

@@ -1,14 +1,10 @@
-<!-- MOOSE Documentation Stub: Remove this when content is added. -->
-
 # AddComponentAction
-
-!alert construction title=Undocumented Class
-The AddComponentAction has not been documented. The content contained on this page includes the
-typical automatic documentation associated with an Action; however, what is contained is ultimately
-determined by what is necessary to make the documentation clear for users.
 
 !syntax description /Components/AddComponentAction
 
-!syntax parameters /Components/AddComponentAction
+The `AddComponentAction` is a [MooseObjectAction.md] that creates the specified
+[Components](syntax/Components/index.md) object for
+each sub-block of the `Components` block of an input file, then adds them to the
+[THMProblem.md].
 
-!bibtex bibliography
+!syntax parameters /Components/AddComponentAction

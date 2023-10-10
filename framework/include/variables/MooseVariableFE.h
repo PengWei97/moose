@@ -21,7 +21,7 @@
 #include "libmesh/elem.h"
 #include "libmesh/quadrature.h"
 #include "libmesh/dense_vector.h"
-#include "libmesh/dense_vector.h"
+#include "libmesh/enum_fe_family.h"
 
 class TimeIntegrator;
 template <typename>
@@ -142,6 +142,7 @@ public:
 
   bool isNodal() const override { return _element_data->isNodal(); }
   bool hasDoFsOnNodes() const override { return _element_data->hasDoFsOnNodes(); }
+  FEContinuity getContinuity() const override { return _element_data->getContinuity(); };
   Moose::VarFieldType fieldType() const override;
   bool isArray() const override;
   bool isVector() const override;
@@ -236,7 +237,7 @@ public:
   const FieldVariablePhiSecond & secondPhiFaceNeighbor() const override final;
   const FieldVariablePhiCurl & curlPhiFaceNeighbor() const;
 
-  const FieldVariablePhiValue & phiLower() const { return _lower_data->phi(); }
+  virtual const FieldVariablePhiValue & phiLower() const override { return _lower_data->phi(); }
   const FieldVariablePhiGradient & gradPhiLower() const { return _lower_data->gradPhi(); }
 
   const ADTemplateVariableTestGradient<OutputShape> & adGradPhi() const
@@ -566,6 +567,11 @@ public:
   const MooseArray<ADReal> & adDofValues() const override;
 
   /**
+   * Return the AD neignbor dof values
+   */
+  const MooseArray<ADReal> & adDofValuesNeighbor() const override;
+
+  /**
    * Compute and store incremental change in solution at QPs based on increment_vec
    */
   void computeIncrementAtQps(const NumericVector<Number> & increment_vec);
@@ -682,12 +688,13 @@ private:
   using ElemQpArg = Moose::ElemQpArg;
   using ElemSideQpArg = Moose::ElemSideQpArg;
   using FaceArg = Moose::FaceArg;
+  using StateArg = Moose::StateArg;
 
-  ValueType evaluate(const ElemArg &, unsigned int) const override final
+  ValueType evaluate(const ElemArg &, const StateArg &) const override final
   {
     mooseError("Elem functor overload not yet implemented for finite element variables");
   }
-  ValueType evaluate(const FaceArg &, unsigned int) const override final
+  ValueType evaluate(const FaceArg &, const StateArg &) const override final
   {
     mooseError("Face info functor overload not yet implemented for finite element variables");
   }
@@ -698,6 +705,13 @@ inline const MooseArray<ADReal> &
 MooseVariableFE<OutputType>::adDofValues() const
 {
   return _element_data->adDofValues();
+}
+
+template <typename OutputType>
+inline const MooseArray<ADReal> &
+MooseVariableFE<OutputType>::adDofValuesNeighbor() const
+{
+  return _neighbor_data->adDofValues();
 }
 
 template <typename OutputType>

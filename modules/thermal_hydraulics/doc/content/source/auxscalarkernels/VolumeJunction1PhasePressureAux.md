@@ -1,18 +1,14 @@
-<!-- MOOSE Documentation Stub: Remove this when content is added. -->
+# VolumeJunction1PhasePressureAux
 
-# VolumeJunction1PhaseVelocityMagnitudeAux
+!syntax description /AuxScalarKernels/VolumeJunction1PhasePressureAux
 
-!alert construction title=Undocumented Class
-The VolumeJunction1PhaseVelocityMagnitudeAux has not been documented. The content contained on this page includes the
-typical automatic documentation associated with a MooseObject; however, what is contained is
-ultimately determined by what is necessary to make the documentation clear for users.
+The pressure is computed from the specific volume and specific internal energy of the fluid
+using the [!param](/AuxScalarKernels/VolumeJunction1PhasePressureAux/fp) parameter fluid properties.
 
-!syntax description /AuxScalarKernels/VolumeJunction1PhaseVelocityMagnitudeAux
+This object is automatically added to the simulation by the [VolumeJunction1Phase.md] component.
 
-!syntax parameters /AuxScalarKernels/VolumeJunction1PhaseVelocityMagnitudeAux
+!syntax parameters /AuxScalarKernels/VolumeJunction1PhasePressureAux
 
-!syntax inputs /AuxScalarKernels/VolumeJunction1PhaseVelocityMagnitudeAux
+!syntax inputs /AuxScalarKernels/VolumeJunction1PhasePressureAux
 
-!syntax children /AuxScalarKernels/VolumeJunction1PhaseVelocityMagnitudeAux
-
-!bibtex bibliography
+!syntax children /AuxScalarKernels/VolumeJunction1PhasePressureAux

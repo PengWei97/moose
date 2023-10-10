@@ -108,12 +108,12 @@ TimeExtremeValue::execute()
       break;
 
     default:
-      mooseError("Unrecognzed ExtremeType");
+      mooseError("Unrecognized ExtremeType");
   }
 }
 
 Real
-TimeExtremeValue::getValue()
+TimeExtremeValue::getValue() const
 {
   if (_output_type == OutputType::EXTREME_VALUE)
     return _value;

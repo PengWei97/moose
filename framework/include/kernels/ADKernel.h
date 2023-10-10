@@ -10,7 +10,7 @@
 #pragma once
 
 #include "KernelBase.h"
-
+#include "ADFunctorInterface.h"
 #include "DualRealOps.h"
 
 // forward declarations
@@ -21,7 +21,7 @@ using ADKernel = ADKernelTempl<Real>;
 using ADVectorKernel = ADKernelTempl<RealVectorValue>;
 
 template <typename T>
-class ADKernelTempl : public KernelBase, public MooseVariableInterface<T>
+class ADKernelTempl : public KernelBase, public MooseVariableInterface<T>, public ADFunctorInterface
 {
 public:
   static InputParameters validParams();
@@ -32,11 +32,11 @@ public:
 
   const MooseVariableFE<T> & variable() const override { return _var; }
 
-private:
-  void computeJacobian() override final;
+protected:
+  void computeJacobian() override;
   void computeResidualAndJacobian() override;
-  void computeOffDiagJacobian(unsigned int) override final;
-  void computeOffDiagJacobianScalar(unsigned int jvar) override final;
+  void computeOffDiagJacobian(unsigned int) override;
+  void computeOffDiagJacobianScalar(unsigned int jvar) override;
 
   /**
    * Just as we allow someone deriving from this to modify the
@@ -45,7 +45,7 @@ private:
    * indices. For example a user could have something like an \p LMKernel which sums computed
    * strong residuals into both primal and LM residuals. That user needs to be
    * able to feed dof indices from both the primal and LM variable into
-   * \p Assembly::processJacobian
+   * \p Assembly::addJacobian
    */
   virtual const std::vector<dof_id_type> & dofIndices() const { return _var.dofIndices(); }
 
@@ -58,7 +58,7 @@ protected:
    * up-front when doing loal derivative indexing because we can use those residuals to fill \p
    * _local_ke for every associated jvariable. We do not want to re-do these calculations for every
    * jvariable and corresponding \p _local_ke. For global indexing we will simply pass the computed
-   * \p _residuals directly to \p Assembly::processJacobian
+   * \p _residuals directly to \p Assembly::addJacobian
    */
   virtual void computeResidualsForJacobian();
 
@@ -117,17 +117,9 @@ protected:
 
 private:
   /**
-   * Add the Jacobian contribution for the provided variable
+   * compute all the Jacobian entries
    */
-  void addJacobian(const MooseVariableFieldBase & jvariable);
-
-  /**
-   * compute all the Jacobian entries, but for non-global indexing only add the matrix coupling
-   * entries specified by \p coupling_entries
-   */
-  void computeADJacobian(
-      const std::vector<std::pair<MooseVariableFieldBase *, MooseVariableFieldBase *>> &
-          coupling_entries);
+  void computeADJacobian();
 
   const Elem * _my_elem;
 };

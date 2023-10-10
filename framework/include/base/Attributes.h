@@ -34,7 +34,8 @@ enum class Interfaces
   BlockRestrictable = 1 << 13,
   BoundaryRestrictable = 1 << 14,
   Reporter = 1 << 15,
-  DomainUserObject = 1 << 16
+  DomainUserObject = 1 << 16,
+  MortarUserObject = 1 << 17
 };
 
 template <>
@@ -245,6 +246,27 @@ public:
 
 private:
   THREAD_ID _val = 0;
+};
+
+class AttribExecutionOrderGroup : public Attribute
+{
+public:
+  typedef int Key;
+  void setFrom(Key k) { _val = k; }
+
+  AttribExecutionOrderGroup(TheWarehouse & w) : Attribute(w, "execution_order_group") {}
+  AttribExecutionOrderGroup(TheWarehouse & w, Key p)
+    : Attribute(w, "execution_order_group"), _val(p)
+  {
+  }
+  virtual void initFrom(const MooseObject * obj) override;
+  virtual bool isMatch(const Attribute & other) const override;
+  virtual bool isEqual(const Attribute & other) const override;
+  hashfunc(_val);
+  clonefunc(AttribExecutionOrderGroup);
+
+private:
+  int _val = 0;
 };
 
 /**

@@ -1,118 +1,71 @@
 # INL HPC Cluster
 
-This page aims at simplifying the installation process on INL computing clusters.
-The [general cluster instructions](hpc_install_moose.md) may also be used, but these
-instructions will save some steps. There are multiple options for installing / using
-MOOSE and MOOSE applications.
+The following instructions are for those operating on [!ac](INL) [!ac](HPC) machines.
 
-!alert warning
-Do not mix installation workflows. Do not install `libMesh` or `PETSc` directly unless
-you know what you are doing.
+Requesting access (shell account) to [!ac](INL) [!ac](HPC) machines is handled by the
+[NCRC](https://inl.gov/ncrc/) group.
 
-## Option 1: Loading an application directly (easy, users only)
+For information on developing or running MOOSE-based NCRC applications (not the scope of this
+document), please head over to [NCRC Applications](help/inl/applications.md) instead, and choose the
+application applicable to you.
 
-You may load pre-built binaries for MOOSE
-and the applications you have access to by running: `module load use.moose moose-apps <app_name>`.
-Pre-built executables are then added in the `PATH` environment variable, and can be called
-directly in any folder with: `app_name-opt -i <input_file>`. This is not really an installation per-say,
-we just want to make you aware of this option.
+## Environment id=environment
 
-!alert note
-Pre-built binaries are only available after access has been requested for the relevant applications through the
-[NCRC](ncrc/ncrc_ondemand.md).
+!style! halign=left
+While operating on one of our [!ac](INL) [!ac](HPC) clusters, you need only load a couple of
+modules to obtain a proper developer environment:
+!style-end!
 
-## Option 2: Modules + source-based installation (medium, for developers)
+- +[!ac](HPC) Sawtooth or Lemhi+ (required each time you log in):
 
-!alert warning
-When installing with Option 2, the installed MOOSE or application will only
-function on **one** of the INL clusters. The compilers/MPI distributions are not the same
-on all the platforms.
+  ```bash
+  module load use.moose moose-dev
+  ```
 
-!alert warning
-If any of the modules (mostly the specific version) you used when installing is no longer offered, you will need to
-install again. We take every achievable step to avoid this, but it is at times unavoidable on this shared infrastructure.
+If you would prefer not having to perform the above step each time you log in, you can append the
+above command to your shell initialization file:
 
-### Step 0: download MOOSE and the application you need
-
-MOOSE may be classically obtained from its [GitHub repository](https://github.com/idaholab/moose).
-Many open-source MOOSE applications may also be obtained from GitHub, while others will require
-officially requesting source code access through the [NCRC](ncrc/ncrc_ondemand.md).
-
-MOOSE and the application you want should be installed on the scratch storage space. This file system
-is much faster than the file system that hosts your home directory. For example to download MOOSE:
-
-```
-  cd /scratch/$USER
-  mkdir projects
-  cd projects
-  git clone git@github.com:idaholab/moose.git
+```bash
+echo "module load use.moose moose-dev" >> ~/.bash_profile
 ```
 
-### Step 1: load some compilers
+## Cloning MOOSE
 
-In order to compile MOOSE and its applications, we first need to load compilers & compiling tools.
-The following modules are recommended for each of INL's clusters:
+!style! halign=left
+Follow the below instructions, and replace `cluster_name` placeholder with either `lemhi` or
+`sawtooth` accordingly.
+!style-end!
 
-- Falcon: `module load use.moose MVAPICH2 CMake`
+!alert! warning title=Replace +'cluster_name'+ accordingly!
+[!ac](INL) [!ac](HPC) machines use a shared home directory structure (things you create/do on Lemhi
+will be available on Sawtooth). If you do not separate your projects directory based on the cluster
+you are operating on (or some other identifier), you risk developing under one environment and then
+executing on another. Mistakes like this will cause the odd failure and cost you time to solve/fix.
+!alert-end!
 
-- Lemhi: `module load use.moose moose-dev`
+!style! halign=left
+!template load file=installation/clone_moose.md.template PATH=~/cluster_name/projects
+!style-end!
 
-- Sawtooth: `module load use.moose moose-dev`
+## Build PETSc and libMesh
 
+!style! halign=left
+MOOSE requires several support libraries in order to build or run properly. Both of these libraries
+(PETSc and libMesh) can be built using our supplied scripts:
+!style-end!
 
-!alert note
-If you use HPC modules, you will need to load them every time you log in! One solution is to
-modify/create the `.bash_profile` file and add these `module load` commands there. However, be careful
-that this is not always harmless to other HPC programs, and can interfere with other modules
-you would be using on INL HPC.
+!template load file=installation/build_petsc_and_libmesh.md.template PATH=~/cluster_name/projects
 
-### Step 2: download MOOSE dependencies
+## Build and Test MOOSE
 
-MOOSE dependencies, mainly PETSc and libMesh, may be obtained using the `update_and_rebuild_...`
-scripts, as is detailed in these [instructions](hpc_install_moose.md). These scripts currently
-should be run on the head node, as the compute nodes do not have access to the internet.
-Please make sure to `export MOOSE_JOBS=6` to control the number of cores used for installation.
+!style! halign=left
+!template load file=installation/build_moose.md.template PATH=~/cluster_name/projects
+!style-end!
 
-!alert note
-If using [INL HPC OnDemand](gen_ondemand.md), you will have to use a `login` session for
-this step, and will only have access to a single core, so `MOOSE_JOBS` should be 1. Compute
-nodes (`Compute CPU`) cannot perform this step as it requires more direct access to internet.
+!template load file=installation/test_moose.md.template PATH=~/cluster_name/projects
 
-```
-  cd /scratch/$USER/projects/moose/scripts
-  export MOOSE_JOBS=6
-  ./update_and_rebuild_petsc.sh
-  ./update_and_rebuild_libmesh.sh
-```
+Now that you have a working MOOSE, proceed to 'New Users' to begin your tour of MOOSE!
 
-### Step 3: Build MOOSE and the app
-
-This should be as simple as going into the app directory and building using the Makefile.
-For example for MOOSE, we build the test executable as shown below
-
-```
-  cd /scratch/$USER/projects/moose/test
-  make -j6
-```
-
-## Option 3: conda (mamba) installation (not recommended, light users)
-
-!alert warning
-The [conda/mamba-based installation](conda.md) is not recommended for INL HPC, as it does not use
-optimized, architecture-specific compilers. However, if you are not seeking performance,
-and will not use more than one node (to limit the attrition of computational resources),
-you are free to use them.
-
-!alert note
-If you want to use MPI with a conda installation, you will likely need to use the `mpiexec / mpirun`
-in the conda package, not another one from a module.
-
-!alert note
-Do not use the `miniconda/anaconda` HPC module. Download and install your own conda. If you get permission
-errors when trying to install conda packages, it is likely the HPC conda module is being used.
-`module unload miniconda` should be ran to remove it.
-
-!alert warning
-The `conda` installation modifies the `.bashrc` file in a manner that is currently incompatible with
-the use of [HPC OnDemand](gen_ondemand.md). If you experience issues logging in that service, try
-commenting out the `conda` modifications to the `.bashrc` file.
+!content pagination use_title=True
+                    previous=installation/inl_hpc_index.md
+                    next=getting_started/inl_hpc_new_users.md

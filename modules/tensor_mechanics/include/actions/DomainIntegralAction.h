@@ -146,6 +146,18 @@ protected:
   bool _incremental;
   /// Whether to convert the J-integral to a stress intensity factor (K) --deprecated
   bool _convert_J_to_K;
+  /// Whether the crack lives in a functionally-graded material
+  bool _fgm_crack;
+  /// Material property name for the Youngs modulus derivative for functionally graded materials
+  MaterialPropertyName _functionally_graded_youngs_modulus_crack_dir_gradient;
+  /// Material property name for  spatially-dependent Youngs modulus for functionally graded materials
+  MaterialPropertyName _functionally_graded_youngs_modulus;
   /// Whether to create automatic differentiation objects from the action
   const bool _use_ad;
+  /**
+   * This determines if fracture integrals should be executed on nonlinear in
+   * order to grow the crack when num_xfem_updates in the executioner block
+   * is greater than 1
+   */
+  const bool _used_by_xfem_to_grow_crack;
 };

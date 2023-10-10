@@ -1,18 +1,17 @@
-<!-- MOOSE Documentation Stub: Remove this when content is added. -->
-
 # WeightedAverageAux
 
-!alert construction title=Undocumented Class
-The WeightedAverageAux has not been documented. The content contained on this page includes the
-typical automatic documentation associated with a MooseObject; however, what is contained is
-ultimately determined by what is necessary to make the documentation clear for users.
-
 !syntax description /AuxKernels/WeightedAverageAux
+
+The weighted average, $W$, of variables $\phi_i$ with weights $\omega_i$ is computed as:
+
+!equation
+W = \dfrac{\sum_i \phi_i \omega_i }{\sum_i \omega_i }
+
+!alert note
+If you need a more complex average, please consider using a [ParsedAux.md].
 
 !syntax parameters /AuxKernels/WeightedAverageAux
 
 !syntax inputs /AuxKernels/WeightedAverageAux
 
 !syntax children /AuxKernels/WeightedAverageAux
-
-!bibtex bibliography

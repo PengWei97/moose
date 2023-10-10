@@ -30,6 +30,7 @@
     distributions = 'k_dist alpha_dist S_dist Dir_dist'
     num_rows = 5
     execute_on = PRE_MULTIAPP_SETUP
+    max_procs_per_row = 1
   []
 []
 
@@ -40,6 +41,7 @@
     sampler = sample
     trainer_name = 'pod_rb'
     execute_on = 'timestep_begin final'
+    max_procs_per_app = 1
   []
 []
 
@@ -49,7 +51,6 @@
     to_multi_app = sub
     sampler = sample
     parameters = 'Materials/k/prop_values Materials/alpha/prop_values Kernels/source/value BCs/left/value'
-    to_control = 'stochastic'
     execute_on = 'timestep_begin'
     check_multiapp_execute_on = false
   []

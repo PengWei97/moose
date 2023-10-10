@@ -40,10 +40,11 @@ WCNSFVMomentumTimeDerivative::gatherRCData(const Elem & elem)
   // INSFVMomentumTimeDerivative::gatherRCData
 
   const auto elem_arg = makeElemArg(&elem);
-  const auto rho_dot = _rho_dot(elem_arg);
-  const auto var_dot = _var.dot(elem_arg);
-  const auto rho = _rho(elem_arg);
-  const auto var = _var(elem_arg);
+  const auto state = determineState();
+  const auto rho_dot = _rho_dot(elem_arg, state);
+  const auto var_dot = _var.dot(elem_arg, state);
+  const auto rho = _rho(elem_arg, state);
+  const auto var = _var(elem_arg, state);
 
   const auto dof_number = elem.dof_number(_sys.number(), _var.number(), 0);
   mooseAssert(var.derivatives()[dof_number] == 1.,
@@ -59,5 +60,5 @@ WCNSFVMomentumTimeDerivative::gatherRCData(const Elem & elem)
 
   const auto volume = _assembly.elementVolume(&elem);
   _rc_uo.addToA(&elem, _index, a * volume);
-  processResidualAndJacobian(strong_resid * volume, dof_number);
+  addResidualAndJacobian(strong_resid * volume, dof_number);
 }

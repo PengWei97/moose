@@ -46,6 +46,8 @@ public:
    * 5: the r-axis direction
    * 6: the z-axis direction
    * 7: whether there are multiple coordinate system types on the mesh
+   * 8: whether general axisymmetric coordinate axes are being used
+   * 9: whether the mesh has been transformed using the transform
    */
   typedef std::tuple<short int,
                      Real,
@@ -54,6 +56,8 @@ public:
                      int,
                      unsigned int,
                      unsigned int,
+                     short int,
+                     short int,
                      short int>
       MinimalData;
 
@@ -101,6 +105,15 @@ public:
    * @return our coordinate system
    */
   Moose::CoordinateSystemType coordinateSystem() const { return _coord_type; }
+
+  /**
+   * Set how much our domain should be translated in order to match a reference frame. In practice
+   * we choose the parent application to be the reference frame with respect to translation, e.g.
+   * the parent application origin is the reference frame origin, and we set the translation vectors
+   * of child applications to the multiapp positions parameter. Similarly to the \p setRotation with
+   * angles API, this represents a forward transformation from our domain to the reference domain
+   */
+  void setTranslationVector(const libMesh::Point & translation);
 
   /**
    * Will setup a rotation transformation. The rotation transformation will be a single 90-degree
@@ -162,6 +175,19 @@ public:
    */
   void computeRS();
 
+  /**
+   * Transforms the entire mesh with the coordinate transform
+   * This can be done to output in position, or to avoid transforming on every data point
+   * @param mesh the mesh to modify, usually the child app mesh
+   * @param translation the translation to apply to the mesh, often the app position
+   */
+  void transformMesh(MooseMesh & mesh, const libMesh::Point & translation);
+
+  /**
+   * Returns true if the app has scaling and/or rotation transformation
+   */
+  bool hasScalingOrRotationTransformation() const;
+
 private:
   /**
    * If the coordinate system type is RZ, then we return the provided argument. Otherwise we return
@@ -196,11 +222,18 @@ private:
   /// dimension collapse, and so we will error
   bool _has_different_coord_sys;
 
+  /// Whether general axisymmetric coordinate axes are being used
+  bool _using_general_rz_coord_axes;
+
   /// How much distance one mesh length unit represents, e.g. 1 cm, 1 nm, 1 ft, 5 inches
   MooseUnits _length_unit;
 
   /// The Euler angles describing rotation
   std::array<Real, 3> _euler_angles;
+
+  /// Whether the mesh has been translated and rotated. In this case, applying the transform every
+  /// time is no longer necessary
+  bool _mesh_transformed;
 
   friend class MultiAppCoordTransform;
 };
@@ -300,6 +333,9 @@ private:
   /// A pointer to the \p MooseAppCoordTransform object that describes scaling, rotation, and
   /// coordinate system transformations from the destination domain to the reference domain,
   /// e.g. transformations that occur irrespective of the existence of other applications
+  /// This attribute is currently mostly providing only the coordinate system for conversions
+  /// and sanity checking. The actual transformation of destination app points in transfers is done
+  /// by the MultiAppCoordTransform for the other direction
   const MooseAppCoordTransform * _destination_app_transform;
 
   /// Describes a forward translation transformation from our domain to the reference frame domain

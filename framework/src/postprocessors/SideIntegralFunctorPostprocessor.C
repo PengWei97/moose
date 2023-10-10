@@ -71,7 +71,8 @@ SideIntegralFunctorPostprocessorTempl<is_ad>::computeLocalContribution(const T &
   const bool has_elem = checkFunctorDefinedOnSideBlock();
 
   if (has_elem)
-    return MetaPhysicL::raw_value(_prefactor(functor_arg) * _functor(functor_arg));
+    return MetaPhysicL::raw_value(_prefactor(functor_arg, determineState()) *
+                                  _functor(functor_arg, determineState()));
   else
   {
     if (!_partial_integral)
@@ -84,7 +85,7 @@ template <bool is_ad>
 Real
 SideIntegralFunctorPostprocessorTempl<is_ad>::computeQpIntegral()
 {
-  Moose::ElemSideQpArg elem_side_qp = {_current_elem, _current_side, _qp, _qrule};
+  Moose::ElemSideQpArg elem_side_qp = {_current_elem, _current_side, _qp, _qrule, _q_point[_qp]};
   return computeLocalContribution(elem_side_qp);
 }
 

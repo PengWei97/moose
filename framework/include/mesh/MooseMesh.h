@@ -158,7 +158,7 @@ public:
   virtual void buildMesh() = 0;
 
   /**
-   * Returns MeshBase::mesh_dimsension(), (not
+   * Returns MeshBase::mesh_dimension(), (not
    * MeshBase::spatial_dimension()!) of the underlying libMesh mesh
    * object.
    */
@@ -170,6 +170,11 @@ public:
    * mesh, respectively. Likewise a 2D mesh that has non-zero z coordinates is actually 3D mesh.
    */
   virtual unsigned int effectiveSpatialDimension() const;
+
+  /**
+   * Returns the maximum element dimension on the given blocks
+   */
+  unsigned int getBlocksMaxDimension(const std::vector<SubdomainName> & blocks) const;
 
   /**
    * Returns a vector of boundary IDs for the requested element on the
@@ -504,10 +509,21 @@ public:
 
   /**
    * Calls prepare_for_use() if the underlying MeshBase object isn't prepared, then communicates
-   * various boundary information on parallel meshes. Also calls update() internally. We maintain
-   * the boolean parameter in order to maintain backwards compatability but it doesn't do anything
+   * various boundary information on parallel meshes. Also calls update() internally. Instead of
+   * calling \p prepare_for_use on the currently held \p MeshBase object, a \p mesh_to_clone can be
+   * provided. If it is provided (e.g. this method is given a non-null argument), then \p _mesh will
+   * be assigned a clone of the \p mesh_to_clone. The provided \p mesh_to_clone must already be
+   * prepared
+   * @param mesh_to_clone If nonnull, we will clone this mesh instead of preparing our current one
+   * @return Whether the libMesh mesh was prepared. This should really only be relevant in MOOSE
+   * framework contexts where we need to make a decision about what to do with the displaced mesh.
+   * If the reference mesh base object has \p prepare_for_use called (e.g. this method returns \p
+   * true when called for the reference mesh), then we must pass the reference mesh base object into
+   * this method when we call this for the displaced mesh. This is because the displaced mesh \emph
+   * must be an exact clone of the reference mesh. We have seen that \p prepare_for_use called on
+   * two previously identical meshes can result in two different meshes even with Metis partitioning
    */
-  void prepare(bool = false);
+  bool prepare(const MeshBase * mesh_to_clone);
 
   /**
    * Calls buildNodeListFromSideList(), buildNodeList(), and buildBndElemList().
@@ -615,7 +631,9 @@ public:
    * Accessor for the underlying libMesh Mesh object.
    */
   MeshBase & getMesh();
+  MeshBase & getMesh(const std::string & name);
   const MeshBase & getMesh() const;
+  const MeshBase & getMesh(const std::string & name) const;
   const MeshBase * getMeshPtr() const;
 
   /**
@@ -704,7 +722,7 @@ public:
    * Get the associated subdomainIDs for the subdomain names that are passed in.
    *
    * @param subdomain_name The names of the subdomains
-   * @return The subdomain ids from the passed subdomain name.
+   * @return The subdomain ids from the passed subdomain names.
    */
   std::vector<SubdomainID> getSubdomainIDs(const std::vector<SubdomainName> & subdomain_name) const;
 
@@ -722,7 +740,16 @@ public:
   /**
    * Return the name of a block given an id.
    */
-  const std::string & getSubdomainName(SubdomainID subdomain_id);
+  const std::string & getSubdomainName(SubdomainID subdomain_id) const;
+
+  /**
+   * Get the associated subdomainNames for the subdomain ids that are passed in.
+   *
+   * @param subdomain_ids The ids of the subdomains
+   * @return The subdomain names from the passed subdomain ids.
+   */
+  std::vector<SubdomainName>
+  getSubdomainNames(const std::vector<SubdomainID> & subdomain_ids) const;
 
   /**
    * This method sets the boundary name of the boundary based on the id parameter
@@ -1079,6 +1106,9 @@ public:
   std::set<dof_id_type> getElemIDsOnBlocks(unsigned int elem_id_index,
                                            const std::set<SubdomainID> & blks) const;
 
+  std::unordered_map<dof_id_type, std::set<dof_id_type>>
+  getElemIDMapping(const std::string & from_id_name, const std::string & to_id_name) const;
+
   ///@{ accessors for the FaceInfo objects
   unsigned int nFace() const { return _face_info.size(); }
 
@@ -1141,6 +1171,12 @@ public:
   Moose::CoordinateSystemType getCoordSystem(SubdomainID sid) const;
 
   /**
+   * Get the coordinate system from the mesh, it must be the same in all subdomains otherwise this
+   * will error
+   */
+  Moose::CoordinateSystemType getUniqueCoordSystem() const;
+
+  /**
    * Get the map from subdomain ID to coordinate system type, e.g. xyz, rz, or r-spherical
    */
   const std::map<SubdomainID, Moose::CoordinateSystemType> & getCoordSystem() const;
@@ -1155,6 +1191,36 @@ public:
    * the y-direction the coordinate axis would be y
    */
   void setAxisymmetricCoordAxis(const MooseEnum & rz_coord_axis);
+
+  /**
+   * Sets the general coordinate axes for axisymmetric blocks.
+   *
+   * This method must be used if any of the following are true:
+   * - There are multiple axisymmetric coordinate systems
+   * - Any axisymmetric coordinate system axis/direction is not the +X or +Y axis
+   * - Any axisymmetric coordinate system does not start at (0,0,0)
+   *
+   * @param[in] blocks  Subdomain names
+   * @param[in] axes  Pair of values defining the axisymmetric coordinate axis
+   *                  for each subdomain. The first value is the point on the axis
+   *                  corresponding to the origin. The second value is the direction
+   *                  vector of the axis (normalization not necessary).
+   */
+  void setGeneralAxisymmetricCoordAxes(const std::vector<SubdomainName> & blocks,
+                                       const std::vector<std::pair<Point, RealVectorValue>> & axes);
+
+  /**
+   * Gets the general axisymmetric coordinate axis for a block.
+   *
+   * @param[in] subdomain_id  Subdomain ID for which to get axisymmetric coordinate axis
+   */
+  const std::pair<Point, RealVectorValue> &
+  getGeneralAxisymmetricCoordAxis(SubdomainID subdomain_id) const;
+
+  /**
+   * Returns true if general axisymmetric coordinate axes are being used
+   */
+  bool usingGeneralAxisymmetricCoordAxes() const;
 
   /**
    * Returns the desired radial direction for RZ coordinate transformation
@@ -1197,12 +1263,20 @@ public:
   const std::unordered_map<std::pair<const Elem *, unsigned short int>, const Elem *> &
   getLowerDElemMap() const;
 
+  /**
+   * @return Whether or not this mesh comes from a split mesh
+   */
+  bool isSplit() const { return _is_split; }
+
 protected:
   /// Deprecated (DO NOT USE)
   std::vector<std::unique_ptr<GhostingFunctor>> _ghosting_functors;
 
   /// The list of active geometric relationship managers (bound to the underlying MeshBase object).
   std::vector<std::shared_ptr<RelationshipManager>> _relationship_managers;
+
+  /// Whether or not this mesh was built from another mesh
+  bool _built_from_other_mesh = false;
 
   /// Can be set to DISTRIBUTED, REPLICATED, or DEFAULT.  Determines whether
   /// the underlying libMesh mesh is a ReplicatedMesh or DistributedMesh.
@@ -1367,6 +1441,9 @@ protected:
   /// A vector holding the paired boundaries for a regular orthogonal mesh
   std::vector<std::pair<BoundaryID, BoundaryID>> _paired_boundary;
 
+  /// Whether or not we are using a (pre-)split mesh (automatically DistributedMesh)
+  const bool _is_split;
+
   void cacheInfo();
   void freeBndNodes();
   void freeBndElems();
@@ -1504,6 +1581,12 @@ private:
    */
   void updateCoordTransform();
 
+  /**
+   * Loop through all subdomain IDs and check if there is name duplication used for the subdomains
+   * with same ID. Throw out an error if any name duplication is found.
+   */
+  void checkDuplicateSubdomainNames();
+
   /// Holds mappings for volume to volume and parent side to child side
   std::map<std::pair<int, ElemType>, std::vector<std::vector<QpMap>>> _elem_type_to_refinement_map;
 
@@ -1573,6 +1656,9 @@ private:
 
   /// Storage for RZ axis selection
   unsigned int _rz_coord_axis;
+
+  /// Map of subdomain ID to general axisymmetric axis
+  std::unordered_map<SubdomainID, std::pair<Point, RealVectorValue>> _subdomain_id_to_rz_coord_axis;
 
   /// A coordinate transformation object that describes how to transform this problem's coordinate
   /// system into the canonical/reference coordinate system

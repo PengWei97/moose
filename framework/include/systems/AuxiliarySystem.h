@@ -173,12 +173,10 @@ protected:
   void computeElementalArrayVars(ExecFlagType type);
 
   template <typename AuxKernelType>
-  void computeElementalVarsHelper(const MooseObjectWarehouse<AuxKernelType> & warehouse,
-                                  const std::vector<std::vector<MooseVariableFEBase *>> & vars);
+  void computeElementalVarsHelper(const MooseObjectWarehouse<AuxKernelType> & warehouse);
 
   template <typename AuxKernelType>
-  void computeNodalVarsHelper(const MooseObjectWarehouse<AuxKernelType> & warehouse,
-                              const std::vector<std::vector<MooseVariableFEBase *>> & vars);
+  void computeNodalVarsHelper(const MooseObjectWarehouse<AuxKernelType> & warehouse);
 
   FEProblemBase & _fe_problem;
 
@@ -186,8 +184,9 @@ protected:
 
   /// solution vector from nonlinear solver
   const NumericVector<Number> * _current_solution;
-  /// Serialized version of the solution vector
-  NumericVector<Number> & _serialized_solution;
+  /// Serialized version of the solution vector, or nullptr if a
+  /// serialized solution is not needed
+  std::unique_ptr<NumericVector<Number>> _serialized_solution;
   /// solution vector for u^dot
   NumericVector<Number> * _u_dot;
   /// solution vector for u^dotdot
@@ -201,23 +200,14 @@ protected:
   /// The current states of the solution (0 = current, 1 = old, etc)
   std::vector<NumericVector<Number> *> _solution_state;
 
-  /// Whether or not a copy of the residual needs to be made
-  bool _need_serialized_solution;
-
   // Variables
   std::vector<std::vector<MooseVariableFEBase *>> _nodal_vars;
-  std::vector<std::vector<MooseVariableFEBase *>> _nodal_std_vars;
-  std::vector<std::vector<MooseVariableFEBase *>> _nodal_vec_vars;
-  std::vector<std::vector<MooseVariableFEBase *>> _nodal_array_vars;
 
   ///@{
   /**
    * Elemental variables. These may be either finite element or finite volume variables
    */
   std::vector<std::vector<MooseVariableFieldBase *>> _elem_vars;
-  std::vector<std::vector<MooseVariableFieldBase *>> _elem_std_vars;
-  std::vector<std::vector<MooseVariableFieldBase *>> _elem_vec_vars;
-  std::vector<std::vector<MooseVariableFieldBase *>> _elem_array_vars;
   ///@}
 
   // Storage for AuxScalarKernel objects

@@ -47,7 +47,7 @@ def findTestRoot(start=os.getcwd(), method=os.environ.get('METHOD', 'opt')):
     raise RuntimeError('test root directory not found in "{}"'.format(start))
 
 # This function finds a file in the herd trunk containing all the possible applications
-# thay may be built with an "up" target.  If passed the value ROOT it will simply
+# that may be built with an "up" target.  If passed the value ROOT it will simply
 # return the root directory
 def findDepApps(dep_names, use_current_only=False):
     dep_name = dep_names.split('~')[0]
@@ -250,8 +250,8 @@ class TestHarness:
 
         checks = {}
         checks['platform'] = util.getPlatforms()
+        checks['machine'] = util.getMachine()
         checks['submodules'] = util.getInitializedSubmodules(self.run_tests_dir)
-        checks['installed'] = util.checkInstalled(self.run_tests_dir)
         checks['exe_objects'] = None # This gets calculated on demand
         checks['registered_apps'] = None # This gets extracted on demand
 
@@ -266,8 +266,6 @@ class TestHarness:
             checks['vtk_version'] = 'N/A'
             checks['library_mode'] = set(['ALL'])
             checks['mesh_mode'] = set(['ALL'])
-            checks['ad_mode'] = set(['ALL'])
-            checks['ad_indexing_type'] = set(['ALL'])
             checks['dtk'] = set(['ALL'])
             checks['unique_ids'] = set(['ALL'])
             checks['vtk'] = set(['ALL'])
@@ -301,8 +299,6 @@ class TestHarness:
             checks['vtk_version'] = util.getVTKVersion(self.libmesh_dir)
             checks['library_mode'] = util.getSharedOption(self.libmesh_dir)
             checks['mesh_mode'] = util.getLibMeshConfigOption(self.libmesh_dir, 'mesh_mode')
-            checks['ad_mode'] = util.getMooseConfigOption(self.moose_dir, 'ad_mode')
-            checks['ad_indexing_type'] = util.getMooseConfigOption(self.moose_dir, 'ad_indexing_type')
             checks['dtk'] =  util.getLibMeshConfigOption(self.libmesh_dir, 'dtk')
             checks['unique_ids'] = util.getLibMeshConfigOption(self.libmesh_dir, 'unique_ids')
             checks['vtk'] =  util.getLibMeshConfigOption(self.libmesh_dir, 'vtk')
@@ -344,6 +340,9 @@ class TestHarness:
         self.options._checks = checks
 
         self.initialize(argv, app_name)
+
+        # executable is available after initalize
+        checks['installation_type'] = util.checkInstalled(self.executable, app_name)
 
         os.chdir(self._orig_cwd)
 
@@ -435,7 +434,7 @@ class TestHarness:
             # Wait for all the tests to complete (blocking)
             self.scheduler.waitFinish()
 
-            # TODO: this DOES NOT WORK WITH MAX FAILES (max failes is considered a scheduler error at the moment)
+            # TODO: this DOES NOT WORK WITH MAX FAILS (max fails is considered a scheduler error at the moment)
             if not self.scheduler.schedulerError():
                 self.cleanup()
 
@@ -520,6 +519,7 @@ class TestHarness:
         params['test_dir'] = test_dir
         params['relative_path'] = relative_path
         params['executable'] = testroot_params.get("executable", self.executable)
+        params['app_name'] = self.app_name
         params['hostname'] = self.host_name
         params['moose_dir'] = self.moose_dir
         params['moose_python_dir'] = self.moose_python_dir
@@ -923,28 +923,29 @@ class TestHarness:
         # Create the scheduler
         self.scheduler = self.factory.create(scheduler_plugin, self, plugin_params)
 
-        ## Save executable-under-test name to self.executable
+        # Save executable-under-test name to self.executable
         exec_suffix = 'Windows' if platform.system() == 'Windows' else ''
         self.executable = app_name + '-' + self.options.method + exec_suffix
+        self.app_name = app_name
+
         # if the executable has a slash - assume it is a file path
         if '/' in app_name:
             self.executable = os.path.abspath(self.executable)
         # look for executable in PATH - if not there, check other places.
-        elif shutil.which(self.executable) is None:
-            if os.path.exists(os.getcwd() + '/' + self.executable):
-                # it's in the current working directory
-                self.executable = os.getcwd() + '/' + self.executable
-            elif os.path.exists(os.path.join(self._rootdir, self.executable)):
-                # it's in the testroot file's directory
-                self.executable = self.executable
-                # we may be hopping around between multiple (module)
-                # subdirectories of tests - so the executable needs to be an
-                # absolute path.
-                self.executable = os.path.abspath(os.path.join(self._rootdir, self.executable))
-            else:
-                # it's (hopefully) in an installed location
-                mydir = os.path.dirname(os.path.realpath(__file__))
-                self.executable = os.path.join(mydir, '../../../..', 'bin', self.executable)
+        elif os.path.exists(os.path.join(os.getcwd(), self.executable)):
+            # it's in the current working directory
+            self.executable = os.getcwd() + '/' + self.executable
+        elif os.path.exists(os.path.join(self._rootdir, self.executable)):
+            # it's in the testroot file's directory
+            self.executable = self.executable
+            # we may be hopping around between multiple (module)
+            # subdirectories of tests - so the executable needs to be an
+            # absolute path.
+            self.executable = os.path.abspath(os.path.join(self._rootdir, self.executable))
+        else:
+            # it's (hopefully) in an installed location
+            mydir = os.path.dirname(os.path.realpath(__file__))
+            self.executable = os.path.join(mydir, '../../../..', 'bin', self.executable)
 
         # Save the output dir since the current working directory changes during tests
         self.output_dir = os.path.join(os.path.abspath(os.path.dirname(sys.argv[0])), self.options.output_dir)
@@ -985,7 +986,8 @@ class TestHarness:
             and not os.path.exists(self.options.results_file)):
             print('A previous run does not exist')
             sys.exit(1)
-
+        elif os.path.exists(self.options.results_file):
+            os.remove(self.options.results_file)
 
     ## Parse command line options and assign them to self.options
     def parseCLArgs(self, argv):
@@ -1151,10 +1153,6 @@ class TestHarness:
         # Update libmesh_dir to reflect arguments
         if opts.libmesh_dir:
             self.libmesh_dir = opts.libmesh_dir
-
-        # When running heavy tests, we'll make sure we use --no-report
-        if opts.heavy_tests:
-            self.options.report_skipped = False
 
         # User wants to write all output, so unify the options involved
         if opts.sep_files:

@@ -135,7 +135,7 @@ stringify(const MffdType & t)
 }
 
 void
-setSolverOptions(SolverParams & solver_params)
+setSolverOptions(const SolverParams & solver_params)
 {
   // set PETSc options implied by a solve type
   switch (solver_params._type)
@@ -176,7 +176,7 @@ petscSetupDM(NonlinearSystemBase & nl)
 {
   PetscErrorCode ierr;
   PetscBool ismoose;
-  DM dm = PETSC_NULL;
+  DM dm = LIBMESH_PETSC_NULLPTR;
 
   // Initialize the part of the DM package that's packaged with Moose; in the PETSc source tree this
   // call would be in DMInitializePackage()
@@ -229,31 +229,28 @@ addPetscOptionsFromCommandline()
 #if PETSC_VERSION_LESS_THAN(3, 7, 0)
     PetscOptionsInsert(&argc, &args, NULL);
 #else
-    PetscOptionsInsert(PETSC_NULL, &argc, &args, NULL);
+    PetscOptionsInsert(LIBMESH_PETSC_NULLPTR, &argc, &args, NULL);
 #endif
   }
 }
 
 void
-petscSetOptions(FEProblemBase & problem)
+petscSetOptions(const PetscOptions & po, const SolverParams & solver_params)
 {
-  // Reference to the options stored in FEPRoblem
-  PetscOptions & petsc = problem.getPetscOptions();
-
 #if PETSC_VERSION_LESS_THAN(3, 7, 0)
   PetscOptionsClear();
 #else
-  PetscOptionsClear(PETSC_NULL);
+  PetscOptionsClear(LIBMESH_PETSC_NULLPTR);
 #endif
 
-  setSolverOptions(problem.solverParams());
+  setSolverOptions(solver_params);
 
   // Add any additional options specified in the input file
-  for (const auto & flag : petsc.flags)
+  for (const auto & flag : po.flags)
     setSinglePetscOption(flag.rawName().c_str());
 
   // Add option pairs
-  for (auto & option : petsc.pairs)
+  for (auto & option : po.pairs)
     setSinglePetscOption(option.first, option.second);
 
   addPetscOptionsFromCommandline();
@@ -285,7 +282,7 @@ petscNonlinearConverged(SNES snes,
                         void * ctx)
 {
   FEProblemBase & problem = *static_cast<FEProblemBase *>(ctx);
-  NonlinearSystemBase & system = problem.getNonlinearSystemBase();
+  NonlinearSystemBase & system = problem.currentNonlinearSystem();
 
   // Let's be nice and always check PETSc error codes.
   PetscErrorCode ierr = 0;
@@ -497,27 +494,31 @@ petscSetKSPDefaults(FEProblemBase & problem, KSP ksp)
 void
 petscSetDefaults(FEProblemBase & problem)
 {
-  // dig out PETSc solver
-  NonlinearSystemBase & nl = problem.getNonlinearSystemBase();
-  PetscNonlinearSolver<Number> * petsc_solver =
-      dynamic_cast<PetscNonlinearSolver<Number> *>(nl.nonlinearSolver());
-  SNES snes = petsc_solver->snes();
-  KSP ksp;
-  SNESGetKSP(snes, &ksp);
-
-  SNESSetMaxLinearSolveFailures(snes, 1000000);
-
-  // In 3.0.0, the context pointer must actually be used, and the
-  // final argument to KSPSetConvergenceTest() is a pointer to a
-  // routine for destroying said private data context.  In this case,
-  // we use the default context provided by PETSc in addition to
-  // a few other tests.
+  for (auto nl_index : make_range(problem.numNonlinearSystems()))
   {
-    auto ierr = SNESSetConvergenceTest(snes, petscNonlinearConverged, &problem, PETSC_NULL);
-    CHKERRABORT(nl.comm().get(), ierr);
-  }
+    // dig out PETSc solver
+    NonlinearSystemBase & nl = problem.getNonlinearSystemBase(nl_index);
+    PetscNonlinearSolver<Number> * petsc_solver =
+        dynamic_cast<PetscNonlinearSolver<Number> *>(nl.nonlinearSolver());
+    SNES snes = petsc_solver->snes();
+    KSP ksp;
+    SNESGetKSP(snes, &ksp);
 
-  petscSetKSPDefaults(problem, ksp);
+    SNESSetMaxLinearSolveFailures(snes, 1000000);
+
+    // In 3.0.0, the context pointer must actually be used, and the
+    // final argument to KSPSetConvergenceTest() is a pointer to a
+    // routine for destroying said private data context.  In this case,
+    // we use the default context provided by PETSc in addition to
+    // a few other tests.
+    {
+      auto ierr =
+          SNESSetConvergenceTest(snes, petscNonlinearConverged, &problem, LIBMESH_PETSC_NULLPTR);
+      CHKERRABORT(nl.comm().get(), ierr);
+    }
+
+    petscSetKSPDefaults(problem, ksp);
+  }
 }
 
 void
@@ -540,20 +541,21 @@ storePetscOptions(FEProblemBase & fe_problem, const InputParameters & params)
           Moose::stringToEnum<Moose::LineSearchType>(line_search);
       fe_problem.solverParams()._line_search = enum_line_search;
       if (enum_line_search == LS_CONTACT || enum_line_search == LS_PROJECT)
-      {
-        NonlinearImplicitSystem * nl_system =
-            dynamic_cast<NonlinearImplicitSystem *>(&fe_problem.getNonlinearSystemBase().system());
-        if (!nl_system)
-          mooseError("You've requested a line search but you must be solving an EigenProblem. "
-                     "These two things are not consistent.");
-        PetscNonlinearSolver<Real> * petsc_nonlinear_solver =
-            dynamic_cast<PetscNonlinearSolver<Real> *>(nl_system->nonlinear_solver.get());
-        if (!petsc_nonlinear_solver)
-          mooseError("Currently the MOOSE line searches all use Petsc, so you "
-                     "must use Petsc as your non-linear solver.");
-        petsc_nonlinear_solver->linesearch_object =
-            std::make_unique<ComputeLineSearchObjectWrapper>(fe_problem);
-      }
+        for (auto nl_index : make_range(fe_problem.numNonlinearSystems()))
+        {
+          NonlinearImplicitSystem * nl_system = dynamic_cast<NonlinearImplicitSystem *>(
+              &fe_problem.getNonlinearSystemBase(nl_index).system());
+          if (!nl_system)
+            mooseError("You've requested a line search but you must be solving an EigenProblem. "
+                       "These two things are not consistent.");
+          PetscNonlinearSolver<Real> * petsc_nonlinear_solver =
+              dynamic_cast<PetscNonlinearSolver<Real> *>(nl_system->nonlinear_solver.get());
+          if (!petsc_nonlinear_solver)
+            mooseError("Currently the MOOSE line searches all use Petsc, so you "
+                       "must use Petsc as your non-linear solver.");
+          petsc_nonlinear_solver->linesearch_object =
+              std::make_unique<ComputeLineSearchObjectWrapper>(fe_problem);
+        }
     }
   }
 
@@ -572,8 +574,18 @@ storePetscOptions(FEProblemBase & fe_problem, const InputParameters & params)
   // solve
   Moose::PetscSupport::PetscOptions & po = fe_problem.getPetscOptions();
 
+  // First process the single petsc options/flags
+  processPetscFlags(petsc_options, po);
+
+  // Then process the option-value pairs
+  processPetscPairs(petsc_pair_options, fe_problem.mesh().dimension(), po);
+}
+
+void
+processPetscFlags(const MultiMooseEnum & petsc_flags, PetscOptions & po)
+{
   // Update the PETSc single flags
-  for (const auto & option : petsc_options)
+  for (const auto & option : petsc_flags)
   {
     /**
      * "-log_summary" cannot be used in the input file. This option needs to be set when PETSc is
@@ -607,7 +619,13 @@ storePetscOptions(FEProblemBase & fe_problem, const InputParameters & params)
     if (!po.flags.contains(option))
       po.flags.push_back(option);
   }
+}
 
+void
+processPetscPairs(const std::vector<std::pair<MooseEnumItem, std::string>> & petsc_pair_options,
+                  const unsigned int mesh_dimension,
+                  PetscOptions & po)
+{
   // the boolean in these pairs denote whether the user has specified any of the reason flags in the
   // input file
   std::array<std::pair<bool, std::string>, 2> reason_flags = {
@@ -633,6 +651,10 @@ storePetscOptions(FEProblemBase & fe_problem, const InputParameters & params)
   bool hmg_found = false;
   bool matptap_found = false;
   bool hmg_strong_threshold_found = false;
+#endif
+#if !PETSC_VERSION_LESS_THAN(3, 19, 2)
+  // Check for if users have set the options_left option
+  bool options_left_set = false;
 #endif
   std::vector<std::pair<std::string, std::string>> new_options;
 
@@ -662,9 +684,15 @@ storePetscOptions(FEProblemBase & fe_problem, const InputParameters & params)
 
         // MPIAIJ for PETSc 3.12.0: -matptap_via
         // MAIJ for PETSc 3.12.0: -matmaijptap_via
-        // MPIAIJ for PETSc 3.13 or higher: -matptap_via, -matproduct_ptap_via
-        // MAIJ for PETSc 3.13 or higher: -matproduct_ptap_via
-#if !PETSC_VERSION_LESS_THAN(3, 13, 0)
+        // MPIAIJ for PETSc 3.13 to 3.16: -matptap_via, -matproduct_ptap_via
+        // MAIJ for PETSc 3.13 to 3.16: -matproduct_ptap_via
+        // MPIAIJ for PETSc 3.17 and higher: -matptap_via, -mat_product_algorithm
+        // MAIJ for PETSc 3.17 and higher: -mat_product_algorithm
+#if !PETSC_VERSION_LESS_THAN(3, 17, 0)
+      if (hmg_found && (option.first == "-matptap_via" || option.first == "-matmaijptap_via" ||
+                        option.first == "-matproduct_ptap_via"))
+        new_options.emplace_back("-mat_product_algorithm", option.second);
+#elif !PETSC_VERSION_LESS_THAN(3, 13, 0)
       if (hmg_found && (option.first == "-matptap_via" || option.first == "-matmaijptap_via"))
         new_options.emplace_back("-matproduct_ptap_via", option.second);
 #else
@@ -676,7 +704,7 @@ storePetscOptions(FEProblemBase & fe_problem, const InputParameters & params)
 #endif
 
       if (option.first == "-matptap_via" || option.first == "-matmaijptap_via" ||
-          option.first == "-matproduct_ptap_via")
+          option.first == "-matproduct_ptap_via" || option.first == "-mat_product_algorithm")
         matptap_found = true;
 
       // For 3D problems, we need to set this 0.7
@@ -697,6 +725,11 @@ storePetscOptions(FEProblemBase & fe_problem, const InputParameters & params)
         fact_pattern_found = true;
       if (option.first == "-mat_superlu_dist_replacetinypivot")
         tiny_pivot_found = true;
+#endif
+
+#if !PETSC_VERSION_LESS_THAN(3, 19, 2)
+      if (option.first == "-options_left")
+        options_left_set = true;
 #endif
 
       if (!new_options.empty())
@@ -726,14 +759,14 @@ storePetscOptions(FEProblemBase & fe_problem, const InputParameters & params)
 
   // When running a 3D mesh with boomeramg, it is almost always best to supply a strong threshold
   // value. We will provide that for the user here if they haven't supplied it themselves.
-  if (boomeramg_found && !strong_threshold_found && fe_problem.mesh().dimension() == 3)
+  if (boomeramg_found && !strong_threshold_found && mesh_dimension == 3)
   {
     po.pairs.emplace_back("-pc_hypre_boomeramg_strong_threshold", "0.7");
     pc_description += "strong_threshold: 0.7 (auto)";
   }
 
 #if !PETSC_VERSION_LESS_THAN(3, 12, 0)
-  if (hmg_found && !hmg_strong_threshold_found && fe_problem.mesh().dimension() == 3)
+  if (hmg_found && !hmg_strong_threshold_found && mesh_dimension == 3)
   {
     po.pairs.emplace_back("-hmg_inner_pc_hypre_boomeramg_strong_threshold", "0.7");
     pc_description += "strong_threshold: 0.7 (auto)";
@@ -743,7 +776,9 @@ storePetscOptions(FEProblemBase & fe_problem, const InputParameters & params)
   // Let us switch to use new algorithm
   if (hmg_found && !matptap_found)
   {
-#if !PETSC_VERSION_LESS_THAN(3, 13, 0)
+#if !PETSC_VERSION_LESS_THAN(3, 17, 0)
+    po.pairs.emplace_back("-mat_product_algorithm", "allatonce");
+#elif !PETSC_VERSION_LESS_THAN(3, 13, 0)
     po.pairs.emplace_back("-matproduct_ptap_via", "allatonce");
 #else
     po.pairs.emplace_back("-matptap_via", "allatonce");
@@ -776,6 +811,13 @@ storePetscOptions(FEProblemBase & fe_problem, const InputParameters & params)
 #endif
   // Set Preconditioner description
   po.pc_description = pc_description;
+
+  // Turn off default options_left warnings added in 3.19.3 pre-release for all PETSc builds
+  // (PETSc commit: 59f199a7), unless the user has set a preference.
+#if !PETSC_VERSION_LESS_THAN(3, 19, 2)
+  if (!options_left_set)
+    po.pairs.emplace_back("-options_left", "0");
+#endif
 }
 
 std::set<std::string>
@@ -875,11 +917,12 @@ setSinglePetscOption(const std::string & name, const std::string & value)
   PetscErrorCode ierr;
 
 #if PETSC_VERSION_LESS_THAN(3, 7, 0)
-  ierr = PetscOptionsSetValue(name.c_str(), value == "" ? PETSC_NULL : value.c_str());
+  ierr = PetscOptionsSetValue(name.c_str(), value == "" ? LIBMESH_PETSC_NULLPTR : value.c_str());
 #else
   // PETSc 3.7.0 and later version.  First argument is the options
   // database to use, NULL indicates the default global database.
-  ierr = PetscOptionsSetValue(PETSC_NULL, name.c_str(), value == "" ? PETSC_NULL : value.c_str());
+  ierr = PetscOptionsSetValue(
+      LIBMESH_PETSC_NULLPTR, name.c_str(), value == "" ? LIBMESH_PETSC_NULLPTR : value.c_str());
 #endif
 
   // Not convenient to use the usual error checking macro, because we

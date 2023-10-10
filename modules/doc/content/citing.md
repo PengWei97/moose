@@ -85,6 +85,22 @@ url       = {https://doi.org/10.1080/00295450.2020.1826804}
 }
 ```
 
+## Machine Learning Integration using Libtorch
+
+If you are using Libtorch APIs within MOOSE, please consider citing:
+
+```
+@article{german2023enabling,
+  title={Enabling scientific machine learning in MOOSE using Libtorch},
+  author={German, P{\'e}ter and Yushu, Dewen},
+  journal={SoftwareX},
+  volume={23},
+  pages={101489},
+  year={2023},
+  publisher={Elsevier}
+}
+```
+
 ## Modules
 
 If you are using a physics module for your application, please cite the appropriate references
@@ -92,31 +108,22 @@ as listed here.
 
 ### Navier-Stokes
 
-If you use the finite volume incompressible, compressible and weakly compressible implementations in the Navier-Stokes module, please cite:
+The following document summarizes the main capabilities available in the Navier-Stokes module:
 
 ```
-@techreport{,
-      title = {NEAMS-TH-CRAB},
-     author = {Guillaume L. Giudicelli, Alexander D. Lindsay, Ramiro Freile, Jieun Lee},
-       year = {2021},
-     number = {INL/EXT-21-62895},
-institution = {Idaho National Laboratory}
+@article{lindsay2023moose,
+  title={MOOSE Navier--Stokes module},
+  author={Lindsay, Alexander and Giudicelli, Guillaume and German, Peter and Peterson, John and Wang, Yaqi and Freile, Ramiro and Andrs, David and Balestra, Paolo and Tano, Mauricio and Hu, Rui and others},
+  journal={SoftwareX},
+  volume={23},
+  pages={101503},
+  year={2023},
+  publisher={Elsevier}
 }
 ```
 
-If you use the finite volume incompressible porous flow equations implementation in the Navier-Stokes module, please cite:
-
-```
-@inproceedings{,
-    title = {Coupled Multiphysics Transient Simulations of the MK1-FHR reactor Using the Finite Volume Capabilities of the MOOSE Framework},
-   author = {Guillaume Giudicelli, Alexander Lindsay, Paolo Balestra, Robert Carlsen, Javier Ortensi, Derek Gaston, Mark DeHart, Abdalla Abou-Jaoude, April J. Novak},
-     year = {2021},
-booktitle = {Mathematics and Computation for Nuclear Science and Engineering},
-publisher = {American Nuclear Society}
-}
-```
-
-If you use the finite element incompressible portion of the Navier-Stokes module, please cite:
+If you use the finite element incompressible portion of the Navier-Stokes module, please considering citing
+the following paper as well:
 
 ```
 @article{peterson2018overview,
@@ -128,6 +135,19 @@ If you use the finite element incompressible portion of the Navier-Stokes module
    volume = {119},
     pages = {68--92},
 publisher = {Elsevier}
+}
+```
+
+For a more detailed summary of the finite volume incompressible,
+compressible and weakly compressible implementations in the Navier-Stokes module, please cite:
+
+```
+@techreport{,
+      title = {NEAMS-TH-CRAB},
+     author = {Guillaume L. Giudicelli, Alexander D. Lindsay, Ramiro Freile, Jieun Lee},
+       year = {2021},
+     number = {INL/EXT-21-62895},
+institution = {Idaho National Laboratory}
 }
 ```
 
@@ -291,19 +311,20 @@ journal = {Computational Mechanics},
 
 ### Reactor
 
-The following technical report documents functionalities and demonstration of the MOOSE Reactor module.
+The following paper documents functionalities and demonstration of the MOOSE Reactor module.
 
 ```
-@TechReport{shemon2021moose,
-  author      = {Shemon, E. and Jung, Y. S. and Kumar, S. and Miao, Y. and Mo, K. and Oaks, A. and Richards, S.},
-  institution = {Argonne National Laboratory, ANL/NSE-21/43},
-  title       = {MOOSE Framework Meshing Enhancements to Support Reactor Analysis},
-  year        = {2021},
-  month       = sep,
-  type        = {techreport},
-  doi         = {10.2172/1821454},
-  place       = {United States},
-  url         = {https://www.osti.gov/biblio/1821454},
+@article{shemon2023reactor,
+ author = {Emily Shemon and Yinbin Miao and Shikhar Kumar and Kun Mo and Yeon Sang Jung and Aaron Oaks and Scott Richards and Guillaume Giudicelli and Logan Harbour and Roy Stogner},
+  title = {MOOSE Reactor Module: An Open-Source Capability for Meshing Nuclear Reactor Geometries},
+journal = {Nuclear Science and Engineering},
+ volume = {0},
+ number = {0},
+  pages = {1-25},
+  year  = {2023},
+    doi = {10.1080/00295639.2022.2149231},
+    URL = {https://doi.org/10.1080/00295639.2022.2149231},
+ eprint = {https://doi.org/10.1080/00295639.2022.2149231}
 }
 ```
 
@@ -326,15 +347,46 @@ journal = {Earthquake Engineering and Structural Dynamics},
 
 ### Electromagnetics Module
 
-The following PhD dissertation documents the initial development, function,
-verification, and validation of the electromagnetics module.
+The following PhD dissertation documents the initial development, function, verification, and validation
+of the electromagnetics module.
 
 ```
-@phdthesis{icenhour2022electromagnetics,
+@phdthesis{icenhour2023electromagnetics,
   author = {Icenhour, Casey T.},
   title = {Development and Validation of Open Source Software for Electromagnetics Simulation and Multiphysics Coupling},
   school = {North Carolina State University},
-  year = {2022},
-  addendum = {Unpublished thesis}
+  year = {2023},
+  url = {https://www.lib.ncsu.edu/resolver/1840.20/40985}
+}
+```
+
+### Stochastic Tools Module
+
+The following paper documents functionalities and demonstration of the MOOSE stochastic tools module.
+
+```
+@article{slaughter2023moose,
+  title={MOOSE Stochastic Tools: A module for performing parallel, memory-efficient in situ stochastic simulations},
+  author={Slaughter, Andrew E and Prince, Zachary M and German, Peter and Halvic, Ian and Jiang, Wen and Spencer, Benjamin W and Dhulipala, Somayajulu LN and Gaston, Derek R},
+  journal={SoftwareX},
+  volume={22},
+  pages={101345},
+  year={2023},
+  publisher={Elsevier}
+}
+```
+
+### Phase Field Module
+
+```
+@article{schwen2023phasefield,
+  author = {D. Schwen and L.K. Aagesen and J.W. Peterson and M.R. Tonks}
+  title = {Rapid multiphase-field model development using a modular free energy based approach with automatic differentiation in MOOSE/MARMOT},
+  journal = {Computational Materials Science},
+  volume = {132},
+  pages = {36-45},
+  year = {2017},
+  doi = {https://doi.org/10.1016/j.commatsci.2017.02.017},
+  url = {https://www.sciencedirect.com/science/article/pii/S0927025617300885},
 }
 ```

@@ -1,18 +1,22 @@
-<!-- MOOSE Documentation Stub: Remove this when content is added. -->
-
 # OneD3EqnMomentumGravity
 
-!alert construction title=Undocumented Class
-The OneD3EqnMomentumGravity has not been documented. The content contained on this page includes the
-typical automatic documentation associated with a MooseObject; however, what is contained is
-ultimately determined by what is necessary to make the documentation clear for users.
-
 !syntax description /Kernels/OneD3EqnMomentumGravity
+
+The force term from gravity in the momentum equation strong form is:
+
+!equation
+\rho A \vec{g} \cdot \vec{d}
+
+where $\rho$ is the density, $A$ the area of the component, $\vec{g}$ the gravity vector and $\vec{d}$ the
+direction of the flow component.
+
+!alert note
+In THM, most kernels are added automatically by components. This kernel is no-longer in use, having
+been replaced by its [AD](automatic_differentiation/index.md) counterpart [ADOneD3EqnMomentumGravity.md],
+designed to provide numerically exact contributions to the Jacobian.
 
 !syntax parameters /Kernels/OneD3EqnMomentumGravity
 
 !syntax inputs /Kernels/OneD3EqnMomentumGravity
 
 !syntax children /Kernels/OneD3EqnMomentumGravity
-
-!bibtex bibliography

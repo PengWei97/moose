@@ -6,7 +6,7 @@
 - Scientists are adept at creating applications in their domain
 - What about collaborating across research groups and/or disciplines?
 
-  - Head in the sand?
+  - Iterating between design teams?
   - Development of "coupling" codes?
   - Is there something better?
 
@@ -80,6 +80,7 @@ NodalKernels\\
 Outputs\\
 Parser\\
 Partitioner\\
+Positions\\
 Postprocessors\\
 Preconditioners\\
 Predictors\\
@@ -87,6 +88,7 @@ Predictors\\
 
 !col! small=12 medium=6 large=3 style=margin-right:10%;
 Problems\\
+Reporters\\
 RelationshipManagers\\
 Samplers\\
 Splits\\
@@ -109,16 +111,16 @@ VectorPostprocessors\\
 
 !---
 
-## MOOSE Physics Modules
+## MOOSE Modules
 
-!style halign=center
+!style! halign=center
+!row!
+!col! small=12 medium=6 large=3 style=margin-left:10%;
++Physics+\\
 Chemical Reactions\\
 Contact\\
 Electromagnetics\\
-External PETSc Solver\\
-Fluid Properties\\
 Fluid Structure Interaction (FSI)\\
-Function Expansion Tools\\
 Geochemistry\\
 Heat Conduction\\
 Level Set\\
@@ -126,14 +128,34 @@ Navier Stokes\\
 Peridynamics\\
 Phase Field\\
 Porous Flow\\
-Ray Tracing\\
-rDG\\
-Reactor\\
-Stochastic Tools\\
 Tensor (solid) Mechanics\\
 Thermal Hydraulics\\
-XFEM
+!col-end!
+
+!col! small=12 medium=6 large=3 style=margin-right:2%;
++Numerics+\\
+External PETSc Solver\\
+Function Expansion Tools\\
+Optimization\\
+Ray Tracing\\
+rDG\\
+Stochastic Tools\\
+XFEM\\
+!col-end!
+
+!col! small=12 medium=6 large=3 style=margin-right:10%;
++Physics support+\\
+Fluid Properties\\
+Solid Properties\\
+Reactor\\
+!col-end!
+!row-end!
+!style-end!
 
 !---
 
+## The MOOSE ecosystem
+
 !media darcy_thermo_mech/moose_herd_2022.png style=margin-left:auto;margin-right:auto;display:block;
+
+Many are open-source on GitHub. Some are accessible through the [NCRC](https://inl.gov/ncrc/)

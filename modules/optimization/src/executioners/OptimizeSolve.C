@@ -10,6 +10,7 @@
 #include "OptimizeSolve.h"
 #include "OptimizationAppTypes.h"
 #include "OptimizationReporterBase.h"
+#include "Steady.h"
 
 #include "libmesh/petsc_vector.h"
 #include "libmesh/petsc_matrix.h"
@@ -18,8 +19,9 @@ InputParameters
 OptimizeSolve::validParams()
 {
   InputParameters params = emptyInputParameters();
-  MooseEnum tao_solver_enum("taontr taobntr taobncg taonls taobnls taontl taobntl taolmvm "
-                            "taoblmvm taonm taobqnls taoowlqn taogpcg taobmrm");
+  MooseEnum tao_solver_enum(
+      "taontr taobntr taobncg taonls taobnls taobqnktr taontl taobntl taolmvm "
+      "taoblmvm taonm taobqnls taoowlqn taogpcg taobmrm");
   params.addRequiredParam<MooseEnum>(
       "tao_solver", tao_solver_enum, "Tao solver to use for optimization.");
   ExecFlagEnum exec_enum = ExecFlagEnum();
@@ -95,6 +97,9 @@ OptimizeSolve::taoSolve()
     case TaoSolverEnum::BOUNDED_NEWTON_LINE_SEARCH:
       ierr = TaoSetType(_tao, TAOBNLS);
       break;
+    case TaoSolverEnum::BOUNDED_QUASI_NEWTON_TRUST_REGION:
+      ierr = TaoSetType(_tao, TAOBQNKTR);
+      break;
     case TaoSolverEnum::NEWTON_TRUST_LINE:
       ierr = TaoSetType(_tao, TAONTL);
       break;
@@ -135,20 +140,36 @@ OptimizeSolve::taoSolve()
   CHKERRQ(ierr);
 
   // Set objective and gradient functions
+#if !PETSC_VERSION_LESS_THAN(3, 17, 0)
+  ierr = TaoSetObjective(_tao, objectiveFunctionWrapper, this);
+#else
   ierr = TaoSetObjectiveRoutine(_tao, objectiveFunctionWrapper, this);
+#endif
   CHKERRQ(ierr);
+#if !PETSC_VERSION_LESS_THAN(3, 17, 0)
+  ierr = TaoSetObjectiveAndGradient(_tao, NULL, objectiveAndGradientFunctionWrapper, this);
+#else
   ierr = TaoSetObjectiveAndGradientRoutine(_tao, objectiveAndGradientFunctionWrapper, this);
+#endif
   CHKERRQ(ierr);
 
   // Set matrix-free version of the Hessian function
   ierr = MatCreateShell(_my_comm.get(), _ndof, _ndof, _ndof, _ndof, this, &_hessian);
   CHKERRQ(ierr);
   // Link matrix-free Hessian to Tao
+#if !PETSC_VERSION_LESS_THAN(3, 17, 0)
+  ierr = TaoSetHessian(_tao, _hessian, _hessian, hessianFunctionWrapper, this);
+#else
   ierr = TaoSetHessianRoutine(_tao, _hessian, _hessian, hessianFunctionWrapper, this);
+#endif
   CHKERRQ(ierr);
 
   // Set initial guess
+#if !PETSC_VERSION_LESS_THAN(3, 17, 0)
+  ierr = TaoSetSolution(_tao, _parameters->vec());
+#else
   ierr = TaoSetInitialVector(_tao, _parameters->vec());
+#endif
   CHKERRQ(ierr);
 
   // Set petsc options
@@ -235,6 +256,15 @@ OptimizeSolve::setTaoSolutionStatus(double f, int its, double gnorm, double cnor
   _obj_iterate = 0;
   _grad_iterate = 0;
   _hess_iterate = 0;
+
+  // Pass down the iteration number if the subapp is of the Steady/SteadyAndAdjoint type.
+  // This enables exodus per-iteration output.
+  for (auto & sub_app : _app.getExecutioner()->feProblem().getMultiAppWarehouse().getObjects())
+  {
+    if (auto steady = dynamic_cast<Steady *>(sub_app->getExecutioner(0)))
+      steady->setIterationNumberOutput((unsigned int)its);
+  }
+
   // print verbose per iteration output
   if (_verbose)
     _console << "TAO SOLVER: iteration=" << its << "\tf=" << f << "\tgnorm=" << gnorm
@@ -249,6 +279,7 @@ OptimizeSolve::monitor(Tao tao, void * ctx)
   PetscReal f, gnorm, cnorm, xdiff;
 
   TaoGetSolutionStatus(tao, &its, &f, &gnorm, &cnorm, &xdiff, &reason);
+
   auto * solver = static_cast<OptimizeSolve *>(ctx);
   solver->setTaoSolutionStatus((double)f, (int)its, (double)gnorm, (double)cnorm, (double)xdiff);
 
@@ -332,7 +363,6 @@ OptimizeSolve::objectiveFunction()
     _inner_solve->solve();
 
   _obj_iterate++;
-
   return _obj_function->computeObjective();
 }
 
@@ -390,9 +420,6 @@ OptimizeSolve::applyHessian(libMesh::PetscVector<Number> & s, libMesh::PetscVect
 PetscErrorCode
 OptimizeSolve::variableBounds(Tao tao)
 {
-  // get bounds
-  if (!_obj_function->hasBounds())
-    return 0;
   unsigned int sz = _obj_function->getNumParams();
 
   libMesh::PetscVector<Number> xl(_my_comm, sz);

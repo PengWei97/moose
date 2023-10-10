@@ -7,7 +7,7 @@
     [train]
       type = CheckFiles
       input = train.i
-      check_files = 'train_out_train.rd'
+      check_files = 'train_out_train.rd/data'
       allow_test_objects = true
       detail = 'training using known 3D data '
     []
@@ -32,6 +32,6 @@
     type = JSONDiff
     input = poly_reg_vec.i
     jsondiff = 'poly_reg_vec_out.json'
-    requirement = 'The sytem shall be able to create polynomial regression surrogate with vector-type response.'
+    requirement = 'The system shall be able to create polynomial regression surrogate with vector-type response.'
   []
 []

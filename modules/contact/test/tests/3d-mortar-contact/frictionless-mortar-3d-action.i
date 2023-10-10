@@ -8,7 +8,6 @@ offset = 0.00
 []
 
 [Mesh]
-  second_order = false
   [top_block]
     type = GeneratedMeshGenerator
     dim = 3
@@ -173,7 +172,6 @@ offset = 0.00
     secondary = 'top_bottom'
     formulation = mortar
     model = frictionless
-    interpolate_normals = false
   []
 []
 
@@ -264,6 +262,11 @@ offset = 0.00
     variable = mortar_normal_lm
     subdomain = 'mortar_secondary_subdomain'
     execute_on = 'nonlinear timestep_end'
+  []
+  [lambda]
+    type = ElementAverageValue
+    variable = mortar_normal_lm
+    block = 'mortar_secondary_subdomain'
   []
 []
 

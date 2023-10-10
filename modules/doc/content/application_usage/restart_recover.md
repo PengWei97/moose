@@ -45,7 +45,7 @@
 ## Enabling Checkpoints
 
 - Advanced restart in MOOSE requires checkpoint files.
-- To enable automatic checkpoints using the default options (every time step, and keep last two) in your simulation simply add the following flag to your input file:
+- To enable constant checkpoint writing using the default options (every time step, and keep last two) in your simulation simply add the following flag to your input file:
 
 ```puppet
 [Outputs]
@@ -67,6 +67,10 @@ For a complete list see the Doxygen page for Checkpoint. * You should always set
 []
 ```
 
+MOOSE also automatically creates a checkpoint object in the background that can manually write out a checkpoint file at any time in case of emergency, i.e. a long test that must be aborted due to external circumstances. To do this, find the process ID by running `ps` in another terminal window, and searching for your currently running MOOSE instance. Once you have located this PID, enter `kill -s USR1 <yourPIDhere>`. On the next time step, MOOSE will output its current progress into a checkpoint file that can be used later to restart the test from the same position.
+
+Note that while this command is called `kill`, it does not actually terminate the MOOSE process if used with this syntax, it will merely trigger the MOOSE instance to write out to a checkpoint.
+
 ## Advanced Restart
 
 - This method is best suited for situations when the mesh from the previous simulation and the current simulation match but all variables should be reloaded and all stateful data should be restored.
@@ -76,7 +80,7 @@ For a complete list see the Doxygen page for Checkpoint. * You should always set
 ```puppet
 [Mesh]
   #Serial number should match corresponding Executioner parameter
-  file = out_cp/0010_mesh.cpr
+  file = out_cp/0010-mesh.cpr
   #This method of restart is only supported on serial meshes
   distribution = serial
 []

@@ -22,8 +22,6 @@ class FEProblemBase;
 class Function;
 class InputParameters;
 class MooseObject;
-template <typename>
-class FunctionTempl;
 
 template <typename T>
 InputParameters validParams();
@@ -56,28 +54,27 @@ public:
 
   /**
    * Get a function with a given name
-   * @tparam T the type that this function, when evaluated, returns
-   * @param name The name of the parameter key of the function to retrieve
-   * @return The function with name associated with the parameter 'name'
-   */
-  template <typename T>
-  const FunctionTempl<T> & getFunction(const std::string & name) const;
-
-  /**
-   * Get a function with a given name
    * @param name The name of the function to retrieve
    * @return The function with name 'name'
    */
   const Function & getFunctionByName(const FunctionName & name) const;
 
   /**
-   * Get a function with a given name
-   * @tparam T the type that this function, when evaluated, returns
-   * @param name The name of the function to retrieve
-   * @return The function with name 'name'
+   * Determine if the function exists
+   *
+   * @param param_name The name of the function parameter
+   * @param index The index of the function
+   * @return True if the function exists
    */
-  template <typename T>
-  const FunctionTempl<T> & getFunctionByName(const FunctionName & name) const;
+  bool hasFunction(const std::string & param_name) const;
+
+  /**
+   * Determine if the function exists
+   *
+   * @param name The name of the function
+   * @return True if the function exists
+   */
+  bool hasFunctionByName(const FunctionName & name) const;
 
 private:
   /// Parameters of the object with this interface

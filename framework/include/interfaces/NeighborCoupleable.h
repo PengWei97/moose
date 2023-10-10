@@ -46,6 +46,20 @@ public:
                                                          unsigned int comp = 0) const;
 
   /**
+   * Retrieve the coupled neighbor variable value whether AD or not
+   */
+  template <bool is_ad>
+  const auto & coupledGenericNeighborValue(const std::string & var_name,
+                                           unsigned int comp = 0) const;
+
+  /**
+   * Retrieve the coupled neighbor variable gradient whether AD or not
+   */
+  template <bool is_ad>
+  const auto & coupledGenericNeighborGradient(const std::string & var_name,
+                                              unsigned int comp = 0) const;
+
+  /**
    * Get the time derivative of the coupled neighbor variable value for \p var_name with derivative
    * information for automatic differentiation objects
    */
@@ -114,3 +128,25 @@ public:
 protected:
   bool _neighbor_nodal;
 };
+
+template <bool is_ad>
+const auto &
+NeighborCoupleable::coupledGenericNeighborValue(const std::string & var_name,
+                                                const unsigned int comp) const
+{
+  if constexpr (is_ad)
+    return adCoupledNeighborValue(var_name, comp);
+  else
+    return coupledNeighborValue(var_name, comp);
+}
+
+template <bool is_ad>
+const auto &
+NeighborCoupleable::coupledGenericNeighborGradient(const std::string & var_name,
+                                                   const unsigned int comp) const
+{
+  if constexpr (is_ad)
+    return adCoupledNeighborGradient(var_name, comp);
+  else
+    return coupledNeighborGradient(var_name, comp);
+}

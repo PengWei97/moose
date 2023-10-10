@@ -20,6 +20,7 @@
 #include <vector>
 #include <string>
 #include <iomanip>
+#include <optional>
 
 // Forward declarations
 class ActionWarehouse;
@@ -59,8 +60,12 @@ public:
   };
 
   Parser(MooseApp & app, ActionWarehouse & action_wh);
-
   virtual ~Parser();
+
+  /**
+   * Parameters that are processed directly by the Parser and are valid anywhere in the input
+   */
+  static InputParameters validParams();
 
   /**
    * Return the primary (first) filename that was parsed
@@ -68,10 +73,11 @@ public:
   std::string getPrimaryFileName(bool stripLeadingPath = true) const;
 
   /**
-   * Parse an input file consisting of hit syntax and setup objects
+   * Parse an input file (or text string if provided) consisting of hit syntax and setup objects
    * in the MOOSE derived application
    */
-  void parse(const std::vector<std::string> & input_filenames);
+  void parse(const std::vector<std::string> & input_filenames,
+             const std::optional<std::string> & input_text = std::nullopt);
 
   /**
    * This function attempts to extract values from the input file based on the contents of
@@ -262,8 +268,14 @@ protected:
   /// The current stream object used for capturing errors during extraction
   std::ostringstream * _current_error_stream;
 
+  /// Tracks whether a deprecated param has had its warning message printed already.
+  std::unordered_set<std::string> _deprec_param_tracker;
+
 private:
   std::string _errmsg;
   std::string _warnmsg;
   void walkRaw(std::string fullpath, std::string nodepath, hit::Node * n);
+
+  // Allow the MooseServer class to access the root node of the hit parse tree
+  friend class MooseServer;
 };

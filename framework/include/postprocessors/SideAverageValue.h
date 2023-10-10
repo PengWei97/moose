@@ -26,11 +26,18 @@ public:
 
   virtual void initialize() override;
   virtual void execute() override;
-  virtual Real getValue() override;
+  using Postprocessor::getValue;
+  virtual Real getValue() const override;
   virtual void threadJoin(const UserObject & y) override;
   virtual void finalize() override;
 
 protected:
+  /**
+   * Compute the volume of the current face
+   * @return volume of the current face
+   */
   virtual Real volume();
+
+  /// Volume of the entire surface to average over
   Real _volume;
 };

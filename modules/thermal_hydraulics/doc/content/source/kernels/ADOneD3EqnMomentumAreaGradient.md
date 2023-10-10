@@ -1,18 +1,21 @@
-<!-- MOOSE Documentation Stub: Remove this when content is added. -->
-
 # ADOneD3EqnMomentumAreaGradient
 
-!alert construction title=Undocumented Class
-The ADOneD3EqnMomentumAreaGradient has not been documented. The content contained on this page includes the
-typical automatic documentation associated with a MooseObject; however, what is contained is
-ultimately determined by what is necessary to make the documentation clear for users.
-
 !syntax description /Kernels/ADOneD3EqnMomentumAreaGradient
+
+The area gradient term, a form loss, in the momentum equation strong form is:
+
+!equation
+-P \nabla A \cdot \vec{d}
+
+where $\nabla A$ the area of the component, $P$ the pressure and $\vec{d}$ the direction of the flow
+channel.
+
+!alert note
+In THM, most kernels are added automatically by components or flow models. This kernel is created by the
+[FlowModelSinglePhase.md] to act inside components with single-phase fluid flow.
 
 !syntax parameters /Kernels/ADOneD3EqnMomentumAreaGradient
 
 !syntax inputs /Kernels/ADOneD3EqnMomentumAreaGradient
 
 !syntax children /Kernels/ADOneD3EqnMomentumAreaGradient
-
-!bibtex bibliography

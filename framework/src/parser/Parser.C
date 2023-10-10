@@ -152,6 +152,18 @@ UnitsConversionEvaler::eval(hit::Field * n,
   std::stringstream ss;
   ss << std::setprecision(17) << to_unit.convert(num, from_unit);
 
+#ifndef NDEBUG
+  mooseInfoRepeated(n->filename() + ':' + Moose::stringify(n->line()) + ':' +
+                        Moose::stringify(n->column()) + ": Unit conversion ",
+                    num,
+                    ' ',
+                    argv[1],
+                    " -> ",
+                    ss.str(),
+                    ' ',
+                    argv[3]);
+#endif
+
   // change kind only (not val)
   n->setVal(n->val(), hit::Field::Kind::Float);
   return ss.str();
@@ -172,6 +184,27 @@ Parser::Parser(MooseApp & app, ActionWarehouse & action_wh)
 }
 
 Parser::~Parser() {}
+
+InputParameters
+Parser::validParams()
+{
+  InputParameters params = emptyInputParameters();
+
+  /**
+   * Add the "active" and "inactive" parameters so that all blocks in the input file
+   * can selectively create lists of active/inactive sub-blocks.
+   */
+  params.addParam<std::vector<std::string>>(
+      "active",
+      std::vector<std::string>({"__all__"}),
+      "If specified only the blocks named will be visited and made active");
+  params.addParam<std::vector<std::string>>(
+      "inactive",
+      std::vector<std::string>(),
+      "If specified blocks matching these identifiers will be skipped.");
+
+  return params;
+}
 
 bool
 isSectionActive(std::string path, hit::Node * root)
@@ -452,9 +485,8 @@ Parser::walkRaw(std::string /*fullpath*/, std::string /*nodepath*/, hit::Node * 
   bool is_parent;
   std::string registered_identifier = _syntax.isAssociated(section_name, &is_parent);
 
-  // We need to retrieve a list of Actions associated with the current identifier
-  auto iters = _syntax.getActions(registered_identifier);
-  if (iters.first == iters.second)
+  // Make sure at least one action is associated with the current identifier
+  if (const auto [begin, end] = _syntax.getActions(registered_identifier); begin == end)
   {
     _errmsg += hit::errormsg(n,
                              "section '[",
@@ -466,8 +498,24 @@ Parser::walkRaw(std::string /*fullpath*/, std::string /*nodepath*/, hit::Node * 
     return;
   }
 
-  for (auto it = iters.first; it != iters.second; ++it)
+  // The DynamicObjecRegistrationAction changes the action multimap and would invalidate the
+  // iterators returned by _syntax.getActions, that's why we have to loop in this awkward way.
+  std::set<const Syntax::ActionInfo *> processed_actions;
+  while (true)
   {
+    // search for an unprocessed action
+    auto [begin, end] = _syntax.getActions(registered_identifier);
+    auto it = begin;
+    for (; it != end && processed_actions.count(&it->second); ++it)
+      ;
+
+    // no more unprocessed actions
+    if (it == end)
+      break;
+
+    // mark action as processed
+    processed_actions.insert(&it->second);
+
     if (is_parent)
       continue;
     if (_syntax.isDeprecatedSyntax(registered_identifier))
@@ -572,6 +620,8 @@ Parser::hitCLIFilter(std::string appname, const std::vector<std::string> & argv)
         ; // cli param is ":" prefixed meaning global for all main+subapps
       else if (pos == std::string::npos) // param is for main app - skip
         continue;
+      else if (arg.find(":", pos + 1) != std::string::npos) // param is for a nested multiapp - skip
+        continue;
       else if (arg.substr(0, pos) != appname &&
                arg.substr(0, pos) != name) // param is for different multiapp - skip
       {
@@ -614,8 +664,13 @@ Parser::hitCLIFilter(std::string appname, const std::vector<std::string> & argv)
 }
 
 void
-Parser::parse(const std::vector<std::string> & input_filenames)
+Parser::parse(const std::vector<std::string> & input_filenames,
+              const std::optional<std::string> & input_text)
 {
+  // Check that if the input_text string is provided, then there is only one filename to match
+  if (input_text.has_value() && input_filenames.size() != 1)
+    mooseError("If 'input_text' is provided, then 'input_filenames' must hold only one filename");
+
   // Save the filename
   _input_filenames = input_filenames;
   if (_input_filenames.empty())
@@ -635,10 +690,16 @@ Parser::parse(const std::vector<std::string> & input_filenames)
 
   for (auto & input_filename : _input_filenames)
   {
-    MooseUtils::checkFileReadable(input_filename, true);
-
-    std::ifstream f(input_filename);
-    std::string input((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    // Parse the input text string if provided, otherwise read file from disk
+    std::string input;
+    if (input_text.has_value())
+      input = input_text.value();
+    else
+    {
+      MooseUtils::checkFileReadable(input_filename, true);
+      std::ifstream f(input_filename);
+      input = std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    }
 
     try
     {
@@ -876,27 +937,23 @@ Parser::buildJsonSyntaxTree(JsonSyntaxTree & root) const
     if (action_obj_params.have_parameter<bool>("isObjectAction") &&
         action_obj_params.get<bool>("isObjectAction"))
     {
-      for (registeredMooseObjectIterator moose_obj = _factory.registeredObjectsBegin();
-           moose_obj != _factory.registeredObjectsEnd();
-           ++moose_obj)
+      for (auto & [moose_obj_name, obj] : _factory.registeredObjects())
       {
-        InputParameters moose_obj_params = (moose_obj->second)();
+        auto moose_obj_params = obj->buildParameters();
         // Now that we know that this is a MooseObjectAction we need to see if it has been
         // restricted
         // in any way by the user.
         const std::vector<std::string> & buildable_types = action_obj_params.getBuildableTypes();
-        std::string moose_obj_name = moose_obj->first;
 
         // See if the current Moose Object syntax belongs under this Action's block
         if ((buildable_types.empty() || // Not restricted
-             std::find(buildable_types.begin(), buildable_types.end(), moose_obj->first) !=
+             std::find(buildable_types.begin(), buildable_types.end(), moose_obj_name) !=
                  buildable_types.end()) &&                                 // Restricted but found
             moose_obj_params.have_parameter<std::string>("_moose_base") && // Has a registered base
             _syntax.verifyMooseObjectTask(moose_obj_params.get<std::string>("_moose_base"),
-                                          task) &&             // and that base is associated
-            action_obj_params.mooseObjectSyntaxVisibility() && // and the Action says it's visible
-            moose_obj_name.find("<JACOBIAN>") ==
-                std::string::npos) // And it is not a Jacobian templated AD object
+                                          task) &&          // and that base is associated
+            action_obj_params.mooseObjectSyntaxVisibility() // and the Action says it's visible
+        )
         {
           std::string name;
           size_t pos = 0;
@@ -923,9 +980,6 @@ Parser::buildJsonSyntaxTree(JsonSyntaxTree & root) const
 
           auto lineinfo = _factory.getLineInfo(moose_obj_name);
           std::string classname = _factory.associatedClassName(moose_obj_name);
-          name = name.substr(0, name.find("<RESIDUAL>"));
-          moose_obj_name = moose_obj_name.substr(0, moose_obj_name.find("<RESIDUAL>"));
-          classname = classname.substr(0, classname.find("<RESIDUAL>"));
           root.addParameters(act_name,
                              name,
                              is_type,
@@ -977,11 +1031,9 @@ Parser::buildFullTree(const std::string & search_string)
     if (action_obj_params.have_parameter<bool>("isObjectAction") &&
         action_obj_params.get<bool>("isObjectAction"))
     {
-      for (registeredMooseObjectIterator moose_obj = _factory.registeredObjectsBegin();
-           moose_obj != _factory.registeredObjectsEnd();
-           ++moose_obj)
+      for (const auto & [moose_obj_name, obj] : _factory.registeredObjects())
       {
-        InputParameters moose_obj_params = (moose_obj->second)();
+        auto moose_obj_params = obj->buildParameters();
         /**
          * Now that we know that this is a MooseObjectAction we need to see if it has been
          * restricted in any way by the user.
@@ -990,14 +1042,13 @@ Parser::buildFullTree(const std::string & search_string)
 
         // See if the current Moose Object syntax belongs under this Action's block
         if ((buildable_types.empty() || // Not restricted
-             std::find(buildable_types.begin(), buildable_types.end(), moose_obj->first) !=
+             std::find(buildable_types.begin(), buildable_types.end(), moose_obj_name) !=
                  buildable_types.end()) &&                                 // Restricted but found
             moose_obj_params.have_parameter<std::string>("_moose_base") && // Has a registered base
             _syntax.verifyMooseObjectTask(moose_obj_params.get<std::string>("_moose_base"),
-                                          task) &&             // and that base is associated
-            action_obj_params.mooseObjectSyntaxVisibility() && // and the Action says it's visible
-            moose_obj->first.find("<JACOBIAN>") ==
-                std::string::npos) // And it is not a Jacobian templated AD object
+                                          task) &&          // and that base is associated
+            action_obj_params.mooseObjectSyntaxVisibility() // and the Action says it's visible
+        )
         {
           std::string name;
           size_t pos = 0;
@@ -1006,27 +1057,22 @@ Parser::buildFullTree(const std::string & search_string)
           {
             pos = act_name.size();
 
-            // Remove <RESIDUAL> append for AD objects
-            std::string obj_name = moose_obj->first;
-            removeSubstring(obj_name, "<RESIDUAL>");
-
             if (!action_obj_params.collapseSyntaxNesting())
-              name = act_name.substr(0, pos - 1) + obj_name;
+              name = act_name.substr(0, pos - 1) + moose_obj_name;
             else
             {
-              name = act_name.substr(0, pos - 1) + "/<type>/" + moose_obj->first;
+              name = act_name.substr(0, pos - 1) + "/<type>/" + moose_obj_name;
               is_action_params = true;
             }
           }
           else
           {
-            name = act_name + "/<type>/" + moose_obj->first;
+            name = act_name + "/<type>/" + moose_obj_name;
           }
 
-          moose_obj_params.set<std::string>("type") = moose_obj->first;
+          moose_obj_params.set<std::string>("type") = moose_obj_name;
 
-          _syntax_formatter->insertNode(
-              name, moose_obj->first, is_action_params, &moose_obj_params);
+          _syntax_formatter->insertNode(name, moose_obj_name, is_action_params, &moose_obj_params);
         }
       }
     }
@@ -1172,6 +1218,14 @@ void Parser::setVectorParameter<ReporterName, std::string>(
     GlobalParamsAction * global_block);
 
 template <>
+void Parser::setVectorParameter<CLIArgString, std::string>(
+    const std::string & full_name,
+    const std::string & short_name,
+    InputParameters::Parameter<std::vector<CLIArgString>> * param,
+    bool in_global,
+    GlobalParamsAction * global_block);
+
+template <>
 void Parser::setDoubleIndexParameter<Point>(
     const std::string & full_name,
     const std::string & short_name,
@@ -1206,70 +1260,56 @@ Parser::extractParams(const std::string & prefix, InputParameters & p)
 
     bool found = false;
     bool in_global = false;
-    std::string orig_name = prefix + "/" + it.first;
-    std::string full_name = orig_name;
 
-    // Mark parameters appearing in the input file or command line
-    auto node = _root->find(full_name);
-    if (node && node->type() == hit::NodeType::Field)
+    for (const auto & param_name : p.paramAliases(it.first))
     {
-      p.set_attributes(it.first, false);
-      _extracted_vars.insert(
-          full_name); // Keep track of all variables extracted from the input file
-      found = true;
-      p.inputLocation(it.first) = node->filename() + ":" + std::to_string(node->line());
-      p.paramFullpath(it.first) = full_name;
-    }
-    // Wait! Check the GlobalParams section
-    else if (global_params_block)
-    {
-      full_name = global_params_block_name + "/" + it.first;
-      node = _root->find(full_name);
-      if (node)
+      std::string orig_name = prefix + "/" + param_name;
+      std::string full_name = orig_name;
+
+      // Mark parameters appearing in the input file or command line
+      auto node = _root->find(full_name);
+      if (node && node->type() == hit::NodeType::Field)
       {
-        p.set_attributes(it.first, false);
+        p.inputLocation(param_name) = node->filename() + ":" + std::to_string(node->line());
+        p.paramFullpath(param_name) = full_name;
+        p.set_attributes(param_name, false);
+        // Check if we have already printed the deprecated param message.
+        // If we haven't, add it to the tracker, and print it.
+        if (!_deprec_param_tracker.count(param_name))
+          if (p.attemptPrintDeprecated(param_name))
+            _deprec_param_tracker.insert(param_name);
         _extracted_vars.insert(
             full_name); // Keep track of all variables extracted from the input file
         found = true;
-        in_global = true;
-        p.inputLocation(it.first) = node->filename() + ":" + std::to_string(node->line());
-        p.paramFullpath(it.first) = full_name;
       }
-    }
-
-    if (!found)
-    {
-      /**
-       * Special case handling
-       *   if the parameter wasn't found in the input file or the cli object the logic in this
-       * branch will execute
-       */
-
-      // In the case where we have OutFileName but it wasn't actually found in the input filename,
-      // we will populate it with the actual parsed filename which is available here in the
-      // parser.
-
-      InputParameters::Parameter<OutFileBase> * scalar_p =
-          dynamic_cast<InputParameters::Parameter<OutFileBase> *>(MooseUtils::get(it.second));
-      if (scalar_p)
+      // Wait! Check the GlobalParams section
+      else if (global_params_block)
       {
-        std::string input_file_name = getPrimaryFileName();
-        mooseAssert(input_file_name != "", "Input Filename is nullptr");
-        size_t pos = input_file_name.find_last_of('.');
-        mooseAssert(pos != std::string::npos, "Unable to determine suffix of input file name");
-        scalar_p->set() = input_file_name.substr(0, pos) + "_out";
-        p.set_attributes(it.first, false);
+        full_name = global_params_block_name + "/" + param_name;
+        node = _root->find(full_name);
+        if (node)
+        {
+          p.inputLocation(param_name) = node->filename() + ":" + std::to_string(node->line());
+          p.paramFullpath(param_name) = full_name;
+          p.set_attributes(param_name, false);
+          _extracted_vars.insert(
+              full_name); // Keep track of all variables extracted from the input file
+          found = true;
+          in_global = true;
+        }
       }
-    }
-    else
-    {
-      if (p.isPrivate(it.first))
-        mooseError("The parameter '",
-                   full_name,
-                   "' is a private parameter and should not be used in an input file.");
+      if (found)
+      {
+        if (p.isPrivate(param_name) && !in_global)
+          mooseError("The parameter '",
+                     full_name,
+                     "' is a private parameter and should not be used in an input file.");
+        // avoid setting the parameter
+        else if (p.isPrivate(param_name) && in_global)
+          continue;
 
-      auto & short_name = it.first;
-      libMesh::Parameters::Value * par = MooseUtils::get(it.second);
+        auto & short_name = param_name;
+        libMesh::Parameters::Value * par = MooseUtils::get(it.second);
 
 #define setscalarvaltype(ptype, base, range)                                                       \
   else if (par->type() == demangle(typeid(ptype).name()))                                          \
@@ -1337,75 +1377,78 @@ Parser::extractParams(const std::string & prefix, InputParameters & p)
           in_global,                                                                               \
           global_params_block)
 
-      /**
-       * Scalar types
-       */
-      // built-ins
-      // NOTE: Similar dynamic casting is done in InputParameters.C, please update appropriately
-      if (false)
-        ;
-      setscalarvaltype(Real, double, Real);
-      setscalarvaltype(int, int, long);
-      setscalarvaltype(unsigned short, unsigned int, long);
-      setscalarvaltype(long, int, long);
-      setscalarvaltype(unsigned int, unsigned int, long);
-      setscalarvaltype(unsigned long, unsigned int, long);
-      setscalarvaltype(long int, int64_t, long);
-      setscalarvaltype(unsigned long long, unsigned int, long);
+        /**
+         * Scalar types
+         */
+        // built-ins
+        // NOTE: Similar dynamic casting is done in InputParameters.C, please update appropriately
+        if (false)
+          ;
+        setscalarvaltype(Real, double, Real);
+        setscalarvaltype(int, int, long);
+        setscalarvaltype(unsigned short, unsigned int, long);
+        setscalarvaltype(long, int, long);
+        setscalarvaltype(unsigned int, unsigned int, long);
+        setscalarvaltype(unsigned long, unsigned int, long);
+        setscalarvaltype(long int, int64_t, long);
+        setscalarvaltype(unsigned long long, unsigned int, long);
 
-      setscalar(bool, bool);
-      setscalar(SubdomainID, int);
-      setscalar(BoundaryID, int);
+        setscalar(bool, bool);
+        setscalar(SubdomainID, int);
+        setscalar(BoundaryID, int);
 
-      // string and string-subclass types
-      setscalar(string, string);
-      setscalar(SubdomainName, string);
-      setscalar(BoundaryName, string);
-      setfpath(FileName);
-      setfpath(MeshFileName);
-      setfpath(FileNameNoExtension);
-      setscalar(OutFileBase, string);
-      setscalar(VariableName, string);
-      setscalar(NonlinearVariableName, string);
-      setscalar(AuxVariableName, string);
-      setscalar(FunctionName, string);
-      setscalar(UserObjectName, string);
-      setscalar(VectorPostprocessorName, string);
-      setscalar(IndicatorName, string);
-      setscalar(MarkerName, string);
-      setscalar(MultiAppName, string);
-      setscalar(OutputName, string);
-      setscalar(MaterialPropertyName, string);
-      setscalar(MooseFunctorName, string);
-      setscalar(MaterialName, string);
-      setscalar(DistributionName, string);
-      setscalar(SamplerName, string);
-      setscalar(TagName, string);
-      setscalar(MeshGeneratorName, string);
-      setscalar(ExtraElementIDName, string);
-      setscalar(PostprocessorName, PostprocessorName);
-      setscalar(ExecutorName, string);
-      setscalar(NonlinearSystemName, string);
+        // string and string-subclass types
+        setscalar(string, string);
+        setscalar(SubdomainName, string);
+        setscalar(BoundaryName, string);
+        setfpath(FileName);
+        setfpath(MeshFileName);
+        setfpath(FileNameNoExtension);
+        setscalar(OutFileBase, string);
+        setscalar(VariableName, string);
+        setscalar(NonlinearVariableName, string);
+        setscalar(AuxVariableName, string);
+        setscalar(FunctionName, string);
+        setscalar(UserObjectName, string);
+        setscalar(VectorPostprocessorName, string);
+        setscalar(IndicatorName, string);
+        setscalar(MarkerName, string);
+        setscalar(MultiAppName, string);
+        setscalar(OutputName, string);
+        setscalar(MaterialPropertyName, string);
+        setscalar(MooseFunctorName, string);
+        setscalar(MaterialName, string);
+        setscalar(DistributionName, string);
+        setscalar(PositionsName, string);
+        setscalar(SamplerName, string);
+        setscalar(TagName, string);
+        setscalar(TimesName, string);
+        setscalar(MeshGeneratorName, string);
+        setscalar(ExtraElementIDName, string);
+        setscalar(PostprocessorName, PostprocessorName);
+        setscalar(ExecutorName, string);
+        setscalar(NonlinearSystemName, string);
+        setscalar(CLIArgString, string);
 
-      // Moose Compound Scalars
-      setscalar(RealVectorValue, RealVectorValue);
-      setscalar(Point, Point);
-      setscalar(RealEigenVector, RealEigenVector);
-      setscalar(RealEigenMatrix, RealEigenMatrix);
-      setscalar(MooseEnum, MooseEnum);
-      setscalar(MultiMooseEnum, MultiMooseEnum);
-      setscalar(RealTensorValue, RealTensorValue);
-      setscalar(ExecFlagEnum, ExecFlagEnum);
-      setscalar(ReporterName, string);
-      setscalar(ReporterValueName, string);
-      setscalar(ParsedFunctionExpression, string);
+        // Moose Compound Scalars
+        setscalar(RealVectorValue, RealVectorValue);
+        setscalar(Point, Point);
+        setscalar(RealEigenVector, RealEigenVector);
+        setscalar(RealEigenMatrix, RealEigenMatrix);
+        setscalar(MooseEnum, MooseEnum);
+        setscalar(MultiMooseEnum, MultiMooseEnum);
+        setscalar(RealTensorValue, RealTensorValue);
+        setscalar(ExecFlagEnum, ExecFlagEnum);
+        setscalar(ReporterName, string);
+        setscalar(ReporterValueName, string);
+        setscalar(ParsedFunctionExpression, string);
 
-      // vector types
-      setvector(bool, bool);
-      setvector(Real, double);
-      setvector(int, int);
-      setvector(long, int);
-      setvector(unsigned int, int);
+        // vector types
+        setvector(bool, bool);
+        setvector(Real, double);
+        setvector(int, int);
+        setvector(long, int);
+        setvector(unsigned int, int);
 
 // We need to be able to parse 8-byte unsigned types when
 // libmesh is configured --with-dof-id-bytes=8.  Officially,
@@ -1415,133 +1458,136 @@ Parser::extractParams(const std::string & prefix, InputParameters & p)
 // but presumably uint64_t is the "most standard" way to get a
 // 64-bit unsigned type, so we'll stick with that here.
 #if LIBMESH_DOF_ID_BYTES == 8
-      setvector(uint64_t, int);
+        setvector(uint64_t, int);
 #endif
 
-      setvector(SubdomainID, int);
-      setvector(BoundaryID, int);
-      setvector(RealVectorValue, double);
-      setvector(Point, Point);
-      setvector(MooseEnum, MooseEnum);
+        setvector(SubdomainID, int);
+        setvector(BoundaryID, int);
+        setvector(RealVectorValue, RealVectorValue);
+        setvector(Point, Point);
+        setvector(MooseEnum, MooseEnum);
 
-      setvector(string, string);
-      setvectorfpath(FileName);
-      setvectorfpath(FileNameNoExtension);
-      setvectorfpath(MeshFileName);
-      setvector(SubdomainName, string);
-      setvector(BoundaryName, string);
-      setvector(NonlinearVariableName, string);
-      setvector(AuxVariableName, string);
-      setvector(FunctionName, string);
-      setvector(UserObjectName, string);
-      setvector(IndicatorName, string);
-      setvector(MarkerName, string);
-      setvector(MultiAppName, string);
-      setvector(PostprocessorName, PostprocessorName);
-      setvector(VectorPostprocessorName, string);
-      setvector(OutputName, string);
-      setvector(MaterialPropertyName, string);
-      setvector(MooseFunctorName, string);
-      setvector(MaterialName, string);
-      setvector(DistributionName, string);
-      setvector(SamplerName, string);
-      setvector(TagName, string);
-      setvector(VariableName, VariableName);
-      setvector(MeshGeneratorName, string);
-      setvector(ExtraElementIDName, string);
-      setvector(ReporterName, string);
-      setvector(ReporterValueName, string);
-      setvector(ExecutorName, string);
-      setvector(NonlinearSystemName, string);
+        setvector(string, string);
+        setvectorfpath(FileName);
+        setvectorfpath(FileNameNoExtension);
+        setvectorfpath(MeshFileName);
+        setvector(SubdomainName, string);
+        setvector(BoundaryName, string);
+        setvector(NonlinearVariableName, string);
+        setvector(AuxVariableName, string);
+        setvector(FunctionName, string);
+        setvector(UserObjectName, string);
+        setvector(IndicatorName, string);
+        setvector(MarkerName, string);
+        setvector(MultiAppName, string);
+        setvector(PostprocessorName, PostprocessorName);
+        setvector(VectorPostprocessorName, string);
+        setvector(OutputName, string);
+        setvector(MaterialPropertyName, string);
+        setvector(MooseFunctorName, string);
+        setvector(MaterialName, string);
+        setvector(DistributionName, string);
+        setvector(SamplerName, string);
+        setvector(TagName, string);
+        setvector(VariableName, VariableName);
+        setvector(MeshGeneratorName, string);
+        setvector(ExtraElementIDName, string);
+        setvector(ReporterName, string);
+        setvector(CLIArgString, string);
+        setvector(PositionsName, string);
+        setvector(TimesName, string);
+        setvector(ReporterValueName, string);
+        setvector(ExecutorName, string);
+        setvector(NonlinearSystemName, string);
 
-      // map types
-      setmap(string, Real);
-      setmap(string, string);
-      setmap(unsigned int, unsigned int);
-      setmap(unsigned long, unsigned int);
-      setmap(unsigned long long, unsigned int);
+        // map types
+        setmap(string, Real);
+        setmap(string, string);
+        setmap(unsigned int, unsigned int);
+        setmap(unsigned long, unsigned int);
+        setmap(unsigned long long, unsigned int);
 
-      // Double indexed types
-      setvectorvector(Real);
-      setvectorvector(int);
-      setvectorvector(long);
-      setvectorvector(unsigned int);
-      setvectorvector(unsigned long long);
+        // Double indexed types
+        setvectorvector(Real);
+        setvectorvector(int);
+        setvectorvector(long);
+        setvectorvector(unsigned int);
+        setvectorvector(unsigned long long);
 
 // See vector type explanation
 #if LIBMESH_DOF_ID_BYTES == 8
-      setvectorvector(uint64_t);
+        setvectorvector(uint64_t);
 #endif
 
-      setvectorvector(SubdomainID);
-      setvectorvector(BoundaryID);
-      setvectorvector(Point);
-      setvectorvector(string);
-      setvectorvector(FileName);
-      setvectorvector(FileNameNoExtension);
-      setvectorvector(MeshFileName);
-      setvectorvector(SubdomainName);
-      setvectorvector(BoundaryName);
-      setvectorvector(VariableName);
-      setvectorvector(NonlinearVariableName);
-      setvectorvector(AuxVariableName);
-      setvectorvector(FunctionName);
-      setvectorvector(UserObjectName);
-      setvectorvector(IndicatorName);
-      setvectorvector(MarkerName);
-      setvectorvector(MultiAppName);
-      setvectorvector(PostprocessorName);
-      setvectorvector(VectorPostprocessorName);
-      setvectorvector(MarkerName);
-      setvectorvector(OutputName);
-      setvectorvector(MaterialPropertyName);
-      setvectorvector(MooseFunctorName);
-      setvectorvector(MaterialName);
-      setvectorvector(DistributionName);
-      setvectorvector(SamplerName);
-      setvectorvector(TagName);
+        setvectorvector(SubdomainID);
+        setvectorvector(BoundaryID);
+        setvectorvector(Point);
+        setvectorvector(string);
+        setvectorvector(FileName);
+        setvectorvector(FileNameNoExtension);
+        setvectorvector(MeshFileName);
+        setvectorvector(SubdomainName);
+        setvectorvector(BoundaryName);
+        setvectorvector(VariableName);
+        setvectorvector(NonlinearVariableName);
+        setvectorvector(AuxVariableName);
+        setvectorvector(FunctionName);
+        setvectorvector(UserObjectName);
+        setvectorvector(IndicatorName);
+        setvectorvector(MarkerName);
+        setvectorvector(MultiAppName);
+        setvectorvector(PostprocessorName);
+        setvectorvector(VectorPostprocessorName);
+        setvectorvector(MarkerName);
+        setvectorvector(OutputName);
+        setvectorvector(MaterialPropertyName);
+        setvectorvector(MooseFunctorName);
+        setvectorvector(MaterialName);
+        setvectorvector(DistributionName);
+        setvectorvector(SamplerName);
+        setvectorvector(TagName);
 
-      // Triple indexed types
-      setvectorvectorvector(Real);
-      setvectorvectorvector(int);
-      setvectorvectorvector(long);
-      setvectorvectorvector(unsigned int);
-      setvectorvectorvector(unsigned long long);
+        // Triple indexed types
+        setvectorvectorvector(Real);
+        setvectorvectorvector(int);
+        setvectorvectorvector(long);
+        setvectorvectorvector(unsigned int);
+        setvectorvectorvector(unsigned long long);
 
 // See vector type explanation
 #if LIBMESH_DOF_ID_BYTES == 8
-      setvectorvectorvector(uint64_t);
+        setvectorvectorvector(uint64_t);
 #endif
 
-      setvectorvectorvector(SubdomainID);
-      setvectorvectorvector(BoundaryID);
-      setvectorvectorvector(string);
-      setvectorvectorvector(FileName);
-      setvectorvectorvector(FileNameNoExtension);
-      setvectorvectorvector(MeshFileName);
-      setvectorvectorvector(SubdomainName);
-      setvectorvectorvector(BoundaryName);
-      setvectorvectorvector(VariableName);
-      setvectorvectorvector(NonlinearVariableName);
-      setvectorvectorvector(AuxVariableName);
-      setvectorvectorvector(FunctionName);
-      setvectorvectorvector(UserObjectName);
-      setvectorvectorvector(IndicatorName);
-      setvectorvectorvector(MarkerName);
-      setvectorvectorvector(MultiAppName);
-      setvectorvectorvector(PostprocessorName);
-      setvectorvectorvector(VectorPostprocessorName);
-      setvectorvectorvector(MarkerName);
-      setvectorvectorvector(OutputName);
-      setvectorvectorvector(MaterialPropertyName);
-      setvectorvectorvector(MooseFunctorName);
-      setvectorvectorvector(MaterialName);
-      setvectorvectorvector(DistributionName);
-      setvectorvectorvector(SamplerName);
-      else
-      {
-        mooseError("unsupported type '", par->type(), "' for input parameter '", full_name, "'");
-      }
+        setvectorvectorvector(SubdomainID);
+        setvectorvectorvector(BoundaryID);
+        setvectorvectorvector(string);
+        setvectorvectorvector(FileName);
+        setvectorvectorvector(FileNameNoExtension);
+        setvectorvectorvector(MeshFileName);
+        setvectorvectorvector(SubdomainName);
+        setvectorvectorvector(BoundaryName);
+        setvectorvectorvector(VariableName);
+        setvectorvectorvector(NonlinearVariableName);
+        setvectorvectorvector(AuxVariableName);
+        setvectorvectorvector(FunctionName);
+        setvectorvectorvector(UserObjectName);
+        setvectorvectorvector(IndicatorName);
+        setvectorvectorvector(MarkerName);
+        setvectorvectorvector(MultiAppName);
+        setvectorvectorvector(PostprocessorName);
+        setvectorvectorvector(VectorPostprocessorName);
+        setvectorvectorvector(MarkerName);
+        setvectorvectorvector(OutputName);
+        setvectorvectorvector(MaterialPropertyName);
+        setvectorvectorvector(MooseFunctorName);
+        setvectorvectorvector(MaterialName);
+        setvectorvectorvector(DistributionName);
+        setvectorvectorvector(SamplerName);
+        else
+        {
+          mooseError("unsupported type '", par->type(), "' for input parameter '", full_name, "'");
+        }
 
 #undef setscalarValueType
 #undef setscalar
@@ -1549,6 +1595,33 @@ Parser::extractParams(const std::string & prefix, InputParameters & p)
 #undef setvectorvectorvector
 #undef setvectorvector
 #undef setmap
+        break;
+      }
+    }
+
+    if (!found)
+    {
+      /**
+       * Special case handling
+       *   if the parameter wasn't found in the input file or the cli object the logic in this
+       * branch will execute
+       */
+
+      // In the case where we have OutFileName but it wasn't actually found in the input filename,
+      // we will populate it with the actual parsed filename which is available here in the
+      // parser.
+
+      InputParameters::Parameter<OutFileBase> * scalar_p =
+          dynamic_cast<InputParameters::Parameter<OutFileBase> *>(MooseUtils::get(it.second));
+      if (scalar_p)
+      {
+        std::string input_file_name = getPrimaryFileName();
+        mooseAssert(input_file_name != "", "Input Filename is nullptr");
+        size_t pos = input_file_name.find_last_of('.');
+        mooseAssert(pos != std::string::npos, "Unable to determine suffix of input file name");
+        scalar_p->set() = input_file_name.substr(0, pos) + "_out";
+        p.set_attributes(it.first, false);
+      }
     }
   }
 
@@ -2574,6 +2647,52 @@ Parser::setVectorParameter<ReporterName, std::string>(
     else
       param->set()[i] = ReporterName(names[0], names[1]);
   }
+}
+
+template <>
+void
+Parser::setVectorParameter<CLIArgString, std::string>(
+    const std::string & full_name,
+    const std::string & /*short_name*/,
+    InputParameters::Parameter<std::vector<CLIArgString>> * param,
+    bool /*in_global*/,
+    GlobalParamsAction * /*global_block*/)
+{
+  // Parsed as a vector of string, the vectors parameters are being cut
+  auto rnames = _root->param<std::vector<std::string>>(full_name);
+  param->set().resize(rnames.size()); // slightly oversized if vectors have been split
+
+  // Skip empty parameter
+  if (rnames.empty())
+    return;
+
+  // Re-assemble vector parameters
+  unsigned int i_param = 0;
+  bool vector_param_detected = false;
+  for (unsigned int i = 0; i < rnames.size(); ++i)
+  {
+    // Look for a quote, both types
+    std::vector<std::string> double_split =
+        MooseUtils::rsplit(rnames[i], "\"", std::numeric_limits<std::size_t>::max());
+    std::vector<std::string> single_split =
+        MooseUtils::rsplit(rnames[i], "\'", std::numeric_limits<std::size_t>::max());
+    if (double_split.size() + single_split.size() >= 3)
+      // Either entering or exiting a vector parameter (>3 is entering another vector)
+      // Even and >2 number of quotes means both finished and started another vector parameter
+      if ((double_split.size() + single_split.size()) % 2 == 1)
+        vector_param_detected = !vector_param_detected;
+
+    // We're building a vector parameters, just append the text, rebuild the spaces
+    if (vector_param_detected)
+      param->set()[i_param] += rnames[i] + ' ';
+    else
+    {
+      param->set()[i_param] += rnames[i];
+      i_param++;
+    }
+  }
+  // Use actual size after re-forming vector parameters
+  param->set().resize(i_param);
 }
 
 template <>

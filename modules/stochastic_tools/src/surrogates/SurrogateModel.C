@@ -10,7 +10,6 @@
 #include "SurrogateModel.h"
 #include "SurrogateTrainer.h"
 #include "Sampler.h"
-#include "RestartableDataIO.h"
 #include "StochasticToolsApp.h"
 
 InputParameters
@@ -19,7 +18,7 @@ SurrogateModel::validParams()
   InputParameters params = MooseObject::validParams();
   params += SamplerInterface::validParams();
   params += SurrogateModelInterface::validParams();
-  params.addParam<FileName>("filename", "Filename containing the trained data.");
+  params += RestartableModelInterface::validParams();
   params.addParam<UserObjectName>(
       "trainer",
       "The SurrogateTrainer object. If this is specified the trainer data is automatically "
@@ -33,10 +32,10 @@ SurrogateModel::SurrogateModel(const InputParameters & parameters)
   : MooseObject(parameters),
     SamplerInterface(this),
     SurrogateModelInterface(this),
-    _model_meta_data_name(isParamValid("trainer")
-                              ? getSurrogateTrainer("trainer").modelMetaDataName()
-                              : _type + "_" + name())
+    RestartableModelInterface(*this,
+                              /*read_only=*/true,
+                              isParamValid("trainer")
+                                  ? getSurrogateTrainer("trainer").modelMetaDataName()
+                                  : _type + "_" + name())
 {
-  // Register the meta data that is going to be loaded into
-  _app.registerRestartableDataMapName(_model_meta_data_name, name());
 }

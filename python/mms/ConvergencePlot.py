@@ -41,7 +41,7 @@ class ConvergencePlot(object):
 
         # Adjust tick mark fonts
         for tick in self._axes.xaxis.get_major_ticks() + self._axes.yaxis.get_major_ticks():
-            tick.label.set_fontsize(fontsize)
+            tick.label1.set_fontsize(fontsize)
 
         # Apply grid marks
         plt.grid(True, which='both', color=[0.8]*3)
@@ -64,11 +64,11 @@ class ConvergencePlot(object):
             if not isinstance(label, list):
                 label = [label]
 
-        x = df[df.columns[0]]
+        x = np.array(df[df.columns[0]])
         lines = []
 
         for i in range(1,len(df.columns)):
-            y = df[df.columns[i]]
+            y = np.array(df[df.columns[i]])
 
             if label is None:
                 this_label = 'line-{}'.format(len(lines))

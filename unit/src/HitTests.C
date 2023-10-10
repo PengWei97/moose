@@ -201,8 +201,17 @@ TEST(HitTests, ParseFields)
       {"int", "foo=42", "foo", "42", hit::Field::Kind::Int},
       {"float1", "foo=4.2", "foo", "4.2", hit::Field::Kind::Float},
       {"float2", "foo=.42", "foo", ".42", hit::Field::Kind::Float},
+      // Previously, the HIT lexer designated "e-23" below as a 'float' from the text pattern
+      // alone but the MOOSE string-to-float conversion logic does not support this no
+      // coefficient syntax so even through the kind method called this a 'float', retrieving
+      // it as a float would fail however WASP-HIT reuses the convert and retrieve logic for
+      // consistent field categorization making "foo=e-23" be designated now as a 'string'
       {"float3", "foo=1e10", "foo", "1e10", hit::Field::Kind::Float},
-      {"float4", "foo=e-23", "foo", "e-23", hit::Field::Kind::Float},
+      {"float4",
+       "foo=e-23",
+       "foo",
+       "e-23", // why do we even support this?
+       hit::Field::Kind::String},
       {"float5", "foo=12.345e+67", "foo", "12.345e+67", hit::Field::Kind::Float},
       {"bool-true1", "foo=true", "foo", "true", hit::Field::Kind::Bool},
       {"bool-true2", "foo=yes", "foo", "yes", hit::Field::Kind::Bool},
@@ -261,8 +270,13 @@ TEST(HitTests, ParseFields)
        "foo/bar/baz",
        "42",
        hit::Field::Kind::Int},
-
-  };
+      // numbers with # in front; used to represent issue #'s in test harness
+      {"number with #", "issue='#1234'", "issue", "#1234", hit::Field::Kind::String},
+      {"multiple numbers with #s",
+       "issue='#1234 #5678'",
+       "issue",
+       "#1234 #5678",
+       hit::Field::Kind::String}};
 
   for (size_t i = 0; i < sizeof(cases) / sizeof(ValCase); i++)
   {
@@ -331,7 +345,7 @@ TEST(HitTests, BraceExpressions)
        "     }",
        "foo",
        "42",
-       hit::Field::Kind::String},
+       hit::Field::Kind::Int},
       {"fparse", "foo=${fparse 40 + 2}\n", "foo", "42", hit::Field::Kind::Float},
       {"fparse-dep-chain",
        "foo=${fparse 42} bar=${fparse foo}",
@@ -369,6 +383,14 @@ TEST(HitTests, BraceExpressions)
        "a",
        "42.97674418604651",
        hit::Field::Kind::Float},
+      {"multi-line value",
+       "foo = '1 2 3\n"
+       "4 5 6\n"
+       "7 8 9'\n"
+       "boo = ${foo}",
+       "boo",
+       "1 2 3\n4 5 6\n7 8 9",
+       hit::Field::Kind::String},
   };
 
   for (size_t i = 0; i < sizeof(cases) / sizeof(ValCase); i++)
@@ -486,7 +508,7 @@ TEST(HitTests, RenderCases)
        "foo='why'\n' separate '  'strings?'",
        "foo = 'why separate strings?'",
        0},
-      {"preserve quotes preceding blankline", "foo = '42'\n\n", "foo = '42'\n", 0},
+      {"preserve quotes preceding blankline", "foo = '42'\n\n", "foo = '42'", 0},
       {"preserve block comment (#10889)",
        "[hello]\n  foo = '42'\n\n  # comment\n  bar = 'baz'\n[]",
        "[hello]\n  foo = '42'\n\n  # comment\n  bar = 'baz'\n[]",
@@ -494,6 +516,16 @@ TEST(HitTests, RenderCases)
       {"preserve block comment 2 (#10889)",
        "[hello]\n  foo = '42'\n  # comment\n  bar = 'baz'\n[]",
        "[hello]\n  foo = '42'\n  # comment\n  bar = 'baz'\n[]",
+       0},
+      {"complex newline render",
+       "[section01]\n\n  field01 = 10\n\n\n\n  field02 = '20'\n\n  [section02]"
+       "\n\n    field03 = '30 31 32 33'\n\n\n    field04 = 40\n    [section03]"
+       "\n\n\n\n\n\n      field05 = \"double 50 quoted 51 string\"\n\n\n    []"
+       "\n\n\n    field06 = 60\n\n\n\n  []\n  field07 = '70 71 72 73 74'\n\n[]",
+       "[section01]\n\n  field01 = 10\n\n  field02 = '20'\n\n  [section02]\n\n  "
+       "  field03 = '30 31 32 33'\n\n    field04 = 40\n    [section03]\n\n      "
+       "field05 = \"double 50 quoted 51 string\"\n    []\n\n    field06 = 60\n  "
+       "[]\n  field07 = '70 71 72 73 74'\n[]",
        0},
   };
 

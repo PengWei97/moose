@@ -1,1 +1,0 @@
-!template load file=stubs/moose_action.md.template name=GrainGrowthAction syntax=/Modules/PhaseField/GrainGrowth/GrainGrowthAction

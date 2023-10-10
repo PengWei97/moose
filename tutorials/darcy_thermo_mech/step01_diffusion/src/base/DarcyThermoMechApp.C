@@ -21,6 +21,7 @@ DarcyThermoMechApp::validParams()
   InputParameters params = MooseApp::validParams();
 
   params.set<bool>("automatic_automatic_scaling") = false;
+  params.set<bool>("use_legacy_material_output") = false;
 
   return params;
 }
@@ -41,5 +42,5 @@ DarcyThermoMechApp::registerAll(Factory & factory, ActionFactory & action_factor
 {
   Registry::registerObjectsTo(factory, {"DarcyThermoMechApp"});
   Registry::registerActionsTo(action_factory, {"DarcyThermoMechApp"});
-  ModulesApp::registerAll(factory, action_factory, syntax);
+  ModulesApp::registerAllObjects<DarcyThermoMechApp>(factory, action_factory, syntax);
 }

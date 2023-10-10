@@ -1,10 +1,8 @@
-# 2d siumulation of a water through a pipe.
-mu=1e-3 # Nsm^-2
-rho=997.0 # kgm^-3
-Re=1000.0
-pipe_length=1 # m
-pipe_radius=0.1 # m
-u_inlet=${fparse (mu * Re)/(2 * pipe_radius * rho)} # ms^-1
+mu=1
+rho=1
+pipe_length=10 # m
+pipe_radius=1 # m
+u_inlet=1
 
 [GlobalParams]
   integrate_p_by_parts = false
@@ -33,15 +31,6 @@ u_inlet=${fparse (mu * Re)/(2 * pipe_radius * rho)} # ms^-1
     family = LAGRANGE_VEC
   []
   [p][]
-[]
-
-[ICs]
-  [velocity]
-    type = VectorConstantIC
-    x_value = 1e-15
-    y_value = 1e-15
-    variable = velocity
-  []
 []
 
 [Kernels]
@@ -73,12 +62,19 @@ u_inlet=${fparse (mu * Re)/(2 * pipe_radius * rho)} # ms^-1
   []
 []
 
+[Functions]
+  [vel_x_inlet]
+    type = ParsedFunction
+    expression = '${u_inlet} * (${pipe_radius}^2 - y^2)'
+  []
+[]
+
 [BCs]
   [inlet]
     type = VectorFunctionDirichletBC
     variable = velocity
     boundary = 'left'
-    function_x = ${u_inlet}
+    function_x = vel_x_inlet
     function_y = 0
   [../]
   [wall]
@@ -120,11 +116,10 @@ u_inlet=${fparse (mu * Re)/(2 * pipe_radius * rho)} # ms^-1
 [Executioner]
   type = Steady
   solve_type = 'NEWTON'
-  petsc_options_iname = '-pc_type -sub_pc_factor_levels -ksp_gmres_restart'
-  petsc_options_value = 'asm      6                     200'
+  petsc_options_iname = '-pc_type'
+  petsc_options_value = 'lu'
   nl_rel_tol = 1e-12
   nl_abs_tol = 1e-12
-  l_max_its = 200
   line_search = 'none'
 []
 

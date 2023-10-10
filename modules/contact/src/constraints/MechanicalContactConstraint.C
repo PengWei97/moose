@@ -17,6 +17,7 @@
 #include "SystemBase.h"
 #include "Assembly.h"
 #include "MooseMesh.h"
+#include "MathUtils.h"
 #include "AugmentedLagrangianContactProblem.h"
 #include "Executioner.h"
 #include "AddVariableAction.h"
@@ -27,6 +28,8 @@
 #include "libmesh/sparse_matrix.h"
 
 registerMooseObject("ContactApp", MechanicalContactConstraint);
+
+const unsigned int MechanicalContactConstraint::_no_iterations = 0;
 
 InputParameters
 MechanicalContactConstraint::validParams()
@@ -55,6 +58,10 @@ MechanicalContactConstraint::validParams()
       "penalty",
       1e8,
       "The penalty to apply.  This can vary depending on the stiffness of your materials");
+  params.addParam<Real>("penalty_multiplier",
+                        1.0,
+                        "The growth factor for the penalty applied at the end of each augmented "
+                        "Lagrange update iteration");
   params.addParam<Real>("friction_coefficient", 0, "The friction coefficient");
   params.addParam<Real>("tangential_tolerance",
                         "Tangential distance to extend edges of contact surfaces");
@@ -121,6 +128,7 @@ MechanicalContactConstraint::MechanicalContactConstraint(const InputParameters &
     _formulation(getParam<MooseEnum>("formulation").getEnum<ContactFormulation>()),
     _normalize_penalty(getParam<bool>("normalize_penalty")),
     _penalty(getParam<Real>("penalty")),
+    _penalty_multiplier(getParam<Real>("penalty_multiplier")),
     _friction_coefficient(getParam<Real>("friction_coefficient")),
     _tension_release(getParam<Real>("tension_release")),
     _capture_tolerance(getParam<Real>("capture_tolerance")),
@@ -144,7 +152,12 @@ MechanicalContactConstraint::MechanicalContactConstraint(const InputParameters &
     _connected_secondary_nodes_jacobian(getParam<bool>("connected_secondary_nodes_jacobian")),
     _non_displacement_vars_jacobian(getParam<bool>("non_displacement_variables_jacobian")),
     _contact_linesearch(dynamic_cast<ContactLineSearchBase *>(_subproblem.getLineSearch())),
-    _print_contact_nodes(getParam<bool>("print_contact_nodes"))
+    _print_contact_nodes(getParam<bool>("print_contact_nodes")),
+    _augmented_lagrange_problem(
+        dynamic_cast<AugmentedLagrangianContactProblemInterface *>(&_fe_problem)),
+    _lagrangian_iteration_number(_augmented_lagrange_problem
+                                     ? _augmented_lagrange_problem->getLagrangianIterationNumber()
+                                     : _no_iterations)
 {
   _overwrite_secondary_residual = false;
 
@@ -185,8 +198,7 @@ MechanicalContactConstraint::MechanicalContactConstraint(const InputParameters &
     if (_model == ContactModel::GLUED)
       mooseError("The Augmented Lagrangian contact formulation does not support GLUED case.");
 
-    FEProblemBase * fe_problem = getParam<FEProblemBase *>("_fe_problem_base");
-    if (dynamic_cast<AugmentedLagrangianContactProblem *>(fe_problem) == NULL)
+    if (!_augmented_lagrange_problem)
       mooseError("The Augmented Lagrangian contact formulation must use "
                  "AugmentedLagrangianContactProblem.");
 
@@ -218,9 +230,9 @@ MechanicalContactConstraint::timestepSetup()
 {
   if (_component == 0)
   {
-    updateContactStatefulData(true);
+    updateContactStatefulData(/* beginning_of_step = */ true);
     if (_formulation == ContactFormulation::AUGMENTED_LAGRANGE)
-      updateAugmentedLagrangianMultiplier(true);
+      updateAugmentedLagrangianMultiplier(/* beginning_of_step = */ true);
 
     _update_stateful_data = false;
 
@@ -235,7 +247,7 @@ MechanicalContactConstraint::jacobianSetup()
   if (_component == 0)
   {
     if (_update_stateful_data)
-      updateContactStatefulData();
+      updateContactStatefulData(/* beginning_of_step = */ false);
     _update_stateful_data = true;
   }
 }
@@ -243,17 +255,16 @@ MechanicalContactConstraint::jacobianSetup()
 void
 MechanicalContactConstraint::updateAugmentedLagrangianMultiplier(bool beginning_of_step)
 {
-  for (auto & pinfo_pair : _penetration_locator._penetration_info)
+  for (auto & [secondary_node_num, pinfo] : _penetration_locator._penetration_info)
   {
-    const dof_id_type secondary_node_num = pinfo_pair.first;
-    PenetrationInfo * pinfo = pinfo_pair.second;
-
-    if (!pinfo || pinfo->_node->n_comp(_sys.number(), _vars[_component]) < 1)
+    if (!pinfo)
       continue;
 
-    const Real distance =
-        pinfo->_normal * (pinfo->_closest_point - _mesh.nodeRef(secondary_node_num)) -
-        gapOffset(_mesh.nodePtr(secondary_node_num));
+    const Node & node = _mesh.nodeRef(secondary_node_num);
+    if (node.n_comp(_sys.number(), _vars[_component]) < 1)
+      continue;
+
+    const Real distance = pinfo->_normal * (pinfo->_closest_point - node) - gapOffset(node);
 
     if (beginning_of_step && _model == ContactModel::COULOMB)
     {
@@ -265,13 +276,13 @@ MechanicalContactConstraint::updateAugmentedLagrangianMultiplier(bool beginning_
     if (pinfo->isCaptured())
     {
       if (_model == ContactModel::FRICTIONLESS)
-        pinfo->_lagrange_multiplier -= getPenalty(*pinfo) * distance;
+        pinfo->_lagrange_multiplier -= getPenalty(node) * distance;
 
       if (_model == ContactModel::COULOMB)
       {
         if (!beginning_of_step)
         {
-          Real penalty = getPenalty(*pinfo);
+          Real penalty = getPenalty(node);
           RealVectorValue pen_force_normal =
               penalty * (-distance) * pinfo->_normal + pinfo->_lagrange_multiplier * pinfo->_normal;
 
@@ -287,7 +298,7 @@ MechanicalContactConstraint::updateAugmentedLagrangianMultiplier(bool beginning_
               pinfo->_incremental_slip -
               (pinfo->_incremental_slip * pinfo->_normal) * pinfo->_normal;
 
-          Real penalty_slip = getTangentialPenalty(*pinfo);
+          Real penalty_slip = getTangentialPenalty(node);
 
           RealVectorValue inc_pen_force_tangential =
               pinfo->_lagrange_multiplier_slip + penalty_slip * tangential_inc_slip;
@@ -324,18 +335,18 @@ MechanicalContactConstraint::AugmentedLagrangianContactConverged()
   Real contactResidual = 0.0;
   unsigned int converged = 0;
 
-  for (auto & pinfo_pair : _penetration_locator._penetration_info)
+  for (auto & [secondary_node_num, pinfo] : _penetration_locator._penetration_info)
   {
-    const dof_id_type secondary_node_num = pinfo_pair.first;
-    PenetrationInfo * pinfo = pinfo_pair.second;
-
-    // Skip this pinfo if there are no DOFs on this node.
-    if (!pinfo || pinfo->_node->n_comp(_sys.number(), _vars[_component]) < 1)
+    if (!pinfo)
       continue;
 
-    const Real distance =
-        pinfo->_normal * (pinfo->_closest_point - _mesh.nodeRef(secondary_node_num)) -
-        gapOffset(_mesh.nodePtr(secondary_node_num));
+    const auto & node = _mesh.nodeRef(secondary_node_num);
+
+    // Skip this pinfo if there are no DOFs on this node.
+    if (node.n_comp(_sys.number(), _vars[_component]) < 1)
+      continue;
+
+    const Real distance = pinfo->_normal * (pinfo->_closest_point - node) - gapOffset(node);
 
     if (pinfo->isCaptured())
     {
@@ -362,11 +373,9 @@ MechanicalContactConstraint::AugmentedLagrangianContactConverged()
         const Real tangential_inc_slip_mag = tangential_inc_slip.norm();
 
         RealVectorValue distance_vec =
-            (pinfo->_normal * (_mesh.nodeRef(secondary_node_num) - pinfo->_closest_point) +
-             gapOffset(_mesh.nodePtr(secondary_node_num))) *
-            pinfo->_normal;
+            (pinfo->_normal * (node - pinfo->_closest_point) + gapOffset(node)) * pinfo->_normal;
 
-        Real penalty = getPenalty(*pinfo);
+        Real penalty = getPenalty(node);
         RealVectorValue pen_force_normal =
             penalty * distance_vec + pinfo->_lagrange_multiplier * pinfo->_normal;
 
@@ -418,12 +427,13 @@ MechanicalContactConstraint::AugmentedLagrangianContactConverged()
 void
 MechanicalContactConstraint::updateContactStatefulData(bool beginning_of_step)
 {
-  for (auto & pinfo_pair : _penetration_locator._penetration_info)
+  for (auto & [secondary_node_num, pinfo] : _penetration_locator._penetration_info)
   {
-    PenetrationInfo * pinfo = pinfo_pair.second;
+    if (!pinfo)
+      continue;
 
-    // Skip this pinfo if there are no DOFs on this node.
-    if (!pinfo || pinfo->_node->n_comp(_sys.number(), _vars[_component]) < 1)
+    const Node & node = _mesh.nodeRef(secondary_node_num);
+    if (node.n_comp(_sys.number(), _vars[_component]) < 1)
       continue;
 
     if (beginning_of_step)
@@ -439,8 +449,8 @@ MechanicalContactConstraint::updateContactStatefulData(bool beginning_of_step)
                pinfo->_mech_status != PenetrationInfo::MS_NO_CONTACT)
       {
         // The penetration info object could be based on a bad state so delete it
-        delete pinfo_pair.second;
-        pinfo_pair.second = NULL;
+        delete pinfo;
+        pinfo = NULL;
         continue;
       }
 
@@ -471,7 +481,7 @@ MechanicalContactConstraint::shouldApply()
       // This computes the contact force once per constraint, rather than once per quad point
       // and for both primary and secondary cases.
       if (_component == 0)
-        computeContactForce(pinfo, is_nonlinear);
+        computeContactForce(*_current_node, pinfo, is_nonlinear);
 
       if (pinfo->isCaptured())
       {
@@ -479,7 +489,7 @@ MechanicalContactConstraint::shouldApply()
         if (is_nonlinear)
         {
           Threads::spin_mutex::scoped_lock lock(_contact_set_mutex);
-          _current_contact_state.insert(pinfo->_node->id());
+          _current_contact_state.insert(_current_node->id());
         }
       }
     }
@@ -489,19 +499,19 @@ MechanicalContactConstraint::shouldApply()
 }
 
 void
-MechanicalContactConstraint::computeContactForce(PenetrationInfo * pinfo, bool update_contact_set)
+MechanicalContactConstraint::computeContactForce(const Node & node,
+                                                 PenetrationInfo * pinfo,
+                                                 bool update_contact_set)
 {
-  const Node * node = pinfo->_node;
-
   // Build up residual vector
   RealVectorValue res_vec;
   for (unsigned int i = 0; i < _mesh_dimension; ++i)
   {
-    dof_id_type dof_number = node->dof_number(0, _vars[i], 0);
+    dof_id_type dof_number = node.dof_number(0, _vars[i], 0);
     res_vec(i) = _residual_copy(dof_number) / _var_objects[i]->scalingFactor();
   }
 
-  RealVectorValue distance_vec(_mesh.nodeRef(node->id()) - pinfo->_closest_point);
+  RealVectorValue distance_vec(node - pinfo->_closest_point);
   if (distance_vec.norm() != 0)
     distance_vec += gapOffset(node) * pinfo->_normal * distance_vec.unit() * distance_vec.unit();
 
@@ -528,8 +538,8 @@ MechanicalContactConstraint::computeContactForce(PenetrationInfo * pinfo, bool u
   if (!pinfo->isCaptured())
     return;
 
-  const Real penalty = getPenalty(*pinfo);
-  const Real penalty_slip = getTangentialPenalty(*pinfo);
+  const Real penalty = getPenalty(node);
+  const Real penalty_slip = getTangentialPenalty(node);
 
   RealVectorValue pen_force(penalty * distance_vec);
 
@@ -629,17 +639,14 @@ MechanicalContactConstraint::computeContactForce(PenetrationInfo * pinfo, bool u
 
         case ContactFormulation::PENALTY:
         {
-          distance_vec = pinfo->_incremental_slip +
-                         (pinfo->_normal * (_mesh.nodeRef(node->id()) - pinfo->_closest_point) +
-                          gapOffset(node)) *
-                             pinfo->_normal;
+          distance_vec =
+              pinfo->_incremental_slip +
+              (pinfo->_normal * (node - pinfo->_closest_point) + gapOffset(node)) * pinfo->_normal;
           pen_force = penalty * distance_vec;
 
           // Frictional capacity
-          // const Real capacity( _friction_coefficient * (pen_force * pinfo->_normal < 0 ?
-          // -pen_force * pinfo->_normal : 0) );
           const Real capacity(_friction_coefficient *
-                              (res_vec * pinfo->_normal > 0 ? res_vec * pinfo->_normal : 0));
+                              (pen_force * pinfo->_normal < 0 ? -pen_force * pinfo->_normal : 0));
 
           // Elastic predictor
           pinfo->_contact_force =
@@ -668,9 +675,8 @@ MechanicalContactConstraint::computeContactForce(PenetrationInfo * pinfo, bool u
 
         case ContactFormulation::AUGMENTED_LAGRANGE:
         {
-          distance_vec = (pinfo->_normal * (_mesh.nodeRef(node->id()) - pinfo->_closest_point) +
-                          gapOffset(node)) *
-                         pinfo->_normal;
+          distance_vec =
+              (pinfo->_normal * (node - pinfo->_closest_point) + gapOffset(node)) * pinfo->_normal;
 
           RealVectorValue contact_force_normal =
               penalty * distance_vec + pinfo->_lagrange_multiplier * pinfo->_normal;
@@ -769,7 +775,7 @@ MechanicalContactConstraint::computeContactForce(PenetrationInfo * pinfo, bool u
       !newly_captured && _tension_release >= 0.0 &&
       (_contact_linesearch ? true : pinfo->_locked_this_step < 2))
   {
-    const Real contact_pressure = -(pinfo->_normal * pinfo->_contact_force) / nodalArea(*pinfo);
+    const Real contact_pressure = -(pinfo->_normal * pinfo->_contact_force) / nodalArea(node);
     if (-contact_pressure >= _tension_release)
     {
       pinfo->release();
@@ -796,10 +802,10 @@ MechanicalContactConstraint::computeQpResidual(Moose::ConstraintType type)
       {
         RealVectorValue distance_vec(*_current_node - pinfo->_closest_point);
         if (distance_vec.norm() != 0)
-          distance_vec +=
-              gapOffset(_current_node) * pinfo->_normal * distance_vec.unit() * distance_vec.unit();
+          distance_vec += gapOffset(*_current_node) * pinfo->_normal * distance_vec.unit() *
+                          distance_vec.unit();
 
-        const Real penalty = getPenalty(*pinfo);
+        const Real penalty = getPenalty(*_current_node);
         RealVectorValue pen_force(penalty * distance_vec);
 
         if (_model == ContactModel::FRICTIONLESS)
@@ -820,11 +826,11 @@ MechanicalContactConstraint::computeQpResidual(Moose::ConstraintType type)
       else if (_formulation == ContactFormulation::TANGENTIAL_PENALTY &&
                _model == ContactModel::COULOMB)
       {
-        RealVectorValue distance_vec =
-            (pinfo->_normal * (*_current_node - pinfo->_closest_point) + gapOffset(_current_node)) *
-            pinfo->_normal;
+        RealVectorValue distance_vec = (pinfo->_normal * (*_current_node - pinfo->_closest_point) +
+                                        gapOffset(*_current_node)) *
+                                       pinfo->_normal;
 
-        const Real penalty = getPenalty(*pinfo);
+        const Real penalty = getPenalty(*_current_node);
         RealVectorValue pen_force(penalty * distance_vec);
         resid += pinfo->_normal(_component) * pinfo->_normal * pen_force;
       }
@@ -842,8 +848,8 @@ MechanicalContactConstraint::computeQpJacobian(Moose::ConstraintJacobianType typ
 {
   PenetrationInfo * pinfo = _penetration_locator._penetration_info[_current_node->id()];
 
-  const Real penalty = getPenalty(*pinfo);
-  const Real penalty_slip = getTangentialPenalty(*pinfo);
+  const Real penalty = getPenalty(*_current_node);
+  const Real penalty_slip = getTangentialPenalty(*_current_node);
 
   switch (type)
   {
@@ -1313,8 +1319,8 @@ MechanicalContactConstraint::computeQpOffDiagJacobian(Moose::ConstraintJacobianT
 {
   PenetrationInfo * pinfo = _penetration_locator._penetration_info[_current_node->id()];
 
-  const Real penalty = getPenalty(*pinfo);
-  const Real penalty_slip = getTangentialPenalty(*pinfo);
+  const Real penalty = getPenalty(*_current_node);
+  const Real penalty_slip = getTangentialPenalty(*_current_node);
 
   unsigned int coupled_component;
   Real normal_component_in_coupled_var_dir = 1.0;
@@ -1678,25 +1684,23 @@ MechanicalContactConstraint::computeQpOffDiagJacobian(Moose::ConstraintJacobianT
 }
 
 Real
-MechanicalContactConstraint::gapOffset(const Node * node)
+MechanicalContactConstraint::gapOffset(const Node & node)
 {
   Real val = 0;
 
   if (_has_secondary_gap_offset)
-    val += _secondary_gap_offset_var->getNodalValue(*node);
+    val += _secondary_gap_offset_var->getNodalValue(node);
 
   if (_has_mapped_primary_gap_offset)
-    val += _mapped_primary_gap_offset_var->getNodalValue(*node);
+    val += _mapped_primary_gap_offset_var->getNodalValue(node);
 
   return val;
 }
 
 Real
-MechanicalContactConstraint::nodalArea(PenetrationInfo & pinfo)
+MechanicalContactConstraint::nodalArea(const Node & node)
 {
-  const Node * node = pinfo._node;
-
-  dof_id_type dof = node->dof_number(_aux_system.number(), _nodal_area_var->number(), 0);
+  dof_id_type dof = node.dof_number(_aux_system.number(), _nodal_area_var->number(), 0);
 
   Real area = (*_aux_solution)(dof);
   if (area == 0.0)
@@ -1711,23 +1715,22 @@ MechanicalContactConstraint::nodalArea(PenetrationInfo & pinfo)
 }
 
 Real
-MechanicalContactConstraint::getPenalty(PenetrationInfo & pinfo)
+MechanicalContactConstraint::getPenalty(const Node & node)
 {
   Real penalty = _penalty;
   if (_normalize_penalty)
-    penalty *= nodalArea(pinfo);
-
-  return penalty;
+    penalty *= nodalArea(node);
+  return penalty * MathUtils::pow(_penalty_multiplier, _lagrangian_iteration_number);
 }
 
 Real
-MechanicalContactConstraint::getTangentialPenalty(PenetrationInfo & pinfo)
+MechanicalContactConstraint::getTangentialPenalty(const Node & node)
 {
   Real penalty = _penalty_tangential;
   if (_normalize_penalty)
-    penalty *= nodalArea(pinfo);
+    penalty *= nodalArea(node);
 
-  return penalty;
+  return penalty * MathUtils::pow(_penalty_multiplier, _lagrangian_iteration_number);
 }
 
 void
@@ -1735,8 +1738,8 @@ MechanicalContactConstraint::computeJacobian()
 {
   getConnectedDofIndices(_var.number());
 
-  DenseMatrix<Number> & Knn = _assembly.jacobianBlockNeighbor(
-      Moose::NeighborNeighbor, _primary_var.number(), _var.number());
+  prepareMatrixTagNeighbor(
+      _assembly, _primary_var.number(), _var.number(), Moose::NeighborNeighbor, _Knn);
 
   _Kee.resize(_test_secondary.size(), _connected_dof_indices.size());
 
@@ -1747,12 +1750,15 @@ MechanicalContactConstraint::computeJacobian()
 
   if (_primary_secondary_jacobian)
   {
-    DenseMatrix<Number> & Ken =
-        _assembly.jacobianBlockNeighbor(Moose::ElementNeighbor, _var.number(), _var.number());
-    if (Ken.m() && Ken.n())
+    prepareMatrixTagNeighbor(_assembly, _var.number(), _var.number(), Moose::ElementNeighbor, _Ken);
+    if (_Ken.m() && _Ken.n())
+    {
       for (_i = 0; _i < _test_secondary.size(); _i++)
         for (_j = 0; _j < _phi_primary.size(); _j++)
-          Ken(_i, _j) += computeQpJacobian(Moose::SecondaryPrimary);
+          _Ken(_i, _j) += computeQpJacobian(Moose::SecondaryPrimary);
+      accumulateTaggedLocalMatrix(
+          _assembly, _var.number(), _var.number(), Moose::ElementNeighbor, _Ken);
+    }
 
     _Kne.resize(_test_primary.size(), _connected_dof_indices.size());
     for (_i = 0; _i < _test_primary.size(); _i++)
@@ -1761,10 +1767,14 @@ MechanicalContactConstraint::computeJacobian()
         _Kne(_i, _j) += computeQpJacobian(Moose::PrimarySecondary);
   }
 
-  if (Knn.m() && Knn.n())
+  if (_Knn.m() && _Knn.n())
+  {
     for (_i = 0; _i < _test_primary.size(); _i++)
       for (_j = 0; _j < _phi_primary.size(); _j++)
-        Knn(_i, _j) += computeQpJacobian(Moose::PrimaryPrimary);
+        _Knn(_i, _j) += computeQpJacobian(Moose::PrimaryPrimary);
+    accumulateTaggedLocalMatrix(
+        _assembly, _primary_var.number(), _var.number(), Moose::NeighborNeighbor, _Knn);
+  }
 }
 
 void
@@ -1774,8 +1784,8 @@ MechanicalContactConstraint::computeOffDiagJacobian(const unsigned int jvar_num)
 
   _Kee.resize(_test_secondary.size(), _connected_dof_indices.size());
 
-  DenseMatrix<Number> & Knn =
-      _assembly.jacobianBlockNeighbor(Moose::NeighborNeighbor, _primary_var.number(), jvar_num);
+  prepareMatrixTagNeighbor(
+      _assembly, _primary_var.number(), jvar_num, Moose::NeighborNeighbor, _Knn);
 
   for (_i = 0; _i < _test_secondary.size(); _i++)
     // Loop over the connected dof indices so we can get all the jacobian contributions
@@ -1784,11 +1794,11 @@ MechanicalContactConstraint::computeOffDiagJacobian(const unsigned int jvar_num)
 
   if (_primary_secondary_jacobian)
   {
-    DenseMatrix<Number> & Ken =
-        _assembly.jacobianBlockNeighbor(Moose::ElementNeighbor, _var.number(), jvar_num);
+    prepareMatrixTagNeighbor(_assembly, _var.number(), jvar_num, Moose::ElementNeighbor, _Ken);
     for (_i = 0; _i < _test_secondary.size(); _i++)
       for (_j = 0; _j < _phi_primary.size(); _j++)
-        Ken(_i, _j) += computeQpOffDiagJacobian(Moose::SecondaryPrimary, jvar_num);
+        _Ken(_i, _j) += computeQpOffDiagJacobian(Moose::SecondaryPrimary, jvar_num);
+    accumulateTaggedLocalMatrix(_assembly, _var.number(), jvar_num, Moose::ElementNeighbor, _Ken);
 
     _Kne.resize(_test_primary.size(), _connected_dof_indices.size());
     if (_Kne.m() && _Kne.n())
@@ -1800,7 +1810,9 @@ MechanicalContactConstraint::computeOffDiagJacobian(const unsigned int jvar_num)
 
   for (_i = 0; _i < _test_primary.size(); _i++)
     for (_j = 0; _j < _phi_primary.size(); _j++)
-      Knn(_i, _j) += computeQpOffDiagJacobian(Moose::PrimaryPrimary, jvar_num);
+      _Knn(_i, _j) += computeQpOffDiagJacobian(Moose::PrimaryPrimary, jvar_num);
+  accumulateTaggedLocalMatrix(
+      _assembly, _primary_var.number(), jvar_num, Moose::NeighborNeighbor, _Knn);
 }
 
 void

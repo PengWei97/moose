@@ -1,18 +1,16 @@
-<!-- MOOSE Documentation Stub: Remove this when content is added. -->
-
 # EnergyFluxIntegral
 
-!alert construction title=Undocumented Class
-The EnergyFluxIntegral has not been documented. The content contained on this page includes the
-typical automatic documentation associated with a MooseObject; however, what is contained is
-ultimately determined by what is necessary to make the documentation clear for users.
-
 !syntax description /Postprocessors/EnergyFluxIntegral
+
+The integral of the energy flux $I_E$ over boundary $\partial \Omega$ is:
+
+!equation
+I_E = \int_{\partial \Omega} \alpha \rho u A h d\partial \Omega
+
+with $\alpha \rho u A$ the conserved phase momentum and $h$ the specific total enthalpy of the fluid at the boundary.
 
 !syntax parameters /Postprocessors/EnergyFluxIntegral
 
 !syntax inputs /Postprocessors/EnergyFluxIntegral
 
 !syntax children /Postprocessors/EnergyFluxIntegral
-
-!bibtex bibliography

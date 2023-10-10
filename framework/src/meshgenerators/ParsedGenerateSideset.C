@@ -31,6 +31,9 @@ ParsedGenerateSideset::validParams()
   params.addRequiredParam<std::string>("combinatorial_geometry",
                                        "Function expression encoding a combinatorial geometry");
   params.addRequiredParam<BoundaryName>("new_sideset_name", "The name of the new sideset");
+  params.addParam<std::vector<BoundaryName>>(
+      "included_boundaries",
+      "A set of boundary names or ids whose sides will be included in the new sidesets");
   params.addParam<std::vector<SubdomainName>>(
       "included_subdomains",
       "A set of subdomain names or ids whose sides will be included in the new sidesets");
@@ -47,6 +50,10 @@ ParsedGenerateSideset::validParams()
       "A set of neighboring subdomain ids. A face is only added if the subdomain id of the "
       "neighbor is in this set",
       "included_neighbor_ids is deprecated, use included_neighbors with names or ids");
+  params.addParam<bool>(
+      "include_only_external_sides",
+      false,
+      "Whether to only include external sides when considering sides to add to the sideset");
   params.addParam<Point>(
       "normal",
       Point(),
@@ -70,6 +77,7 @@ ParsedGenerateSideset::ParsedGenerateSideset(const InputParameters & parameters)
     _input(getMesh("input")),
     _function(parameters.get<std::string>("combinatorial_geometry")),
     _sideset_name(getParam<BoundaryName>("new_sideset_name")),
+    _check_boundaries(isParamValid("included_boundaries")),
     _check_subdomains(isParamValid("included_subdomain_ids") ||
                       isParamValid("included_subdomains")),
     _check_neighbor_subdomains(isParamValid("included_neighbor_ids") ||
@@ -81,6 +89,7 @@ ParsedGenerateSideset::ParsedGenerateSideset(const InputParameters & parameters)
     _included_neighbor_ids(isParamValid("included_neighbor_ids")
                                ? parameters.get<std::vector<SubdomainID>>("included_neighbor_ids")
                                : std::vector<SubdomainID>()),
+    _include_only_external_sides(getParam<bool>("include_only_external_sides")),
     _normal(getParam<Point>("normal"))
 {
   // Handle deprecated parameters
@@ -90,6 +99,18 @@ ParsedGenerateSideset::ParsedGenerateSideset(const InputParameters & parameters)
   if (isParamValid("included_neighbor_ids") && isParamValid("included_neighbors"))
     paramError("included_neighbor_ids",
                "included_neighbor_ids is deprecated, only specify included_neighbors");
+
+  // Handle incompatible parameters
+  if (_include_only_external_sides && _check_neighbor_subdomains)
+    paramError("include_only_external_sides", "External sides dont have neighbors");
+  const auto & included_boundaries = getParam<std::vector<BoundaryName>>("included_boundaries");
+  if (std::find(included_boundaries.begin(), included_boundaries.end(), _sideset_name) !=
+      included_boundaries.end())
+    paramError("new_boundary",
+               "A boundary cannot be both the new boundary and be included in the list of included "
+               "boundaries. If you are trying to restrict an existing boundary, you must use a "
+               "different name for 'new_boundary', delete the old boundary, and then rename the "
+               "new boundary to the old boundary.");
 
   // base function object
   _func_F = std::make_shared<SymFunction>();
@@ -151,6 +172,11 @@ ParsedGenerateSideset::generate()
     _included_neighbor_ids = MooseMeshUtils::getSubdomainIDs(*mesh, subdomains);
   }
 
+  std::vector<boundary_id_type> restricted_boundary_ids;
+  if (_check_boundaries)
+    restricted_boundary_ids = MooseMeshUtils::getBoundaryIDs(
+        *mesh, getParam<std::vector<BoundaryName>>("included_boundaries"), true);
+
   // Get the BoundaryIDs from the mesh
   std::vector<boundary_id_type> boundary_ids =
       MooseMeshUtils::getBoundaryIDs(*mesh, {_sideset_name}, true);
@@ -191,18 +217,36 @@ ParsedGenerateSideset::generate()
       if (_check_normal && std::abs(1.0 - _normal * normals[0]) > _variance)
         continue;
 
+      // check that boundary is within the list of included boundaries
+      if (_check_boundaries)
+      {
+        bool in_included_boundaries = false;
+        for (auto bid : restricted_boundary_ids)
+          if (boundary_info.has_boundary_id(elem, side, bid))
+            in_included_boundaries = true;
+        if (!in_included_boundaries)
+          continue;
+      }
+
+      // avoid internal sides if specified by the suer
+      if (_include_only_external_sides && elem->neighbor_ptr(side))
+        continue;
+
       // check expression
       std::unique_ptr<Elem> curr_side = elem->side_ptr(side);
       _func_params[0] = curr_side->vertex_average()(0);
       _func_params[1] = curr_side->vertex_average()(1);
       _func_params[2] = curr_side->vertex_average()(2);
       if (evaluate(_func_F))
+      {
         boundary_info.add_side(elem, side, boundary_ids[0]);
+      }
     }
   }
   finalize();
   boundary_info.sideset_name(boundary_ids[0]) = _sideset_name;
   boundary_info.nodeset_name(boundary_ids[0]) = _sideset_name;
 
+  mesh->set_isnt_prepared();
   return dynamic_pointer_cast<MeshBase>(mesh);
 }

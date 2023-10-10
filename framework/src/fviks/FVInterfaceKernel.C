@@ -30,7 +30,7 @@ FVInterfaceKernel::validParams()
   params += TaggingInterface::validParams();
   params += NeighborCoupleableMooseVariableDependencyIntermediateInterface::validParams();
   params += TwoMaterialPropertyInterface::validParams();
-  params += FunctorInterface::validParams();
+  params += ADFunctorInterface::validParams();
 
   params.addRequiredParam<std::vector<SubdomainName>>(
       "subdomain1", "The subdomains on the 1st side of the boundary.");
@@ -55,6 +55,7 @@ FVInterfaceKernel::validParams()
                         false,
                         "Whether to use point neighbors, which introduces additional ghosting to "
                         "that used for simple face neighbors.");
+  params.addParamNamesToGroup("ghost_layers use_point_neighbors", "Parallel ghosting");
 
   // FV Interface Kernels always need one layer of ghosting because the elements
   // on each side of the interface may be on different MPI ranks, but we still
@@ -94,25 +95,24 @@ FVInterfaceKernel::FVInterfaceKernel(const InputParameters & parameters)
     NeighborCoupleableMooseVariableDependencyIntermediateInterface(
         this, /*nodal=*/false, /*neighbor_nodal=*/false, /*is_fv=*/true),
     TwoMaterialPropertyInterface(this, Moose::EMPTY_BLOCK_IDS, boundaryIDs()),
-    FunctorInterface(this),
+    ADFunctorInterface(this),
     _tid(getParam<THREAD_ID>("_tid")),
     _subproblem(*getCheckedPointerParam<SubProblem *>("_subproblem")),
-    _sys(*getCheckedPointerParam<SystemBase *>("_sys")),
-    _assembly(_subproblem.assembly(_tid, _sys.number())),
-    _var1(_sys.getFVVariable<Real>(_tid, getParam<NonlinearVariableName>("variable1"))),
-    _var2(_sys.getFVVariable<Real>(_tid,
+    _var1(_subproblem.getVariable(_tid, getParam<NonlinearVariableName>("variable1"))
+              .sys()
+              .getFVVariable<Real>(_tid, getParam<NonlinearVariableName>("variable1"))),
+    _var2(_subproblem
+              .getVariable(_tid,
+                           isParamValid("variable2") ? getParam<NonlinearVariableName>("variable2")
+                                                     : getParam<NonlinearVariableName>("variable1"))
+              .sys()
+              .getFVVariable<Real>(_tid,
                                    isParamValid("variable2")
                                        ? getParam<NonlinearVariableName>("variable2")
                                        : getParam<NonlinearVariableName>("variable1"))),
+    _assembly(_subproblem.assembly(_tid, _var1.sys().number())),
     _mesh(_subproblem.mesh())
 {
-#ifndef MOOSE_GLOBAL_AD_INDEXING
-  mooseError("FVInterfaceKernels are not supported by local AD indexing. In order to use "
-             "FVInterfaceKernels, please run the "
-             "configure script in the root MOOSE directory with the configure option "
-             "'--with-ad-indexing-type=global'");
-#endif
-
   if (getParam<bool>("use_displaced_mesh"))
     paramError("use_displaced_mesh", "FV interface kernels do not yet support displaced mesh");
 
@@ -163,35 +163,38 @@ FVInterfaceKernel::setupData(const FaceInfo & fi)
 }
 
 void
-FVInterfaceKernel::processResidual(const Real resid,
-                                   const unsigned int var_num,
-                                   const bool neighbor)
+FVInterfaceKernel::addResidual(const Real resid, const unsigned int var_num, const bool neighbor)
 {
   neighbor ? prepareVectorTagNeighbor(_assembly, var_num) : prepareVectorTag(_assembly, var_num);
   _local_re(0) = resid;
   accumulateTaggedLocalResidual();
 }
 
-#ifdef MOOSE_GLOBAL_AD_INDEXING
 void
-FVInterfaceKernel::processJacobian(const ADReal & resid, const dof_id_type dof_index)
+FVInterfaceKernel::addJacobian(const ADReal & resid,
+                               const dof_id_type dof_index,
+                               const Real scaling_factor)
 {
-  _assembly.processJacobian(resid, dof_index, _matrix_tags);
+  addJacobian(_assembly,
+              std::array<ADReal, 1>{{resid}},
+              std::array<dof_id_type, 1>{{dof_index}},
+              scaling_factor);
 }
-#endif
 
 void
 FVInterfaceKernel::computeResidual(const FaceInfo & fi)
 {
   setupData(fi);
 
-  const auto var_elem_num = _elem_is_one ? _var1.number() : _var2.number();
-  const auto var_neigh_num = _elem_is_one ? _var2.number() : _var1.number();
-
   const auto r = MetaPhysicL::raw_value(fi.faceArea() * fi.faceCoord() * computeQpResidual());
 
-  processResidual(r, var_elem_num, false);
-  processResidual(-r, var_neigh_num, true);
+  // If the two variables belong to two different nonlinear systems, we only contribute to the one
+  // which is being assembled right now
+  mooseAssert(_var1.sys().number() == _subproblem.currentNlSysNum(),
+              "The interface kernel should contribute to the system which variable1 belongs to!");
+  addResidual(_elem_is_one ? r : -r, _var1.number(), _elem_is_one ? false : true);
+  if (_var1.sys().number() == _var2.sys().number())
+    addResidual(_elem_is_one ? -r : r, _var2.number(), _elem_is_one ? true : false);
 }
 
 void
@@ -200,29 +203,27 @@ FVInterfaceKernel::computeResidualAndJacobian(const FaceInfo & fi)
   computeJacobian(fi);
 }
 
-#ifdef MOOSE_GLOBAL_AD_INDEXING
 void
 FVInterfaceKernel::computeJacobian(const FaceInfo & fi)
 {
   setupData(fi);
 
-  const auto & elem_dof_indices = _elem_is_one ? _var1.dofIndices() : _var2.dofIndices();
-  const auto & neigh_dof_indices =
-      _elem_is_one ? _var2.dofIndicesNeighbor() : _var1.dofIndicesNeighbor();
-  mooseAssert((elem_dof_indices.size() == 1) && (neigh_dof_indices.size() == 1),
-              "We're currently built to use CONSTANT MONOMIALS");
-
   const auto r = fi.faceArea() * fi.faceCoord() * computeQpResidual();
 
-  _assembly.processResidualAndJacobian(r, elem_dof_indices[0], _vector_tags, _matrix_tags);
-  _assembly.processResidualAndJacobian(-r, neigh_dof_indices[0], _vector_tags, _matrix_tags);
+  // If the two variables belong to two different nonlinear systems, we only contribute to the one
+  // which is being assembled right now
+  mooseAssert(_var1.sys().number() == _subproblem.currentNlSysNum(),
+              "The interface kernel should contribute to the system which variable1 belongs to!");
+  addResidualsAndJacobian(_assembly,
+                          std::array<ADReal, 1>{{_elem_is_one ? r : -r}},
+                          _elem_is_one ? _var1.dofIndices() : _var1.dofIndicesNeighbor(),
+                          _var1.scalingFactor());
+  if (_var1.sys().number() == _var2.sys().number())
+    addResidualsAndJacobian(_assembly,
+                            std::array<ADReal, 1>{{_elem_is_one ? -r : r}},
+                            _elem_is_one ? _var2.dofIndicesNeighbor() : _var2.dofIndices(),
+                            _var2.scalingFactor());
 }
-#else
-void
-FVInterfaceKernel::computeJacobian(const FaceInfo &)
-{
-}
-#endif
 
 Moose::ElemArg
 FVInterfaceKernel::elemArg(const bool correct_skewness) const

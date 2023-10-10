@@ -18,12 +18,18 @@ InputParameters
 TimeSequenceStepperBase::validParams()
 {
   InputParameters params = TimeStepper::validParams();
+  params.addParam<bool>(
+      "use_last_dt_after_last_t",
+      false,
+      "If true, uses the final time step size for times after the last time in the sequence, "
+      "instead of taking a single step directly to the simulation end time");
   return params;
 }
 
 TimeSequenceStepperBase::TimeSequenceStepperBase(const InputParameters & parameters)
   : TimeStepper(parameters),
-    _current_step(declareRestartableData("current_step", (unsigned int)0)),
+    _use_last_dt_after_last_t(getParam<bool>("use_last_dt_after_last_t")),
+    _current_step(declareRestartableData<unsigned int>("current_step", 0)),
     _time_sequence(declareRestartableData<std::vector<Real>>("time_sequence"))
 {
 }
@@ -34,7 +40,7 @@ TimeSequenceStepperBase::setupSequence(const std::vector<Real> & times)
   // In case of half transient, transient's end time needs to be reset to
   // be able to imprint TimeSequenceStepperBase's end time
   if (_app.halfTransient())
-    _executioner.endTime() *= 2.0;
+    _executioner.endTime() = _executioner.endTime() * 2.0 - _executioner.getStartTime();
 
   // only set up _time_sequence if the app is _not_ recovering
   if (!_app.isRecovering())
@@ -129,7 +135,19 @@ TimeSequenceStepperBase::computeInitialDT()
 Real
 TimeSequenceStepperBase::computeDT()
 {
-  return _time_sequence[_current_step + 1] - _time_sequence[_current_step];
+  const auto standard_dt = _time_sequence[_current_step + 1] - _time_sequence[_current_step];
+
+  if (_use_last_dt_after_last_t)
+  {
+    // last *provided* time value index; actual last index corresponds to end time
+    const auto last_t_index = _time_sequence.size() - 2;
+    if (_current_step + 1 > last_t_index)
+      return _time_sequence[last_t_index] - _time_sequence[last_t_index - 1];
+    else
+      return standard_dt;
+  }
+  else
+    return standard_dt;
 }
 
 Real

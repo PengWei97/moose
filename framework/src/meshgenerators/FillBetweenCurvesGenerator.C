@@ -93,8 +93,8 @@ FillBetweenCurvesGenerator::FillBetweenCurvesGenerator(const InputParameters & p
 std::unique_ptr<MeshBase>
 FillBetweenCurvesGenerator::generate()
 {
-  auto input_mesh_1 = dynamic_cast<ReplicatedMesh *>(_input_1.get());
-  auto input_mesh_2 = dynamic_cast<ReplicatedMesh *>(_input_2.get());
+  auto input_mesh_1 = dynamic_pointer_cast<ReplicatedMesh>(std::move(_input_1));
+  auto input_mesh_2 = dynamic_pointer_cast<ReplicatedMesh>(std::move(_input_2));
   if (!input_mesh_1)
     paramError("input_mesh_1", "Input is not a replicated mesh, which is required.");
   if (!input_mesh_2)
@@ -119,8 +119,9 @@ FillBetweenCurvesGenerator::generate()
   }
   catch (MooseException & e)
   {
-    paramError("curve_1", e.what());
+    paramError("input_mesh_1", e.what());
   }
+
   try
   {
     FillBetweenPointVectorsTools::isCurveOpenSingleSegment(*input_mesh_2,
@@ -130,7 +131,7 @@ FillBetweenCurvesGenerator::generate()
   }
   catch (MooseException & e)
   {
-    paramError("curve_2", e.what());
+    paramError("input_mesh_2", e.what());
   }
 
   std::vector<Point> positions_vector_1;
@@ -159,6 +160,43 @@ FillBetweenCurvesGenerator::generate()
                                                                  _use_quad_elements,
                                                                  _bias_parameter,
                                                                  _sigma);
+
+  // Transfer over the nodesets
+  BoundaryInfo & boundary = mesh->get_boundary_info();
+  const BoundaryInfo & input_bdy_1 = input_mesh_1->get_boundary_info();
+  const BoundaryInfo & input_bdy_2 = input_mesh_2->get_boundary_info();
+
+  // Nodes could have been re-ordered during the FillBetweenPointVectors operation
+  // We need to locate the nodes from input nodesets in the new mesh
+  if (!mesh->is_prepared())
+    mesh->prepare_for_use();
+  auto pl = mesh->sub_point_locator();
+
+  boundary_id_type offset = 0;
+  const auto node_list_mesh1 = input_bdy_1.build_node_list();
+  for (const auto & t : node_list_mesh1)
+  {
+    mooseAssert(pl->locate_node(*input_mesh_1->node_ptr(std::get<0>(t))),
+                "We should have found the old node in input mesh 1");
+    boundary.add_node(pl->locate_node(*input_mesh_1->node_ptr(std::get<0>(t))), std::get<1>(t));
+    offset = std::max(std::get<1>(t), offset);
+  }
+
+  const auto node_list_mesh2 = input_bdy_2.build_node_list();
+  for (const auto & t : node_list_mesh2)
+  {
+    mooseAssert(pl->locate_node(*input_mesh_1->node_ptr(std::get<0>(t))),
+                "We should have found the old node in input mesh 2");
+    boundary.add_node(pl->locate_node(*input_mesh_2->node_ptr(std::get<0>(t))),
+                      std::get<1>(t) + offset);
+  }
+
+  for (const auto & nodeset_pair : input_bdy_1.get_nodeset_name_map())
+    boundary.set_nodeset_name_map().insert(nodeset_pair);
+  for (const auto & [bnd_id, bnd_name] : input_bdy_2.get_nodeset_name_map())
+    boundary.set_nodeset_name_map()[bnd_id + offset] = bnd_name;
+  if (node_list_mesh1.size() + node_list_mesh2.size())
+    mesh->set_isnt_prepared();
 
   return dynamic_pointer_cast<MeshBase>(mesh);
 }

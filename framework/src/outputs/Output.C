@@ -22,6 +22,9 @@
 #include "MooseUtils.h"
 #include "MooseApp.h"
 #include "Console.h"
+#include "Function.h"
+#include "PiecewiseLinear.h"
+#include "Times.h"
 
 #include "libmesh/equation_systems.h"
 
@@ -43,6 +46,9 @@ Output::validParams()
       "minimum_time_interval", 0.0, "The minimum simulation time between output steps");
   params.addParam<std::vector<Real>>("sync_times",
                                      "Times at which the output and solution is forced to occur");
+  params.addParam<TimesName>(
+      "sync_times_object",
+      "Times object providing the times at which the output and solution is forced to occur");
   params.addParam<bool>("sync_only", false, "Only export results at sync times");
   params.addParam<Real>("start_time", "Time at which this output object begins to operate");
   params.addParam<Real>("end_time", "Time at which this output object stop operating");
@@ -50,6 +56,10 @@ Output::validParams()
   params.addParam<int>("end_step", "Time step at which this output object stop operating");
   params.addParam<Real>(
       "time_tolerance", 1e-14, "Time tolerance utilized checking start and end times");
+  params.addDeprecatedParam<FunctionName>(
+      "output_limiting_function",
+      "Piecewise base function that sets sync_times",
+      "Replaced by using the Times system with the sync_times_objects parameter");
 
   // Update the 'execute_on' input parameter for output
   ExecFlagEnum & exec_enum = params.set<ExecFlagEnum>("execute_on", true);
@@ -60,12 +70,13 @@ Output::validParams()
   // Add ability to append to the 'execute_on' list
   params.addParam<ExecFlagEnum>("additional_execute_on", exec_enum, exec_enum.getDocString());
   params.set<ExecFlagEnum>("additional_execute_on").clear();
-  params.addParamNamesToGroup("execute_on additional_execute_on", "execute_on");
+  params.addParamNamesToGroup("execute_on additional_execute_on", "Execution scheduling");
 
   // 'Timing' group
-  params.addParamNamesToGroup("time_tolerance interval sync_times sync_only start_time end_time "
-                              "start_step end_step minimum_time_interval",
-                              "Timing and frequency");
+  params.addParamNamesToGroup(
+      "time_tolerance interval sync_times sync_times_object sync_only start_time end_time "
+      "start_step end_step minimum_time_interval",
+      "Timing and frequency of output");
 
   // Add a private parameter for indicating if it was created with short-cut syntax
   params.addPrivateParam<bool>("_built_by_moose", false);
@@ -90,6 +101,7 @@ Output::Output(const InputParameters & parameters)
     Restartable(this, "Output"),
     MeshChangedInterface(parameters),
     SetupInterface(this),
+    FunctionInterface(this),
     PostprocessorInterface(this),
     VectorPostprocessorInterface(this),
     ReporterInterface(this),
@@ -100,6 +112,7 @@ Output::Output(const InputParameters & parameters)
     _es_ptr(nullptr),
     _mesh_ptr(nullptr),
     _execute_on(getParam<ExecFlagEnum>("execute_on")),
+    _current_execute_flag(EXEC_NONE),
     _time(_problem_ptr->time()),
     _time_old(_problem_ptr->timeOld()),
     _t_step(_problem_ptr->timeStep()),
@@ -110,6 +123,10 @@ Output::Output(const InputParameters & parameters)
     _minimum_time_interval(getParam<Real>("minimum_time_interval")),
     _sync_times(std::set<Real>(getParam<std::vector<Real>>("sync_times").begin(),
                                getParam<std::vector<Real>>("sync_times").end())),
+    _sync_times_object(isParamValid("sync_times_object")
+                           ? static_cast<Times *>(&_problem_ptr->getUserObject<Times>(
+                                 getParam<TimesName>("sync_times_object")))
+                           : nullptr),
     _start_time(isParamValid("start_time") ? getParam<Real>("start_time")
                                            : std::numeric_limits<Real>::lowest()),
     _end_time(isParamValid("end_time") ? getParam<Real>("end_time")
@@ -156,6 +173,30 @@ Output::Output(const InputParameters & parameters)
     for (auto & me : add)
       _execute_on.push_back(me);
   }
+
+  if (isParamValid("output_limiting_function"))
+  {
+    const Function & olf = getFunction("output_limiting_function");
+    const PiecewiseBase * pwb_olf = dynamic_cast<const PiecewiseBase *>(&olf);
+    if (pwb_olf == nullptr)
+      mooseError("Function muse have a piecewise base!");
+
+    for (auto i = 0; i < pwb_olf->functionSize(); i++)
+      _sync_times.insert(pwb_olf->domain(i));
+  }
+
+  // Get sync times from Times object if using
+  if (_sync_times_object)
+  {
+    if (isParamValid("output_limiting_function") || isParamSetByUser("sync_times"))
+      paramError("sync_times_object",
+                 "Only one method of specifying sync times is supported at a time");
+    else
+      // Sync times for the time steppers are taken from the output warehouse. The output warehouse
+      // takes sync times from the output objects immediately after the object is constructed. Hence
+      // we must ensure that we set the `_sync_times` in the constructor
+      _sync_times = _sync_times_object->getUniqueTimes();
+  }
 }
 
 void
@@ -181,21 +222,23 @@ Output::outputStep(const ExecFlagType & type)
   // store current simulation time
   _last_output_time = _time;
 
+  // set current type
+  _current_execute_flag = type;
+
   // Call the output method
-  if (shouldOutput(type))
+  if (shouldOutput())
   {
     TIME_SECTION("outputStep", 2, "Outputting Step");
-    output(type);
+    output();
   }
+
+  _current_execute_flag = EXEC_NONE;
 }
 
 bool
-Output::shouldOutput(const ExecFlagType & type)
+Output::shouldOutput()
 {
-  // Note that in older versions of MOOSE, this was overloaded (unintentionally) to always return
-  // true for the Console output subclass - basically ignoring execute_on options specified for
-  // the console (e.g. via the input file).
-  if (_execute_on.contains(type) || type == EXEC_FORCED)
+  if (_execute_on.contains(_current_execute_flag) || _current_execute_flag == EXEC_FORCED)
     return true;
   return false;
 }
@@ -215,6 +258,15 @@ Output::onInterval()
   // Return false if 'sync_only' is set to true
   if (_sync_only)
     output = false;
+
+  if (_sync_times_object)
+  {
+    const auto & sync_times = _sync_times_object->getUniqueTimes();
+    if (sync_times != _sync_times)
+      mooseError("The provided sync times object has changing time values. Only static time "
+                 "values are supported since time steppers take sync times from the output "
+                 "warehouse which determines its sync times at output construction time.");
+  }
 
   // If sync times are not skipped, return true if the current time is a sync_time
   if (_sync_times.find(_time) != _sync_times.end())

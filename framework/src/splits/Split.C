@@ -94,24 +94,25 @@ Split::setup(const std::string & prefix)
   // var options
   if (!_vars.empty())
   {
-    po.pairs.emplace_back(dmprefix + "vars", Moose::stringify(_vars));
+    po.pairs.emplace_back(dmprefix + "vars", Moose::stringify(_vars, ","));
 
+    // check that variables are either field or scalars
     for (const auto & var : _vars)
-      if (!_fe_problem.hasVariable(var))
+      if (!_fe_problem.hasVariable(var) && !_fe_problem.hasScalarVariable(var))
         mooseError("Variable '", var, "' specified in split '", name(), "' does not exist");
   }
 
   // block options
   if (!_blocks.empty())
-    po.pairs.emplace_back(dmprefix + "blocks", Moose::stringify(_blocks));
+    po.pairs.emplace_back(dmprefix + "blocks", Moose::stringify(_blocks, ","));
 
   // side options
   if (!_sides.empty())
-    po.pairs.emplace_back(dmprefix + "sides", Moose::stringify(_sides));
+    po.pairs.emplace_back(dmprefix + "sides", Moose::stringify(_sides, ","));
 
   // unside options
   if (!_unsides.empty())
-    po.pairs.emplace_back(dmprefix + "unsides", Moose::stringify(_unsides));
+    po.pairs.emplace_back(dmprefix + "unsides", Moose::stringify(_unsides, ","));
 
   if (!_splitting.empty())
   {
@@ -140,7 +141,7 @@ Split::setup(const std::string & prefix)
 
     // The DM associated with this split defines the subsplits' geometry.
     po.pairs.emplace_back(dmprefix + "nfieldsplits", Moose::stringify(_splitting.size()));
-    po.pairs.emplace_back(dmprefix + "fieldsplit_names", Moose::stringify(_splitting));
+    po.pairs.emplace_back(dmprefix + "fieldsplit_names", Moose::stringify(_splitting, ","));
 
     // Finally, recursively configure the splits contained within this split.
     for (const auto & split_name : _splitting)

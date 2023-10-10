@@ -11,8 +11,9 @@ The current class hierarchy for Moose variables is shown below:
 `MooseVariableBase` is the primitive base class from which all variables
 inherit. It includes methods for accessing the variable finite element type and
 order, degress of freedom, scaling factor, name, and associated
-`SystemBase`. Two classes inherit directly from `MooseVariableBase`:
-`MooseVariableFEBase` and `MooseVariableScalar`. `MooseVariableScalar` represents a
+[SystemBase](syntax/Systems/index.md). Two classes inherit directly from
+`MooseVariableBase`: [MooseVariableFEBase](MooseVariable.md)
+and [MooseVariableScalar](MooseVariableScalar.md). `MooseVariableScalar` represents a
 Moose variable that is constant over the spatial domain. It has a number of
 degrees of freedom equal to the order of the variable, e.g. the following
 variable block would declare a `MooseVariableScalar` with two associated degrees
@@ -150,6 +151,8 @@ call the following methods which take no arguments:
   `MooseVariables` as a `std::vector<MooseVariable *>`
 - `getCoupledVectorMooseVars`: returns all coupled multi-component
   `VectorMooseVariables` as a `std::vector<VectorMooseVariable *>`
+- `getCoupledMooseScalarVars`: returns all coupled
+  `MooseVariableScalars` as a `std::vector<MooseVariableScalar *>`
 
 Often times there is no need for the user/developer to access the actual Moose
 variable object. Instead they require the variable finite element solution or
@@ -173,7 +176,7 @@ gradient. Some of these methods are exemplified below:
 
 Derived field classes of `MooseVariableBase`, e.g. derivatives of the class
 template `MooseVariableField<T>` inherit from the
-`Moose::Functor`. Quadrature-based overloads of the `evaluate` method are
+[`Moose::Functor`](syntax/Functors/index.md). Quadrature-based overloads of the `evaluate` method are
 implemented in `MooseVariableField<T>`. The `ElemQpArg` and `ElemSideQpArg` `evaluate` overloads do
 true on-the-fly computation of the solution based on the information contained
 within the argument, e.g. they perform calls to libMesh `FE::reinit` methods
@@ -184,7 +187,7 @@ of this latter overload depends on the fact that the variable has already been
 reinit'd on the requested element or neighbor type. If a user is unsure whether
 this precondition will be met, then they should call the likely slower but more
 flexible `ElemQpArg` overload. For an overview of the different spatial
-overloads available for functors, please see [Materials/index.md#spatial-overloads].
+overloads available for functors, please see [syntax/Functors/index.md#spatial-overloads].
 
 Finite-volume-centric `evaluate` overloads are individually implemented in
 `MooseVariableFE<T>` and `MooseVariableFV<T>` class templates. The finite

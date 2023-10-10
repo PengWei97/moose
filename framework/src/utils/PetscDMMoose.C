@@ -32,15 +32,6 @@
 #include "libmesh/preconditioner.h"
 #include "libmesh/elem_side_builder.h"
 
-// As of 3.18, %D is no longer supported in format strings, but the
-// replacement PetscInt_FMT didn't get added until 3.7.2, and the
-// libMesh shim hasn't hit our submodule yet
-#if PETSC_RELEASE_LESS_THAN(3, 8, 0)
-#define MOOSE_PETSCINT_FMT "D"
-#else
-#define MOOSE_PETSCINT_FMT PetscInt_FMT
-#endif
-
 struct DM_Moose
 {
   NonlinearSystemBase * _nl;     // nonlinear system context
@@ -415,10 +406,10 @@ DMMooseSetContacts(DM dm,
   if (contacts.size() != displaced.size())
     LIBMESH_SETERRQ2(PETSC_COMM_SELF,
                      PETSC_ERR_ARG_SIZ,
-                     "Nonmatching sizes of the contact and displaced arrays: %" MOOSE_PETSCINT_FMT
-                     " != %" MOOSE_PETSCINT_FMT,
-                     contacts.size(),
-                     displaced.size());
+                     "Nonmatching sizes of the contact and displaced arrays: %" LIBMESH_PETSCINT_FMT
+                     " != %" LIBMESH_PETSCINT_FMT,
+                     static_cast<PetscInt>(contacts.size()),
+                     static_cast<PetscInt>(displaced.size()));
   if (dmm->_contacts)
     delete dmm->_contacts;
   dmm->_contact_displaced->clear();
@@ -455,12 +446,13 @@ DMMooseSetUnContacts(DM dm,
   if (dm->setupcalled)
     SETERRQ(PETSC_COMM_SELF, PETSC_ERR_ARG_WRONGSTATE, "Not for an already setup DM");
   if (uncontacts.size() != displaced.size())
-    LIBMESH_SETERRQ2(PETSC_COMM_SELF,
-                     PETSC_ERR_ARG_SIZ,
-                     "Nonmatching sizes of the uncontact and displaced arrays: %" MOOSE_PETSCINT_FMT
-                     " != %" MOOSE_PETSCINT_FMT,
-                     uncontacts.size(),
-                     displaced.size());
+    LIBMESH_SETERRQ2(
+        PETSC_COMM_SELF,
+        PETSC_ERR_ARG_SIZ,
+        "Nonmatching sizes of the uncontact and displaced arrays: %" LIBMESH_PETSCINT_FMT
+        " != %" LIBMESH_PETSCINT_FMT,
+        static_cast<PetscInt>(uncontacts.size()),
+        static_cast<PetscInt>(displaced.size()));
   if (dmm->_uncontacts)
     delete dmm->_uncontacts;
   dmm->_uncontact_displaced->clear();
@@ -526,20 +518,20 @@ DMMooseSetSplitNames(DM dm, const std::vector<std::string> & split_names)
       CHKERRQ(ierr);
     }
     delete dmm->_splits;
-    dmm->_splits = PETSC_NULL;
+    dmm->_splits = LIBMESH_PETSC_NULLPTR;
   }
   if (dmm->_splitlocs)
   {
     delete dmm->_splitlocs;
-    dmm->_splitlocs = PETSC_NULL;
+    dmm->_splitlocs = LIBMESH_PETSC_NULLPTR;
   }
   dmm->_splits = new std::map<std::string, DM_Moose::SplitInfo>();
   dmm->_splitlocs = new std::multimap<std::string, unsigned int>();
   for (unsigned int i = 0; i < split_names.size(); ++i)
   {
     DM_Moose::SplitInfo info;
-    info._dm = PETSC_NULL;
-    info._rembedding = PETSC_NULL;
+    info._dm = LIBMESH_PETSC_NULLPTR;
+    info._rembedding = LIBMESH_PETSC_NULLPTR;
     std::string name = split_names[i];
     (*dmm->_splits)[name] = info;
     dmm->_splitlocs->insert(std::make_pair(name, i));
@@ -1060,9 +1052,9 @@ DMCreateDomainDecomposition_Moose(
 
   PetscFunctionBegin;
   /* Use DMCreateFieldDecomposition_Moose() to obtain everything but outerislist, which is currently
-   * PETSC_NULL. */
+   * LIBMESH_PETSC_NULLPTR. */
   if (outerislist)
-    *outerislist = PETSC_NULL; /* FIX: allow mesh-based overlap. */
+    *outerislist = LIBMESH_PETSC_NULLPTR; /* FIX: allow mesh-based overlap. */
   ierr = DMCreateFieldDecomposition_Moose(dm, len, namelist, innerislist, dmlist);
   CHKERRQ(ierr);
   PetscFunctionReturn(0);
@@ -1615,7 +1607,7 @@ DMSetUp_Moose_Pre(DM dm)
       dmm->_side_ids->insert(std::make_pair(name, id));
     }
     delete dmm->_sides;
-    dmm->_sides = PETSC_NULL;
+    dmm->_sides = LIBMESH_PETSC_NULLPTR;
   }
   dmm->_nounsides = PETSC_TRUE;
   dmm->_unside_ids->clear();
@@ -1631,7 +1623,7 @@ DMSetUp_Moose_Pre(DM dm)
       dmm->_unside_ids->insert(std::make_pair(name, id));
     }
     delete dmm->_unsides;
-    dmm->_unsides = PETSC_NULL;
+    dmm->_unsides = LIBMESH_PETSC_NULLPTR;
   }
   dmm->_nocontacts = PETSC_TRUE;
 
@@ -1712,7 +1704,7 @@ DMSetUp_Moose_Pre(DM dm)
   if (dmm->_vars)
   {
     delete dmm->_vars;
-    dmm->_vars = PETSC_NULL;
+    dmm->_vars = LIBMESH_PETSC_NULLPTR;
   }
 
   dmm->_block_ids->clear();
@@ -1769,7 +1761,7 @@ DMSetUp_Moose_Pre(DM dm)
   if (dmm->_blocks)
   {
     delete dmm->_blocks;
-    dmm->_blocks = PETSC_NULL;
+    dmm->_blocks = LIBMESH_PETSC_NULLPTR;
   }
 
   std::string name = dmm->_nl->system().name();
@@ -1913,17 +1905,6 @@ DMSetUp_Moose(DM dm)
       ierr = DMSetVariableBounds(dm, DMVariableBounds_Moose);
     CHKERRQ(ierr);
   }
-  else
-  {
-    /*
-     Fow now we don't implement even these, although a linear "Dirichlet" subproblem is
-     well-defined.
-     Creating the submatrix, however, might require extracting the submatrix preallocation from an
-     unassembled matrix.
-     */
-    dm->ops->createglobalvector = 0;
-    dm->ops->creatematrix = 0;
-  }
   PetscFunctionReturn(0);
 }
 
@@ -1974,7 +1955,7 @@ DMSetFromOptions_Moose(PetscOptions * /*options*/, DM dm) // >= 3.6.0
   opt = "-dm_moose_vars";
   help = "Variables in DMMoose";
   ierr = PetscOptionsStringArray(
-      opt.c_str(), help.c_str(), "DMMooseSetVars", vars, &nvars, PETSC_NULL);
+      opt.c_str(), help.c_str(), "DMMooseSetVars", vars, &nvars, LIBMESH_PETSC_NULLPTR);
   CHKERRQ(ierr);
   for (PetscInt i = 0; i < nvars; ++i)
   {
@@ -2002,7 +1983,7 @@ DMSetFromOptions_Moose(PetscOptions * /*options*/, DM dm) // >= 3.6.0
   opt = "-dm_moose_blocks";
   help = "Blocks in DMMoose";
   ierr = PetscOptionsStringArray(
-      opt.c_str(), help.c_str(), "DMMooseSetBlocks", blocks, &nblocks, PETSC_NULL);
+      opt.c_str(), help.c_str(), "DMMooseSetBlocks", blocks, &nblocks, LIBMESH_PETSC_NULLPTR);
   CHKERRQ(ierr);
   for (PetscInt i = 0; i < nblocks; ++i)
   {
@@ -2026,7 +2007,7 @@ DMSetFromOptions_Moose(PetscOptions * /*options*/, DM dm) // >= 3.6.0
   opt = "-dm_moose_sides";
   help = "Sides to include in DMMoose";
   ierr = PetscOptionsStringArray(
-      opt.c_str(), help.c_str(), "DMMooseSetSides", sides, &nsides, PETSC_NULL);
+      opt.c_str(), help.c_str(), "DMMooseSetSides", sides, &nsides, LIBMESH_PETSC_NULLPTR);
   CHKERRQ(ierr);
   for (PetscInt i = 0; i < nsides; ++i)
   {
@@ -2043,7 +2024,7 @@ DMSetFromOptions_Moose(PetscOptions * /*options*/, DM dm) // >= 3.6.0
   help = "Sides to exclude from DMMoose";
   nsides = maxsides;
   ierr = PetscOptionsStringArray(
-      opt.c_str(), help.c_str(), "DMMooseSetUnSides", sides, &nsides, PETSC_NULL);
+      opt.c_str(), help.c_str(), "DMMooseSetUnSides", sides, &nsides, LIBMESH_PETSC_NULLPTR);
   CHKERRQ(ierr);
   sideset.clear();
   for (PetscInt i = 0; i < nsides; ++i)
@@ -2075,14 +2056,18 @@ DMSetFromOptions_Moose(PetscOptions * /*options*/, DM dm) // >= 3.6.0
       "defining the contact surfaces"
       "\t-dm_moose_contact_<n>_displaced <bool> determines whether the contact is defined on "
       "the displaced mesh or not";
-  ierr = PetscOptionsInt(
-      opt.c_str(), help.c_str(), "DMMooseSetContacts", ncontacts, &ncontacts, PETSC_NULL);
+  ierr = PetscOptionsInt(opt.c_str(),
+                         help.c_str(),
+                         "DMMooseSetContacts",
+                         ncontacts,
+                         &ncontacts,
+                         LIBMESH_PETSC_NULLPTR);
   CHKERRQ(ierr);
   if (ncontacts > maxcontacts)
     LIBMESH_SETERRQ2(((PetscObject)dm)->comm,
                      PETSC_ERR_ARG_SIZ,
-                     "Number of requested contacts %" MOOSE_PETSCINT_FMT
-                     " exceeds the maximum number of contacts %" MOOSE_PETSCINT_FMT,
+                     "Number of requested contacts %" LIBMESH_PETSCINT_FMT
+                     " exceeds the maximum number of contacts %" LIBMESH_PETSCINT_FMT,
                      ncontacts,
                      maxcontacts);
   for (PetscInt i = 0; i < ncontacts; ++i)
@@ -2098,14 +2083,14 @@ DMSetFromOptions_Moose(PetscOptions * /*options*/, DM dm) // >= 3.6.0
                                      "DMMooseSetContacts",
                                      primary_secondary,
                                      &sz,
-                                     PETSC_NULL);
+                                     LIBMESH_PETSC_NULLPTR);
       CHKERRQ(ierr);
       if (sz != 2)
         LIBMESH_SETERRQ2(
             ((PetscObject)dm)->comm,
             PETSC_ERR_ARG_SIZ,
-            "Expected 2 sideset IDs (primary & secondary) for contact %" MOOSE_PETSCINT_FMT
-            ", got %" MOOSE_PETSCINT_FMT " instead",
+            "Expected 2 sideset IDs (primary & secondary) for contact %" LIBMESH_PETSCINT_FMT
+            ", got %" LIBMESH_PETSCINT_FMT " instead",
             i,
             sz);
       contacts.push_back(DM_Moose::ContactName(std::string(primary_secondary[0]),
@@ -2125,7 +2110,7 @@ DMSetFromOptions_Moose(PetscOptions * /*options*/, DM dm) // >= 3.6.0
                               "DMMooseSetContacts",
                               PETSC_FALSE,
                               &displaced,
-                              PETSC_NULL);
+                              LIBMESH_PETSC_NULLPTR);
       CHKERRQ(ierr);
       contact_displaced.push_back(displaced);
     }
@@ -2145,7 +2130,7 @@ DMSetFromOptions_Moose(PetscOptions * /*options*/, DM dm) // >= 3.6.0
                             "",
                             PETSC_FALSE,
                             &is_include_all_nodes,
-                            PETSC_NULL);
+                            LIBMESH_PETSC_NULLPTR);
     CHKERRQ(ierr);
     dmm->_include_all_contact_nodes = is_include_all_nodes;
   }
@@ -2159,14 +2144,18 @@ DMSetFromOptions_Moose(PetscOptions * /*options*/, DM dm) // >= 3.6.0
       "defining the contact surfaces"
       "\t-dm_moose_contact_<n>_displaced <bool> determines whether the contact is defined on "
       "the displaced mesh or not";
-  ierr = PetscOptionsInt(
-      opt.c_str(), help.c_str(), "DMMooseSetUnContacts", nuncontacts, &nuncontacts, PETSC_NULL);
+  ierr = PetscOptionsInt(opt.c_str(),
+                         help.c_str(),
+                         "DMMooseSetUnContacts",
+                         nuncontacts,
+                         &nuncontacts,
+                         LIBMESH_PETSC_NULLPTR);
   CHKERRQ(ierr);
   if (nuncontacts > maxcontacts)
     LIBMESH_SETERRQ2(((PetscObject)dm)->comm,
                      PETSC_ERR_ARG_SIZ,
-                     "Number of requested uncontacts %" MOOSE_PETSCINT_FMT
-                     " exceeds the maximum number of contacts %" MOOSE_PETSCINT_FMT,
+                     "Number of requested uncontacts %" LIBMESH_PETSCINT_FMT
+                     " exceeds the maximum number of contacts %" LIBMESH_PETSCINT_FMT,
                      nuncontacts,
                      maxcontacts);
   for (PetscInt i = 0; i < nuncontacts; ++i)
@@ -2182,14 +2171,14 @@ DMSetFromOptions_Moose(PetscOptions * /*options*/, DM dm) // >= 3.6.0
                                      "DMMooseSetUnContacts",
                                      primary_secondary,
                                      &sz,
-                                     PETSC_NULL);
+                                     LIBMESH_PETSC_NULLPTR);
       CHKERRQ(ierr);
       if (sz != 2)
         LIBMESH_SETERRQ2(
             ((PetscObject)dm)->comm,
             PETSC_ERR_ARG_SIZ,
-            "Expected 2 sideset IDs (primary & secondary) for uncontact %" MOOSE_PETSCINT_FMT
-            ", got %" MOOSE_PETSCINT_FMT " instead",
+            "Expected 2 sideset IDs (primary & secondary) for uncontact %" LIBMESH_PETSCINT_FMT
+            ", got %" LIBMESH_PETSCINT_FMT " instead",
             i,
             sz);
       uncontacts.push_back(DM_Moose::ContactName(std::string(primary_secondary[0]),
@@ -2209,7 +2198,7 @@ DMSetFromOptions_Moose(PetscOptions * /*options*/, DM dm) // >= 3.6.0
                               "DMMooseSetUnContact",
                               PETSC_FALSE,
                               &displaced,
-                              PETSC_NULL);
+                              LIBMESH_PETSC_NULLPTR);
       CHKERRQ(ierr);
       uncontact_displaced.push_back(displaced);
     }
@@ -2241,7 +2230,7 @@ DMSetFromOptions_Moose(PetscOptions * /*options*/, DM dm) // >= 3.6.0
                                    "DMMooseSetSplitNames",
                                    splitnames,
                                    &nnsplits,
-                                   PETSC_NULL);
+                                   LIBMESH_PETSC_NULLPTR);
     CHKERRQ(ierr);
     if (!nnsplits)
     {
@@ -2255,8 +2244,8 @@ DMSetFromOptions_Moose(PetscOptions * /*options*/, DM dm) // >= 3.6.0
     else if (nsplits != nnsplits)
       LIBMESH_SETERRQ2(((PetscObject)dm)->comm,
                        PETSC_ERR_ARG_SIZ,
-                       "Expected %" MOOSE_PETSCINT_FMT " fieldsplit names, got %" MOOSE_PETSCINT_FMT
-                       " instead",
+                       "Expected %" LIBMESH_PETSCINT_FMT
+                       " fieldsplit names, got %" LIBMESH_PETSCINT_FMT " instead",
                        nsplits,
                        nnsplits);
     else
@@ -2278,7 +2267,7 @@ DMSetFromOptions_Moose(PetscOptions * /*options*/, DM dm) // >= 3.6.0
                           "DMMoose",
                           dmm->_print_embedding,
                           &dmm->_print_embedding,
-                          PETSC_NULL);
+                          LIBMESH_PETSC_NULLPTR);
   CHKERRQ(ierr);
   PetscOptionsEnd();
   ierr = DMSetUp_Moose_Pre(dm);

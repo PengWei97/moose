@@ -260,6 +260,7 @@ FlowModelSinglePhase::addMooseObjects()
   ////////////////////////////////////////////////////////
 
   // Density equation (transient term + advection term)
+  if (_flow_channel.problemIsTransient())
   {
     std::string class_name = "ADTimeDerivative";
     InputParameters params = _factory.getValidParams(class_name);
@@ -272,6 +273,7 @@ FlowModelSinglePhase::addMooseObjects()
 
   // Momentum equation, for 1-D flow channel, x-momentum equation only
   // (transient term + remaining terms[advection, pressure, body force, etc])
+  if (_flow_channel.problemIsTransient())
   {
     std::string class_name = "ADTimeDerivative";
     InputParameters params = _factory.getValidParams(class_name);
@@ -317,6 +319,7 @@ FlowModelSinglePhase::addMooseObjects()
 
   // Total energy equation
   // (transient term + remaining terms[advection, wall heating, work from body force, etc])
+  if (_flow_channel.problemIsTransient())
   {
     std::string class_name = "ADTimeDerivative";
     InputParameters params = _factory.getValidParams(class_name);
@@ -482,27 +485,30 @@ FlowModelSinglePhase::addRDGMooseObjects()
     _sim.addMaterial(class_name, genName(_comp_name, "rdg_3egn_mat"), params);
   }
 
-  // advection
-  {
-    // mass
-    const std::string class_name = "ADNumericalFlux3EqnDGKernel";
-    InputParameters params = _factory.getValidParams(class_name);
-    params.set<NonlinearVariableName>("variable") = RHOA;
-    params.set<std::vector<SubdomainName>>("block") = _flow_channel.getSubdomainNames();
-    params.set<std::vector<VariableName>>("A_linear") = {AREA_LINEAR};
-    params.set<std::vector<VariableName>>("rhoA") = {RHOA};
-    params.set<std::vector<VariableName>>("rhouA") = {RHOUA};
-    params.set<std::vector<VariableName>>("rhoEA") = {RHOEA};
-    params.set<UserObjectName>("numerical_flux") = _numerical_flux_name;
-    params.set<bool>("implicit") = _sim.getImplicitTimeIntegrationFlag();
-    _sim.addDGKernel(class_name, genName(_comp_name, "mass_advection"), params);
+  addRDGAdvectionDGKernels();
+}
 
-    // momentum
-    params.set<NonlinearVariableName>("variable") = RHOUA;
-    _sim.addDGKernel(class_name, genName(_comp_name, "momentum_advection"), params);
+void
+FlowModelSinglePhase::addRDGAdvectionDGKernels()
+{
+  // mass
+  const std::string class_name = "ADNumericalFlux3EqnDGKernel";
+  InputParameters params = _factory.getValidParams(class_name);
+  params.set<NonlinearVariableName>("variable") = RHOA;
+  params.set<std::vector<SubdomainName>>("block") = _flow_channel.getSubdomainNames();
+  params.set<std::vector<VariableName>>("A_linear") = {AREA_LINEAR};
+  params.set<std::vector<VariableName>>("rhoA") = {RHOA};
+  params.set<std::vector<VariableName>>("rhouA") = {RHOUA};
+  params.set<std::vector<VariableName>>("rhoEA") = {RHOEA};
+  params.set<UserObjectName>("numerical_flux") = _numerical_flux_name;
+  params.set<bool>("implicit") = _sim.getImplicitTimeIntegrationFlag();
+  _sim.addDGKernel(class_name, genName(_comp_name, "mass_advection"), params);
 
-    // energy
-    params.set<NonlinearVariableName>("variable") = RHOEA;
-    _sim.addDGKernel(class_name, genName(_comp_name, "energy_advection"), params);
-  }
+  // momentum
+  params.set<NonlinearVariableName>("variable") = RHOUA;
+  _sim.addDGKernel(class_name, genName(_comp_name, "momentum_advection"), params);
+
+  // energy
+  params.set<NonlinearVariableName>("variable") = RHOEA;
+  _sim.addDGKernel(class_name, genName(_comp_name, "energy_advection"), params);
 }

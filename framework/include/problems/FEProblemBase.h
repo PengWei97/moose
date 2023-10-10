@@ -31,6 +31,8 @@
 #include "PerfGraphInterface.h"
 #include "Attributes.h"
 #include "MooseObjectWarehouse.h"
+#include "MaterialPropertyRegistry.h"
+#include "RestartableEquationSystems.h"
 
 #include "libmesh/enum_quadrature_type.h"
 #include "libmesh/equation_systems.h"
@@ -51,7 +53,6 @@ class MultiMooseEnum;
 class MaterialPropertyStorage;
 class MaterialData;
 class MooseEnum;
-class RestartableDataIO;
 class Assembly;
 class JacobianBlock;
 class Control;
@@ -70,6 +71,7 @@ class ElementUserObject;
 class InternalSideUserObject;
 class InterfaceUserObject;
 class GeneralUserObject;
+class Positions;
 class Function;
 class Distribution;
 class Sampler;
@@ -79,10 +81,9 @@ class LineSearch;
 class UserObject;
 class AutomaticMortarGeneration;
 class VectorPostprocessor;
-class MooseFunctionBase;
-template <typename>
-class FunctionTempl;
+class Function;
 class MooseAppCoordTransform;
+class MortarUserObject;
 
 // libMesh forward declarations
 namespace libMesh
@@ -147,9 +148,10 @@ public:
   FEProblemBase(const InputParameters & parameters);
   virtual ~FEProblemBase();
 
-  virtual EquationSystems & es() override { return _eq; }
+  virtual EquationSystems & es() override { return _req.set().es(); }
   virtual MooseMesh & mesh() override { return _mesh; }
   virtual const MooseMesh & mesh() const override { return _mesh; }
+  const MooseMesh & mesh(bool use_displaced) const override;
 
   void setCoordSystem(const std::vector<SubdomainName> & blocks, const MultiMooseEnum & coord_sys);
   void setAxisymmetricCoordAxis(const MooseEnum & rz_coord_axis);
@@ -237,6 +239,24 @@ public:
                             const Real initial_residual_before_preset_bcs,
                             const Real div_threshold);
 
+  /// Perform steps required before checking nonlinear convergence
+  virtual void nonlinearConvergenceSetup() {}
+
+  /**
+   * Check the relative convergence of the nonlinear solution
+   * @param fnorm          Norm of the residual vector
+   * @param the_residual   The residual to check
+   * @param rtol           Relative tolerance
+   * @param abstol         Absolute tolerance
+   * @return               Bool signifying convergence
+   */
+  virtual bool checkRelativeConvergence(const PetscInt it,
+                                        const Real fnorm,
+                                        const Real the_residual,
+                                        const Real rtol,
+                                        const Real abstol,
+                                        std::ostringstream & oss);
+
   virtual bool hasVariable(const std::string & var_name) const override;
   using SubProblem::getVariable;
   virtual const MooseVariableFieldBase &
@@ -318,11 +338,6 @@ public:
    * @return The maximum number of quadrature points in use on any element in this problem.
    */
   unsigned int getMaxQps() const;
-
-  /**
-   * @return The maximum number of quadrature points in use on any element in this problem.
-   */
-  unsigned int getMaxShapeFunctions() const;
 
   /**
    * @return The maximum order for all scalar variables in this problem's systems.
@@ -488,6 +503,10 @@ public:
   virtual int & timeStep() const { return _t_step; }
   virtual Real & dt() const { return _dt; }
   virtual Real & dtOld() const { return _dt_old; }
+  /**
+   * Returns the time associated with the requested \p state
+   */
+  Real getTimeFromStateArg(const Moose::StateArg & state) const;
 
   virtual void transient(bool trans) { _transient = trans; }
   virtual bool isTransient() const override { return _transient; }
@@ -567,11 +586,7 @@ public:
   virtual void
   addFunction(const std::string & type, const std::string & name, InputParameters & parameters);
   virtual bool hasFunction(const std::string & name, THREAD_ID tid = 0);
-  template <typename T>
-  bool hasFunction(const std::string & name, THREAD_ID tid = 0) const;
   virtual Function & getFunction(const std::string & name, THREAD_ID tid = 0);
-  template <typename T>
-  FunctionTempl<T> & getFunction(const std::string & name, THREAD_ID tid = 0);
 
   /**
    * add a MOOSE line search
@@ -778,9 +793,9 @@ public:
    * @param tid The thread id
    * @param swap_stateful Whether to swap stateful material properties between \p MaterialData and
    * \p MaterialPropertyStorage
-   * @param execute_stateful Whether to execute material objects that have stateful properties. This
-   * should be \p false when for example executing material objects for mortar contexts in which
-   * stateful properties don't make sense
+   * @param execute_stateful Whether to execute material objects that have stateful properties.
+   * This should be \p false when for example executing material objects for mortar contexts in
+   * which stateful properties don't make sense
    */
   void reinitMaterialsBoundary(BoundaryID boundary_id,
                                THREAD_ID tid,
@@ -836,13 +851,15 @@ public:
    * @param name Name for the object to be created
    * @param parameters InputParameters for the object
    * @param threaded Whether or not to create n_threads copies of the object
+   * @param var_param_name The name of the parameter on the object which holds the primary variable.
    * @return A vector of shared_ptrs to the added objects
    */
   template <typename T>
   std::vector<std::shared_ptr<T>> addObject(const std::string & type,
                                             const std::string & name,
                                             InputParameters & parameters,
-                                            const bool threaded = true);
+                                            const bool threaded = true,
+                                            const std::string & var_param_name = "variable");
 
   // Postprocessors /////
   virtual void addPostprocessor(const std::string & pp_name,
@@ -920,6 +937,13 @@ public:
    * @return Const reference to the user object
    */
   const UserObject & getUserObjectBase(const std::string & name, const THREAD_ID tid = 0) const;
+
+  /**
+   * Get the Positions object by its name
+   * @param name The name of the Positions object being retrieved
+   * @return Const reference to the Positions object
+   */
+  const Positions & getPositionsObject(const std::string & name) const;
 
   /**
    * Check if there if a user object of given name
@@ -1325,12 +1349,6 @@ public:
   virtual void addJacobianNeighbor(THREAD_ID tid) override;
   virtual void addJacobianNeighborLowerD(THREAD_ID tid) override;
   virtual void addJacobianLowerD(THREAD_ID tid) override;
-  virtual void addJacobianBlock(SparseMatrix<Number> & jacobian,
-                                unsigned int ivar,
-                                unsigned int jvar,
-                                const DofMap & dof_map,
-                                std::vector<dof_id_type> & dof_indices,
-                                THREAD_ID tid) override;
   virtual void addJacobianBlockTags(SparseMatrix<Number> & jacobian,
                                     unsigned int ivar,
                                     unsigned int jvar,
@@ -1344,6 +1362,7 @@ public:
                                    const DofMap & dof_map,
                                    std::vector<dof_id_type> & dof_indices,
                                    std::vector<dof_id_type> & neighbor_dof_indices,
+                                   const std::set<TagID> & tags,
                                    THREAD_ID tid) override;
   virtual void addJacobianScalar(THREAD_ID tid = 0);
   virtual void addJacobianOffDiagScalar(unsigned int ivar, THREAD_ID tid = 0);
@@ -1351,10 +1370,6 @@ public:
   virtual void cacheJacobian(THREAD_ID tid) override;
   virtual void cacheJacobianNeighbor(THREAD_ID tid) override;
   virtual void addCachedJacobian(THREAD_ID tid) override;
-  /**
-   * Deprecated method. Use addCachedJacobian
-   */
-  virtual void addCachedJacobianContributions(THREAD_ID tid) override;
 
   virtual void prepareShapes(unsigned int var, THREAD_ID tid) override;
   virtual void prepareFaceShapes(unsigned int var, THREAD_ID tid) override;
@@ -1409,6 +1424,14 @@ public:
    * @param file_name The file name for restarting from
    */
   void setRestartFile(const std::string & file_name);
+
+  /**
+   * @return A reference to the material property registry
+   */
+  const MaterialPropertyRegistry & getMaterialPropertyRegistry() const
+  {
+    return _material_prop_registry;
+  }
 
   /**
    * Return a reference to the material property storage
@@ -1504,7 +1527,7 @@ public:
    * This is needed when elements/boundary nodes are added to a specific subdomain
    * at an intermediate step
    */
-  void initElementStatefulProps(const ConstElemRange & elem_range);
+  void initElementStatefulProps(const ConstElemRange & elem_range, const bool threaded);
 
   /**
    * Method called to perform a series of sanity checks before a simulation is run. This method
@@ -1609,9 +1632,9 @@ public:
                                             bool no_warn = false);
 
   /*
-   * Return a pointer to the MaterialData
+   * @return The MaterialData for the type \p type for thread \p tid
    */
-  std::shared_ptr<MaterialData> getMaterialData(Moose::MaterialDataType type, THREAD_ID tid = 0);
+  MaterialData & getMaterialData(Moose::MaterialDataType type, THREAD_ID tid = 0);
 
   /**
    * Will return True if the user wants to get an error when
@@ -1628,9 +1651,14 @@ public:
   }
 
   /**
-   * Whether or not we are allowing invalid solutions
+   * Whether or not the invalid solutions are allowed
    */
-  bool allowInvalidSolution() { return _allow_invalid_solution; }
+  bool allowInvalidSolution() const { return _allow_invalid_solution; }
+
+  /**
+   * Whether or not the solution invalid warnings are printed out immediately
+   */
+  bool immediatelyPrintInvalidSolution() const { return _immediately_print_invalid_solution; }
 
   bool ignoreZerosInJacobian() const { return _ignore_zeros_in_jacobian; }
 
@@ -1685,11 +1713,6 @@ public:
    * @return true if the user required values of the previous Newton iterate
    */
   bool needsPreviousNewtonIteration() const;
-
-  /**
-   * Whether or not to skip loading the additional data when restarting
-   */
-  bool skipAdditionalRestartData() const { return _skip_additional_restart_data; }
 
   ///@{
   /**
@@ -1921,7 +1944,16 @@ public:
                                      const std::vector<Real> * const weights = nullptr,
                                      THREAD_ID tid = 0) override;
 
+  /**
+   * @return whether to perform a boundary condition integrity check for finite volume
+   */
   bool fvBCsIntegrityCheck() const { return _fv_bcs_integrity_check; }
+
+  /**
+   * @param fv_bcs_integrity_check Whether to perform a boundary condition integrity check for
+   * finite volume
+   */
+  void fvBCsIntegrityCheck(bool fv_bcs_integrity_check);
 
   /**
    * Get the materials and variables potentially needed for FV
@@ -2012,9 +2044,64 @@ public:
   unsigned int nlSysNum(const NonlinearSystemName & nl_sys_name) const;
 
   /**
+   * Whether it will skip further residual evaluations and fail the next nonlinear convergence check
+   */
+  bool getFailNextNonlinearConvergenceCheck() const
+  {
+    return _fail_next_nonlinear_convergence_check;
+  }
+
+  /**
    * Skip further residual evaluations and fail the next nonlinear convergence check
    */
-  bool failNextNonlinearConvergenceCheck() const { return _fail_next_nonlinear_convergence_check; }
+  void setFailNextNonlinearConvergenceCheck() { _fail_next_nonlinear_convergence_check = true; }
+
+  /*
+   * Set the status of loop order of execution printing
+   * @param print_exec set of execution flags to print on
+   */
+  void setExecutionPrinting(const ExecFlagEnum & print_exec) { _print_execution_on = print_exec; };
+
+  /**
+   * Check whether the problem should output execution orders at this time
+   */
+  bool shouldPrintExecution(const THREAD_ID tid) const;
+  /**
+   * Call \p reinit on mortar user objects with matching primary boundary ID, secondary boundary ID,
+   * and displacement characteristics
+   */
+  void reinitMortarUserObjects(BoundaryID primary_boundary_id,
+                               BoundaryID secondary_boundary_id,
+                               bool displaced);
+
+  virtual const std::vector<VectorTag> & currentResidualVectorTags() const override;
+
+  /**
+   * Class that is used as a parameter to set/clearCurrentResidualVectorTags that allows only
+   * blessed classes to call said methods
+   */
+  class CurrentResidualVectorTagsKey
+  {
+    friend class CrankNicolson;
+    friend class FEProblemBase;
+    CurrentResidualVectorTagsKey() {}
+    CurrentResidualVectorTagsKey(const CurrentResidualVectorTagsKey &) {}
+  };
+
+  /**
+   * Set the current residual vector tag data structure based on the passed in tag IDs
+   */
+  void setCurrentResidualVectorTags(const std::set<TagID> & vector_tags);
+
+  /**
+   * Clear the current residual vector tag data structure
+   */
+  void clearCurrentResidualVectorTags();
+
+  /**
+   * Indicate that we have p-refinement
+   */
+  void havePRefinement();
 
 protected:
   /// Create extra tagged vectors and matrices
@@ -2024,7 +2111,12 @@ protected:
   void createTagSolutions();
 
   MooseMesh & _mesh;
-  EquationSystems _eq;
+
+private:
+  /// The EquationSystems object, wrapped for restart
+  Restartable::ManagedValue<RestartableEquationSystems> _req;
+
+protected:
   bool _initialized;
 
   std::set<TagID> _fe_vector_tags;
@@ -2083,7 +2175,7 @@ protected:
   std::vector<std::vector<std::unique_ptr<Assembly>>> _assembly;
 
   /// functions
-  MooseObjectWarehouse<MooseFunctionBase> _functions;
+  MooseObjectWarehouse<Function> _functions;
 
   /// nonlocal kernels
   MooseObjectWarehouse<KernelBase> _nonlocal_kernels;
@@ -2097,14 +2189,12 @@ protected:
   ScalarInitialConditionWarehouse _scalar_ics; // use base b/c of setup methods
   ///@}
 
+protected:
   // material properties
+  MaterialPropertyRegistry _material_prop_registry;
   MaterialPropertyStorage & _material_props;
   MaterialPropertyStorage & _bnd_material_props;
   MaterialPropertyStorage & _neighbor_material_props;
-
-  std::vector<std::shared_ptr<MaterialData>> _material_data;
-  std::vector<std::shared_ptr<MaterialData>> _bnd_material_data;
-  std::vector<std::shared_ptr<MaterialData>> _neighbor_material_data;
 
   ///@{
   // Material Warehouses
@@ -2207,7 +2297,9 @@ protected:
    *
    * This is needed due to header includes/forward declaration issues
    */
-  void addObjectParamsHelper(InputParameters & params, const std::string & object_name);
+  void addObjectParamsHelper(InputParameters & params,
+                             const std::string & object_name,
+                             const std::string & var_param_name = "variable");
 
 #ifdef LIBMESH_ENABLE_AMR
   Adaptivity _adaptivity;
@@ -2251,9 +2343,6 @@ protected:
   /// Whether nor not stateful materials have been initialized
   bool _has_initialized_stateful;
 
-  /// Object responsible for restart (read/write)
-  std::unique_ptr<RestartableDataIO> _restart_io;
-
   /// true if the Jacobian is constant
   bool _const_jacobian;
 
@@ -2286,7 +2375,7 @@ protected:
   bool _material_coverage_check;
 
   /// Whether to check overlapping Dirichlet and Flux BCs and/or multiple DirichletBCs per sideset
-  const bool _fv_bcs_integrity_check;
+  bool _fv_bcs_integrity_check;
 
   /// Determines whether a check to verify material dependencies on every subdomain
   const bool _material_dependency_check;
@@ -2296,9 +2385,6 @@ protected:
 
   /// Maximum number of quadrature points used in the problem
   unsigned int _max_qps;
-
-  /// Maximum number of shape functions on any element in the problem
-  unsigned int _max_shape_funcs;
 
   /// Maximum scalar variable order
   Order _max_scalar_order;
@@ -2344,9 +2430,42 @@ protected:
   bool _using_ad_mat_props;
 
 private:
+  /**
+   * Helper for getting mortar objects corresponding to primary boundary ID, secondary boundary ID,
+   * and displaced parameters, given some initial set
+   */
+  std::vector<MortarUserObject *>
+  getMortarUserObjects(BoundaryID primary_boundary_id,
+                       BoundaryID secondary_boundary_id,
+                       bool displaced,
+                       const std::vector<MortarUserObject *> & mortar_uo_superset);
+
+  /**
+   * Helper for getting mortar objects corresponding to primary boundary ID, secondary boundary ID,
+   * and displaced parameters from the entire active mortar user object set
+   */
+  std::vector<MortarUserObject *> getMortarUserObjects(BoundaryID primary_boundary_id,
+                                                       BoundaryID secondary_boundary_id,
+                                                       bool displaced);
+
+  /**
+   * Determine what nonlinear system the provided variable name lies in
+   * @param var_name The name of the variable we are doing nonlinear system lookups for
+   * @param error_if_not_found Whether to error if the variable name isn't found in any of the
+   * nonlinear systems
+   * @return A pair in which the first member indicates whether the variable was found in the
+   * nonlinear systems and the second member indicates the nonlinear system number in which the
+   * variable was found (or an invalid unsigned integer if not found)
+   */
   std::pair<bool, unsigned int>
   determineNonlinearSystem(const std::string & var_name,
                            bool error_if_not_found = false) const override;
+
+  /*
+   * Test if stateful property redistribution is expected to be
+   * necessary, and set it up if so.
+   */
+  void addAnyRedistributers();
 
   void updateMaxQps();
 
@@ -2355,10 +2474,11 @@ private:
   bool _error_on_jacobian_nonzero_reallocation;
   bool _ignore_zeros_in_jacobian;
   const bool _force_restart;
-  const bool _skip_additional_restart_data;
+  const bool _allow_ics_during_restart;
   const bool _skip_nl_system_check;
   bool _fail_next_nonlinear_convergence_check;
   const bool & _allow_invalid_solution;
+  const bool & _immediately_print_invalid_solution;
 
   /// At or beyond initialSteup stage
   bool _started_initial_setup;
@@ -2382,7 +2502,6 @@ private:
   friend class NonlinearSystemBase;
   friend class MooseEigenSystem;
   friend class Resurrector;
-  friend class RestartableDataIO;
   friend class Restartable;
   friend class DisplacedProblem;
 
@@ -2391,10 +2510,6 @@ private:
 
   /// Number of steps in a grid sequence
   unsigned int _num_grid_steps;
-
-  /// MooseEnum describing how to obtain reference points for displaced mesh dgkernels and/or
-  /// interface kernels. Options are invert_elem_phys, use_undisplaced_ref, and the default unset.
-  MooseEnum _displaced_neighbor_ref_pts;
 
   /// Whether to trust the user coupling matrix no matter what. See
   /// https://github.com/idaholab/moose/issues/16395 for detailed background
@@ -2408,6 +2523,14 @@ private:
 
   /// Flag used to indicate whether we are doing the uo/aux state check in execute
   bool _checking_uo_aux_state = false;
+
+  /// When to print the execution of loops
+  ExecFlagEnum _print_execution_on;
+
+  /// A data member to store the residual vector tag(s) passed into \p computeResidualTag(s). This
+  /// data member will be used when APIs like \p cacheResidual, \p addCachedResiduals, etc. are
+  /// called
+  std::vector<VectorTag> _current_residual_vector_tags;
 };
 
 using FVProblemBase = FEProblemBase;
@@ -2466,10 +2589,13 @@ std::vector<std::shared_ptr<T>>
 FEProblemBase::addObject(const std::string & type,
                          const std::string & name,
                          InputParameters & parameters,
-                         const bool threaded)
+                         const bool threaded,
+                         const std::string & var_param_name)
 {
+  parallel_object_only();
+
   // Add the _subproblem and _sys parameters depending on use_displaced_mesh
-  addObjectParamsHelper(parameters, name);
+  addObjectParamsHelper(parameters, name, var_param_name);
 
   const auto n_threads = threaded ? libMesh::n_threads() : 1;
   std::vector<std::shared_ptr<T>> objects(n_threads);
@@ -2543,5 +2669,30 @@ FEProblemBase::setCurrentNonlinearSystem(const unsigned int nl_sys_num)
   _current_nl_sys = _nl[nl_sys_num].get();
 }
 
-template <>
-FunctionTempl<Real> & FEProblemBase::getFunction<Real>(const std::string & name, THREAD_ID tid);
+inline void
+FEProblemBase::fvBCsIntegrityCheck(const bool fv_bcs_integrity_check)
+{
+  if (!_fv_bcs_integrity_check)
+    // the user has requested that we don't check integrity so we will honor that
+    return;
+
+  _fv_bcs_integrity_check = fv_bcs_integrity_check;
+}
+
+inline const std::vector<VectorTag> &
+FEProblemBase::currentResidualVectorTags() const
+{
+  return _current_residual_vector_tags;
+}
+
+inline void
+FEProblemBase::setCurrentResidualVectorTags(const std::set<TagID> & vector_tags)
+{
+  _current_residual_vector_tags = getVectorTags(vector_tags);
+}
+
+inline void
+FEProblemBase::clearCurrentResidualVectorTags()
+{
+  _current_residual_vector_tags.clear();
+}

@@ -10,6 +10,7 @@
 #pragma once
 
 // Moose includes
+#include "MooseTypes.h"
 #include "OutputInterface.h"
 #include "ReporterData.h"
 #include "InputParameters.h"
@@ -28,7 +29,7 @@ class FEProblemBase;
  *
  * Originally, MOOSE included a Postprocessor system that allowed for an object to produce a
  * single scalar value for consumption by other objects. Then a companion system was created,
- * the VectorPostprocessor system, that allowed for an object to produced many std::vector<Real>
+ * the VectorPostprocessor system, that allowed for an object to produce many std::vector<Real>
  * values. The Reporter system is the generalization of these two ideas and follows closely the
  * original design of the VectorPostprocessor system.
  *
@@ -59,6 +60,16 @@ public:
    */
   virtual bool shouldStore() const { return true; }
 
+  /**
+   * Method that can be overriden to declare "late" Reporter values.
+   *
+   * Values are considered "late" when they need to be declared after all
+   * other Reporters have been instantiated. This is called by the
+   * "declare_late_reporters" task, which should be called right after
+   * the "add_reporters" task.
+   */
+  virtual void declareLateValues() {}
+
 protected:
   ///@{
   /**
@@ -75,7 +86,7 @@ protected:
    *             can be used as the default value (see ReporterContext.h).
    *
    * The 'mode' indicates how the value that is produced is represented in parallel. It is the
-   * reponsibility of the Reporter object to get it to that state. The ReporterContext objects
+   * responsibility of the Reporter object to get it to that state. The ReporterContext objects
    * are designed to help with this. The mode can be one of the following:
    *
    *     ReporterMode::ROOT Indicates that the value produced is complete/correct on the
@@ -243,6 +254,13 @@ Reporter::declareValueByName(const ReporterValueName & value_name,
 
   buildOutputHideVariableList({state_name.getCombinedName()});
 
+  // Only thread 0 will declare the reporter value. The rest will get a reference
+  // to an UnusedValue
+  const THREAD_ID tid = _reporter_moose_object.parameters().isParamValid("_tid")
+                            ? _reporter_moose_object.parameters().get<THREAD_ID>("_tid")
+                            : 0;
+  if (tid)
+    return declareUnusedValue<T>();
   return _reporter_data.declareReporterValue<T, S>(
       state_name, mode, _reporter_moose_object, args...);
 }

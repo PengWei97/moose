@@ -7,7 +7,7 @@
     [train]
       type = CheckFiles
       input = train.i
-      check_files = 'train_out_train.rd'
+      check_files = 'train_out_train.rd/data'
       allow_test_objects = true
       detail = 'training then '
     []
@@ -39,6 +39,6 @@
     type = JSONDiff
     input = np_vec.i
     jsondiff = 'np_vec_out.json'
-    requirement = 'The sytem shall be able to create nearest point surrogates with vector-type response.'
+    requirement = 'The system shall be able to create nearest point surrogates with vector-type response.'
   []
 []

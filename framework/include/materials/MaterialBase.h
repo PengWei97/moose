@@ -33,7 +33,7 @@
 #include "MathUtils.h"
 #include "Assembly.h"
 #include "GeometricSearchInterface.h"
-#include "FunctorInterface.h"
+#include "ADFunctorInterface.h"
 #include "SolutionInvalidInterface.h"
 
 #define usingMaterialBaseMembers                                                                   \
@@ -75,7 +75,7 @@ class MaterialBase : public MooseObject,
                      public RandomInterface,
                      public ElementIDInterface,
                      protected GeometricSearchInterface,
-                     protected FunctorInterface,
+                     protected ADFunctorInterface,
                      protected SolutionInvalidInterface
 {
 public:
@@ -116,15 +116,17 @@ public:
    * Declare the property named "name"
    */
   template <typename T>
-  MaterialProperty<T> & declarePropertyByName(const std::string & prop_name);
+  MaterialProperty<T> & declarePropertyByName(const std::string & prop_name)
+  {
+    return declareGenericPropertyByName<T, false>(prop_name);
+  }
   template <typename T>
   MaterialProperty<T> & declareProperty(const std::string & name);
   template <typename T>
-  MaterialProperty<T> & declarePropertyOld(const std::string & prop_name);
-  template <typename T>
-  MaterialProperty<T> & declarePropertyOlder(const std::string & prop_name);
-  template <typename T>
-  ADMaterialProperty<T> & declareADPropertyByName(const std::string & prop_name);
+  ADMaterialProperty<T> & declareADPropertyByName(const std::string & prop_name)
+  {
+    return declareGenericPropertyByName<T, true>(prop_name);
+  }
   template <typename T>
   ADMaterialProperty<T> & declareADProperty(const std::string & name);
 
@@ -137,13 +139,7 @@ public:
       return declareProperty<T>(prop_name);
   }
   template <typename T, bool is_ad>
-  auto & declareGenericPropertyByName(const std::string & prop_name)
-  {
-    if constexpr (is_ad)
-      return declareADPropertyByName<T>(prop_name);
-    else
-      return declarePropertyByName<T>(prop_name);
-  }
+  GenericMaterialProperty<T, is_ad> & declareGenericPropertyByName(const std::string & prop_name);
   ///@}
 
   /**
@@ -236,6 +232,15 @@ public:
 
   void setFaceInfo(const FaceInfo & fi) { _face_info = &fi; }
 
+  /**
+   * Build the materials required by a set of consumer objects
+   */
+  template <typename Consumers>
+  static std::deque<MaterialBase *>
+  buildRequiredMaterials(const Consumers & mat_consumers,
+                         const std::vector<std::shared_ptr<MaterialBase>> & mats,
+                         const bool allow_stateful);
+
 protected:
   /**
    * Users must override this method.
@@ -313,12 +318,15 @@ protected:
     PREV
   };
 
-  std::map<std::string, MaterialPropStateInt> _props_to_flags;
+  /// The minimum states requested (0 = current, 1 = old, 2 = older)
+  /// This is sparse and is used to keep track of whether or not stateful
+  /// properties are requested without state 0 being requested
+  std::unordered_map<unsigned int, unsigned int> _props_to_min_states;
 
   /// Small helper function to call store{Subdomain,Boundary}MatPropName
-  void registerPropName(std::string prop_name, bool is_get, MaterialPropState state);
+  void registerPropName(const std::string & prop_name, bool is_get, const unsigned int state);
 
-  /// Check and throw an error if the execution has progerssed past the construction stage
+  /// Check and throw an error if the execution has progressed past the construction stage
   void checkExecutionStage();
 
   std::vector<unsigned int> _displacements;
@@ -346,38 +354,20 @@ MaterialBase::declareProperty(const std::string & name)
   return declarePropertyByName<T>(prop_name);
 }
 
-template <typename T>
-MaterialProperty<T> &
-MaterialBase::declarePropertyByName(const std::string & prop_name_in)
+template <typename T, bool is_ad>
+GenericMaterialProperty<T, is_ad> &
+MaterialBase::declareGenericPropertyByName(const std::string & prop_name)
 {
-  const auto prop_name =
+  const auto prop_name_modified =
       _declare_suffix.empty()
-          ? prop_name_in
-          : MooseUtils::join(std::vector<std::string>({prop_name_in, _declare_suffix}), "_");
-  registerPropName(prop_name, false, MaterialPropState::CURRENT);
-  return materialData().declareProperty<T>(prop_name);
-}
+          ? prop_name
+          : MooseUtils::join(std::vector<std::string>({prop_name, _declare_suffix}), "_");
 
-template <typename T>
-MaterialProperty<T> &
-MaterialBase::declarePropertyOld(const std::string & prop_name)
-{
-  mooseDoOnce(
-      mooseDeprecated("declarePropertyOld is deprecated and not needed anymore.\nUse "
-                      "getMaterialPropertyOld (only) if a reference is required in this class."));
-  registerPropName(prop_name, false, MaterialPropState::OLD);
-  return materialData().declarePropertyOld<T>(prop_name);
-}
+  // Call this before so that the ID is valid
+  auto & prop = materialData().declareProperty<T, is_ad>(prop_name_modified, *this);
 
-template <typename T>
-MaterialProperty<T> &
-MaterialBase::declarePropertyOlder(const std::string & prop_name)
-{
-  mooseDoOnce(
-      mooseDeprecated("declarePropertyOlder is deprecated and not needed anymore.  Use "
-                      "getMaterialPropertyOlder (only) if a reference is required in this class."));
-  registerPropName(prop_name, false, MaterialPropState::OLDER);
-  return materialData().declarePropertyOlder<T>(prop_name);
+  registerPropName(prop_name_modified, false, 0);
+  return prop;
 }
 
 template <typename T, bool is_ad>
@@ -397,10 +387,10 @@ const GenericMaterialProperty<T, is_ad> &
 MaterialBase::getGenericZeroMaterialPropertyByName(const std::string & prop_name)
 {
   checkExecutionStage();
-  auto & preload_with_zero = materialData().getGenericProperty<T, is_ad>(prop_name);
+  auto & preload_with_zero = materialData().getProperty<T, is_ad>(prop_name, 0, *this);
 
   _requested_props.insert(prop_name);
-  registerPropName(prop_name, true, MaterialPropState::CURRENT);
+  registerPropName(prop_name, true, 0);
   _fe_problem.markMatPropRequested(prop_name);
 
   // Register this material on these blocks and boundaries as a zero property with relaxed
@@ -427,7 +417,7 @@ const GenericMaterialProperty<T, is_ad> &
 MaterialBase::getGenericZeroMaterialProperty()
 {
   // static zero property storage
-  static GenericMaterialProperty<T, is_ad> zero;
+  static GenericMaterialProperty<T, is_ad> zero(MaterialPropertyInterface::zero_property_id);
 
   // resize to accomodate maximum number of qpoints
   // (in multiapp scenarios getMaxQps can return different values in each app; we need the max)
@@ -454,14 +444,57 @@ MaterialBase::declareADProperty(const std::string & name)
   return declareADPropertyByName<T>(prop_name);
 }
 
-template <typename T>
-ADMaterialProperty<T> &
-MaterialBase::declareADPropertyByName(const std::string & prop_name_in)
+template <typename Consumers>
+std::deque<MaterialBase *>
+MaterialBase::buildRequiredMaterials(const Consumers & mat_consumers,
+                                     const std::vector<std::shared_ptr<MaterialBase>> & mats,
+                                     const bool allow_stateful)
 {
-  const auto prop_name =
-      _declare_suffix.empty()
-          ? prop_name_in
-          : MooseUtils::join(std::vector<std::string>({prop_name_in, _declare_suffix}), "_");
-  registerPropName(prop_name, false, MaterialPropState::CURRENT);
-  return materialData().declareADProperty<T>(prop_name);
+  std::deque<MaterialBase *> required_mats;
+
+  std::unordered_set<unsigned int> needed_mat_props;
+  for (const auto & consumer : mat_consumers)
+  {
+    const auto & mp_deps = consumer->getMatPropDependencies();
+    needed_mat_props.insert(mp_deps.begin(), mp_deps.end());
+  }
+
+  // A predicate of calling this function is that these materials come in already sorted by
+  // dependency with the front of the container having no other material dependencies and following
+  // materials potentially depending on the ones in front of them. So we can start at the back and
+  // iterate forward checking whether the current material supplies anything that is needed, and if
+  // not we discard it
+  for (auto it = mats.rbegin(); it != mats.rend(); ++it)
+  {
+    auto * const mat = it->get();
+    bool supplies_needed = false;
+
+    const auto & supplied_props = mat->getSuppliedPropIDs();
+
+    // Do O(N) with the small container
+    for (const auto supplied_prop : supplied_props)
+    {
+      if (needed_mat_props.count(supplied_prop))
+      {
+        supplies_needed = true;
+        break;
+      }
+    }
+
+    if (!supplies_needed)
+      continue;
+
+    if (!allow_stateful && mat->hasStatefulProperties())
+      ::mooseError(
+          "Someone called buildRequiredMaterials with allow_stateful = false but a material "
+          "dependency ",
+          mat->name(),
+          " computes stateful properties.");
+
+    const auto & mp_deps = mat->getMatPropDependencies();
+    needed_mat_props.insert(mp_deps.begin(), mp_deps.end());
+    required_mats.push_front(mat);
+  }
+
+  return required_mats;
 }

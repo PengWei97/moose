@@ -83,7 +83,7 @@ Exodus::validParams()
   params.addParam<bool>("write_hdf5", false, "Enables HDF5 output format for Exodus files.");
 
   // Need a layer of geometric ghosting for mesh serialization
-  params.addRelationshipManager("MooseGhostPointNeighbors",
+  params.addRelationshipManager("ElementPointNeighborLayers",
                                 Moose::RelationshipManagerType::GEOMETRIC);
 
   // Return the InputParameters
@@ -93,12 +93,12 @@ Exodus::validParams()
 Exodus::Exodus(const InputParameters & parameters)
   : OversampleOutput(parameters),
     _exodus_initialized(false),
-    _exodus_num(declareRestartableData<unsigned int>("exodus_num", 0)),
-    _recovering(_app.isRecovering()),
     _exodus_mesh_changed(declareRestartableData<bool>("exodus_mesh_changed", true)),
     _sequence(isParamValid("sequence") ? getParam<bool>("sequence")
               : _use_displaced         ? true
                                        : false),
+    _exodus_num(declareRestartableData<unsigned int>("exodus_num", 0)),
+    _recovering(_app.isRecovering()),
     _overwrite(getParam<bool>("overwrite")),
     _output_dimension(getParam<MooseEnum>("output_dimension").getEnum<OutputDimension>()),
     _discontinuous(getParam<bool>("discontinuous")),
@@ -254,16 +254,23 @@ Exodus::outputSetup()
   }
   else
   {
-    // Increment file counter
-    if (_exodus_mesh_changed || _sequence)
-      _file_num++;
-
     // Disable file appending and reset exodus file number count
     _exodus_io_ptr->append(false);
-    _exodus_num = 1;
+
+    // Customize file output
+    customizeFileOutput();
   }
 
   setOutputDimensionInExodusWriter(*_exodus_io_ptr, *_mesh_ptr, _output_dimension);
+}
+
+void
+Exodus::customizeFileOutput()
+{
+  if (_exodus_mesh_changed || _sequence)
+    _file_num++;
+
+  _exodus_num = 1;
 }
 
 void
@@ -309,10 +316,10 @@ Exodus::outputNodalVariables()
   // Write the data via libMesh::ExodusII_IO
   if (_discontinuous)
     _exodus_io_ptr->write_timestep_discontinuous(
-        filename(), *_es_ptr, _exodus_num, time() + _app.getGlobalTimeOffset());
+        filename(), *_es_ptr, _exodus_num, getOutputTime() + _app.getGlobalTimeOffset());
   else
     _exodus_io_ptr->write_timestep(
-        filename(), *_es_ptr, _exodus_num, time() + _app.getGlobalTimeOffset());
+        filename(), *_es_ptr, _exodus_num, getOutputTime() + _app.getGlobalTimeOffset());
 
   if (!_overwrite)
     _exodus_num++;
@@ -429,7 +436,7 @@ Exodus::outputInput()
 }
 
 void
-Exodus::output(const ExecFlagType & type)
+Exodus::output()
 {
   // Prepare the ExodusII_IO object
   outputSetup();
@@ -444,7 +451,7 @@ Exodus::output(const ExecFlagType & type)
   _global_values.clear();
 
   // Call the individual output methods
-  AdvancedOutput::output(type);
+  AdvancedOutput::output();
 
   // Write the global variables (populated by the output methods)
   if (!_global_values.empty())
@@ -505,7 +512,7 @@ Exodus::outputEmptyTimestep()
   // Write a timestep with no variables
   _exodus_io_ptr->set_output_variables(std::vector<std::string>());
   _exodus_io_ptr->write_timestep(
-      filename(), *_es_ptr, _exodus_num, time() + _app.getGlobalTimeOffset());
+      filename(), *_es_ptr, _exodus_num, getOutputTime() + _app.getGlobalTimeOffset());
 
   if (!_overwrite)
     _exodus_num++;

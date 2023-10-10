@@ -7,6 +7,11 @@ installation process.  Although it works best on Linux platforms, it also
 works reasonably well on Mac OS.  Instruments also works well for profiling
 applications on Mac systems.
 
+!alert note
+For superficial profiling of a simulation, the [PerfGraph utility](outputs/PerfGraphOutput.md)
+can be leveraged directly from the input file. Only sections of the code that have been already explicitly
+timed will be reported.
+
 ## Install Google's gperftools
 
 If your environment package from the MOOSE installation process has included Google's gperftools,
@@ -36,14 +41,36 @@ When compiling PETSc, you will need to add two configuration options to make use
 
 ```
 cd moose
-./scripts/update_and_rebuild_petsc.sh --CFLAGS=-fno-omit-frame-pointer --CXX_CXXFLAGS=-fno-omit-frame-pointer
+scripts/update_and_rebuild_petsc.sh --CFLAGS=-fno-omit-frame-pointer --CXX_CXXFLAGS=-fno-omit-frame-pointer
 ```
 
 libMesh automatically adds `-fno-omit-frame-pointer` to `METHOD=oprof` builds. However, if you want
-to do profiling with other methods, both libMesh and MOOSE should be built with
-`CXXFLAGS=-fno-omit-frame-pointer`. (On a related node, MOOSE will error if the user attempts to
-compile with either `METHOD=devel` or `METHOD=dbg` and with a non-empty `GPERF_DIR` as those methods
-add assertions that will make the resulting profiles misleading)
+to do profiling with other methods (e.g. `opt`, which will not give line number information), both
+libMesh and MOOSE should be built with `CXXFLAGS=-fno-omit-frame-pointer`. (On a related node, MOOSE
+will error if the user attempts to compile with either `METHOD=devel` or `METHOD=dbg` and with a
+non-empty `GPERF_DIR` as those methods add assertions that will make the resulting profiles
+misleading). When building libMesh, ensure that the `METHODS` environment variable is either empty
+(in which case the script will build `opt`, `oprof`, `devel`, and `dbg` methods), or that `METHODS`
+contains `oprof` (or not if you wish to profile with another method and have specified
+`CXXFLAGS=-fno-omit-frame-pointer`).
+
+```
+scripts/update_and_rebuild_libmesh.sh
+```
+
+Finally, when building MOOSE, you set the GPERF_DIR environment variable to the location of a
+gperftools installation (i.e. $GPERF_DIR/lib/libprofiler.so should exist).  Then you compile MOOSE
+like normal - it should look something like this:
+
+```
+export GPERF_DIR=$HOME/gperftools/installed
+export METHOD=oprof
+cd [your-moose-app-repository]
+make -j$MOOSE_JOBS
+```
+
+As a final note, if the profiler libraries are linked in, programs like valgrind will not run
+correctly because gperftools hijacks functions like `malloc`.
 
 The `gperftools` library comes with a `pprof` binary. However, it is not maintained. A maintained
 version of `pprof` is located at [the google repository](https://github.com/google/pprof/). To use
@@ -56,34 +83,6 @@ go install github.com/google/pprof@latest
 ```
 
 and then ensure that `$GOPATH/bin` (by default `$HOME/go/bin`) is in your `PATH` variable.
-
-## Google Performance Tools (Linux, Mac)
-
-MOOSE has support for profiling with
-[gperftools](https://github.com/gperftools/gperftools) built-in.  To use it,
-you must compile MOOSE with profiling support enabled.  To add profiling support
-you set the GPERF_DIR environment variable to the location of a gperftools
-installation (i.e. $GPERF_DIR/lib/libprofiler.so should exist).  It is also
-recommended you compile MOOSE in `oprof` mode to get complete/accurate
-profiling results.  Then you compile MOOSE like normal - it should look
-something like this:
-
-```
-export GPERF_DIR=$HOME/gperftools/installed
-export METHOD=oprof
-cd [your-moose-app-repository]
-make
-```
-
-This will compile your application with gperftools profiling support enabled.
-Note that you will get an error if you attempt to link gperftools (e.g. have
-GPERF_DIR defined in your environment) when building
-in `dbg` or `devel` modes. This is because MOOSE and libmesh insert a number of
-assertions in these modes that may significantly slow down the code and mislead
-the profiler about where hot spots are. Moreover, because gperftools hijacks
-functions like `malloc`, executables that link gperftools cannot be run with
-valgrind and produce meaningful results. Hence it is useful to guarantee some
-methods are available for running valgrind.
 
 ### CPU Profiling
 
@@ -268,7 +267,32 @@ Follow the steps below to get profiling information for your application:
 - Compile MOOSE and your application in `oprof` mode.
 - Run your application through the profiler:
 
-### Newer versions of MacOS (Mojave):
+### MacOS (Big Sur / Monterey / Ventura) with xCode 13 (and later):
+
+```
+xctrace record --template 'Time Profiler' --target-stdout - --launch -- mooseapp-oprof -i input.i
+```
+
+This will create a directory `Launch_mooseapp-oprof[0-9]+.trace`, where `[0-9]+`
+denotes a number, which you can open using
+
+```
+open Launch_mooseapp-oprof[0-9]+.trace
+```
+
+The Instruments application will open in a new window with the profile.
+The performance profile can be converted to [pprof](https://github.com/google/pprof)
+using [instrumentsToPprof](https://github.com/google/instrumentsToPprof). To do this, open the trace in Instruments
+and select the processes you want to be converted, then copy the data using *Deep Copy* in the *Edit* menu. The copied
+data can be piped to `instrumentsToPprof` as
+
+```
+pbpaste | instrumentsToPprof
+```
+
+which will produce a `profile.pb.gz` which can be analyzed using `pprof` following the same instructions as above.
+
+### MacOS (Mojave / Catalina):
 
 ```
 instruments -t Time\ Profiler ./mooseapp-oprof -i input.i

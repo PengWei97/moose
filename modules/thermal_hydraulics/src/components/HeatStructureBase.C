@@ -10,70 +10,34 @@
 #include "HeatStructureBase.h"
 #include "SolidMaterialProperties.h"
 #include "ConstantFunction.h"
-#include "THMEnums.h"
-#include "THMMesh.h"
-
-const std::map<std::string, HeatStructureSideType> HeatStructureBase::_side_type_to_enum{
-    {"INNER", HeatStructureSideType::INNER},
-    {"OUTER", HeatStructureSideType::OUTER},
-    {"START", HeatStructureSideType::START},
-    {"END", HeatStructureSideType::END}};
-
-MooseEnum
-HeatStructureBase::getSideType(const std::string & name)
-{
-  return THM::getMooseEnum<HeatStructureSideType>(name, _side_type_to_enum);
-}
-
-template <>
-HeatStructureSideType
-THM::stringToEnum(const std::string & s)
-{
-  return stringToEnum<HeatStructureSideType>(s, HeatStructureBase::_side_type_to_enum);
-}
 
 InputParameters
 HeatStructureBase::validParams()
 {
   InputParameters params = Component2D::validParams();
-  params.addPrivateParam<std::string>("component_type", "heat_struct");
-  params.addParam<FunctionName>("initial_T", "Initial temperature [K]");
-  params.addParam<Real>(
-      "scaling_factor_temperature", 1.0, "Scaling factor for solid temperature variable.");
+  params += HeatStructureInterface::validParams();
   return params;
 }
 
 HeatStructureBase::HeatStructureBase(const InputParameters & params)
-  : Component2D(params), _connected_to_flow_channel(false)
+  : Component2D(params),
+    HeatStructureInterface(this),
+    _number_of_hs(_n_regions)
 {
-}
-
-std::shared_ptr<HeatConductionModel>
-HeatStructureBase::buildModel()
-{
-  const std::string class_name = "HeatConductionModel";
-  InputParameters pars = _factory.getValidParams(class_name);
-  pars.set<THMProblem *>("_thm_problem") = &getTHMProblem();
-  pars.set<HeatStructureBase *>("_hs") = this;
-  pars.applyParameters(parameters());
-  return _factory.create<HeatConductionModel>(class_name, name(), pars, 0);
 }
 
 void
 HeatStructureBase::init()
 {
-  _hc_model = buildModel();
+  Component2D::init();
+  HeatStructureInterface::init();
 }
 
 void
 HeatStructureBase::check() const
 {
   Component2D::check();
-
-  bool ics_set = getTHMProblem().hasInitialConditionsFromFile() || isParamValid("initial_T");
-
-  if (!ics_set && !_app.isRestarting())
-    logError("Missing initial condition for temperature.");
+  HeatStructureInterface::check();
 }
 
 const unsigned int &
@@ -91,19 +55,19 @@ HeatStructureBase::usingSecondOrderMesh() const
 void
 HeatStructureBase::addVariables()
 {
-  _hc_model->addVariables();
-  if (isParamValid("initial_T"))
-    _hc_model->addInitialConditions();
+  HeatStructureInterface::addVariables();
 }
 
 void
 HeatStructureBase::addMooseObjects()
 {
+  HeatStructureInterface::addMooseObjects();
+
   if (isParamValid("materials"))
   {
     _hc_model->addMaterials();
 
-    for (unsigned int i = 0; i < _number_of_hs; i++)
+    for (unsigned int i = 0; i < _n_regions; i++)
     {
       const SolidMaterialProperties & smp =
           getTHMProblem().getUserObject<SolidMaterialProperties>(_material_names[i]);
@@ -124,117 +88,4 @@ HeatStructureBase::addMooseObjects()
         comp->connectObject(rho_fn->parameters(), rho_fn->name(), "rho", "value");
     }
   }
-}
-
-FunctionName
-HeatStructureBase::getInitialT() const
-{
-  if (isParamValid("initial_T"))
-    return getParam<FunctionName>("initial_T");
-  else
-    mooseError(name(), ": The parameter 'initial_T' was requested but not supplied");
-}
-
-const std::vector<unsigned int> &
-HeatStructureBase::getSideNodeIds(const std::string & name) const
-{
-  checkSetupStatus(MESH_PREPARED);
-
-  return _side_heat_node_ids.at(name);
-}
-
-const std::vector<unsigned int> &
-HeatStructureBase::getOuterNodeIds() const
-{
-  checkSetupStatus(MESH_PREPARED);
-
-  return _outer_heat_node_ids;
-}
-
-const std::vector<BoundaryName> &
-HeatStructureBase::getOuterBoundaryNames() const
-{
-  checkSetupStatus(MESH_PREPARED);
-
-  return _boundary_names_outer;
-}
-
-const std::vector<BoundaryName> &
-HeatStructureBase::getInnerBoundaryNames() const
-{
-  checkSetupStatus(MESH_PREPARED);
-
-  return _boundary_names_inner;
-}
-
-const std::vector<BoundaryName> &
-HeatStructureBase::getStartBoundaryNames() const
-{
-  checkSetupStatus(MESH_PREPARED);
-
-  return _boundary_names_start;
-}
-
-const std::vector<BoundaryName> &
-HeatStructureBase::getEndBoundaryNames() const
-{
-  checkSetupStatus(MESH_PREPARED);
-
-  return _boundary_names_end;
-}
-
-const std::vector<std::tuple<dof_id_type, unsigned short int>> &
-HeatStructureBase::getBoundaryInfo(const HeatStructureSideType & side) const
-{
-  switch (side)
-  {
-    case HeatStructureSideType::INNER:
-      return getBoundaryInfo(_boundary_names_inner[0]);
-    case HeatStructureSideType::OUTER:
-      return getBoundaryInfo(_boundary_names_outer[0]);
-    case HeatStructureSideType::START:
-      return getBoundaryInfo(_boundary_names_start[0]);
-    case HeatStructureSideType::END:
-      return getBoundaryInfo(_boundary_names_end[0]);
-  }
-
-  mooseError(name(), ": Unknown value of 'side' parameter.");
-}
-
-HeatStructureSideType
-HeatStructureBase::getHeatStructureSideType(const BoundaryName & boundary_name) const
-{
-  if (std::find(_boundary_names_inner.begin(), _boundary_names_inner.end(), boundary_name) !=
-          _boundary_names_inner.end() ||
-      std::find(_boundary_names_axial_inner.begin(),
-                _boundary_names_axial_inner.end(),
-                boundary_name) != _boundary_names_axial_inner.end())
-    return HeatStructureSideType::INNER;
-  else if (std::find(_boundary_names_outer.begin(), _boundary_names_outer.end(), boundary_name) !=
-               _boundary_names_outer.end() ||
-           std::find(_boundary_names_axial_outer.begin(),
-                     _boundary_names_axial_outer.end(),
-                     boundary_name) != _boundary_names_axial_outer.end())
-    return HeatStructureSideType::OUTER;
-  else if (std::find(_boundary_names_start.begin(), _boundary_names_start.end(), boundary_name) !=
-               _boundary_names_start.end() ||
-           std::find(_boundary_names_radial_start.begin(),
-                     _boundary_names_radial_start.end(),
-                     boundary_name) != _boundary_names_radial_start.end())
-    return HeatStructureSideType::START;
-  else if (std::find(_boundary_names_end.begin(), _boundary_names_end.end(), boundary_name) !=
-               _boundary_names_end.end() ||
-           std::find(_boundary_names_radial_end.begin(),
-                     _boundary_names_radial_end.end(),
-                     boundary_name) != _boundary_names_radial_end.end())
-    return HeatStructureSideType::END;
-  else if (std::find(_boundary_names_interior_axial_per_radial_section.begin(),
-                     _boundary_names_interior_axial_per_radial_section.end(),
-                     boundary_name) != _boundary_names_interior_axial_per_radial_section.end() ||
-           std::find(_boundary_names_inner_radial.begin(),
-                     _boundary_names_inner_radial.end(),
-                     boundary_name) != _boundary_names_inner_radial.end())
-    mooseError("The boundary '", boundary_name, "' is an interior boundary.");
-  else
-    mooseError("No heat structure side type was found for the boundary '", boundary_name, "'.");
 }

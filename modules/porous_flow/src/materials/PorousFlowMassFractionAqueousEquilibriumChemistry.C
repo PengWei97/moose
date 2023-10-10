@@ -144,8 +144,17 @@ PorousFlowMassFractionAqueousEquilibriumChemistry::
                _dictator.numAqueousEquilibrium());
 
   for (unsigned i = 0; i < _num_equilibrium_constants; ++i)
-    _equilibrium_constants[i] = (_nodal_material ? &coupledDofValues("equilibrium_constants", i)
-                                                 : &coupledValue("equilibrium_constants", i));
+  {
+    // If equilibrium_constants are elemental AuxVariables (or constants), we want to use
+    // coupledGenericValue() rather than coupledGenericDofValue()
+    const bool is_nodal = isCoupled("equilibrium_constants")
+                              ? getFieldVar("equilibrium_constants", i)->isNodal()
+                              : false;
+
+    _equilibrium_constants[i] =
+        (_nodal_material && is_nodal ? &coupledDofValues("equilibrium_constants", i)
+                                     : &coupledValue("equilibrium_constants", i));
+  }
 }
 
 void
@@ -233,7 +242,7 @@ PorousFlowMassFractionAqueousEquilibriumChemistry::computeQpProperties()
 
     // run through the mass fractions, building the derivative using dmf
     for (unsigned i = 0; i < _num_components; ++i)
-      _dmass_frac_dvar[_qp][_aq_ph][i][pf_wrt] = dmf[i][wrt];
+      (*_dmass_frac_dvar)[_qp][_aq_ph][i][pf_wrt] = dmf[i][wrt];
 
     // run through the secondary concentrations, using dsec in the appropriate places
     for (unsigned r = 0; r < _num_reactions; ++r)
@@ -243,7 +252,7 @@ PorousFlowMassFractionAqueousEquilibriumChemistry::computeQpProperties()
   // use the derivative wrt temperature
   for (unsigned i = 0; i < _num_components; ++i)
     for (unsigned v = 0; v < _num_var; ++v)
-      _dmass_frac_dvar[_qp][_aq_ph][i][v] += dmf_dT[i] * _dtemperature_dvar[_qp][v];
+      (*_dmass_frac_dvar)[_qp][_aq_ph][i][v] += dmf_dT[i] * _dtemperature_dvar[_qp][v];
   for (unsigned r = 0; r < _num_reactions; ++r)
     for (unsigned v = 0; v < _num_var; ++v)
       _dsec_conc_dvar[_qp][r][v] += dsec_dT[r] * _dtemperature_dvar[_qp][v];

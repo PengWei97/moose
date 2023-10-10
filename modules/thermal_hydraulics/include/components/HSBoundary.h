@@ -10,7 +10,7 @@
 #pragma once
 
 #include "BoundaryBase.h"
-#include "HeatStructureBase.h"
+#include "Component2D.h"
 
 /**
  * Base class for heat structure boundary components
@@ -24,21 +24,39 @@ public:
 
 protected:
   /**
-   * Extracts the heat structure sides for each boundary
+   * Returns true if all of the boundaries are external.
    *
-   * @param[in] boundary_names   Boundary names
+   * This method should only be called if the heat structure is known to be 2D.
    */
-  std::vector<HeatStructureSideType>
-  extractHeatStructureSides(const std::vector<BoundaryName> & boundary_names) const;
+  bool allComponent2DBoundariesAreExternal() const;
+
+  /**
+   * Logs an error if any boundary is not external.
+   *
+   * This method should only be called if the heat structure is known to be 2D.
+   */
+  void checkAllComponent2DBoundariesAreExternal() const;
+
+  /**
+   * Returns true if all of the boundaries have the same external boundary type.
+   *
+   * This method should only be called if the heat structure is known to be 2D.
+   */
+  bool hasCommonComponent2DExternalBoundaryType() const;
+
+  /**
+   * Gets the common external boundary type.
+   *
+   * This method should only be called if the heat structure is known to be 2D,
+   * and it is known that there is a common type.
+   */
+  Component2D::ExternalBoundaryType getCommonComponent2DExternalBoundaryType() const;
 
   /// Boundary names for which the boundary component applies
   const std::vector<BoundaryName> & _boundary;
 
   /// Heat structure name
   const std::string & _hs_name;
-
-  /// Heat structure sides for each boundary
-  const std::vector<HeatStructureSideType> _hs_sides;
 
 public:
   static InputParameters validParams();

@@ -15,11 +15,11 @@
 #include "InputParameters.h"
 #include "ExecFlagEnum.h"
 #include "InfixIterator.h"
-#include "MaterialBase.h"
 #include "Registry.h"
 #include "MortarConstraintBase.h"
 #include "MortarNodalAuxKernel.h"
 #include "ExecFlagRegistry.h"
+#include "RestartableDataReader.h"
 
 #include "libmesh/utility.h"
 #include "libmesh/elem.h"
@@ -34,6 +34,7 @@
 #include <istream>
 #include <iterator>
 #include <ctime>
+#include <cstdlib>
 
 // System includes
 #include <sys/stat.h>
@@ -46,11 +47,9 @@
 #include <windows.h>
 #include <winbase.h>
 #include <fileapi.h>
+#else
+#include <sys/ioctl.h>
 #endif
-
-std::string getLatestCheckpointFileHelper(const std::list<std::string> & checkpoint_files,
-                                          const std::vector<std::string> extensions,
-                                          bool keep_extension);
 
 namespace MooseUtils
 {
@@ -143,7 +142,7 @@ replaceAll(std::string str, const std::string & from, const std::string & to)
 }
 
 std::string
-convertLatestCheckpoint(std::string orig, bool base_only)
+convertLatestCheckpoint(std::string orig)
 {
   auto slash_pos = orig.find_last_of("/");
   auto path = orig.substr(0, slash_pos);
@@ -151,11 +150,11 @@ convertLatestCheckpoint(std::string orig, bool base_only)
   if (file != "LATEST")
     return orig;
 
-  auto converted = MooseUtils::getLatestAppCheckpointFileBase(MooseUtils::listDir(path));
-  if (!base_only)
-    converted = MooseUtils::getLatestMeshCheckpointFile(MooseUtils::listDir(path));
-  else if (converted.empty())
+  auto converted = MooseUtils::getLatestCheckpointFilePrefix(MooseUtils::listDir(path));
+
+  if (converted.empty())
     mooseError("Unable to find suitable recovery file!");
+
   return converted;
 }
 
@@ -653,6 +652,54 @@ hostname()
   return hostname;
 }
 
+unsigned short
+getTermWidth(bool use_environment)
+{
+#ifndef __WIN32__
+  struct winsize w;
+#else
+  struct
+  {
+    unsigned short ws_col;
+  } w;
+#endif
+  /**
+   * Initialize the value we intend to populate just in case
+   * the system call fails
+   */
+  w.ws_col = std::numeric_limits<unsigned short>::max();
+
+  if (use_environment)
+  {
+    char * pps_width = std::getenv("MOOSE_PPS_WIDTH");
+    if (pps_width != NULL)
+    {
+      std::stringstream ss(pps_width);
+      ss >> w.ws_col;
+    }
+  }
+  // Default to AUTO if no environment variable was set
+  if (w.ws_col == std::numeric_limits<unsigned short>::max())
+  {
+#ifndef __WIN32__
+    try
+    {
+      ioctl(0, TIOCGWINSZ, &w);
+    }
+    catch (...)
+#endif
+    {
+    }
+  }
+
+  // Something bad happened, make sure we have a sane value
+  // 132 seems good for medium sized screens, and is available as a GNOME preset
+  if (w.ws_col == std::numeric_limits<unsigned short>::max())
+    w.ws_col = 132;
+
+  return w.ws_col;
+}
+
 void
 MaterialPropertyStorageDump(
     const HashMap<const libMesh::Elem *, HashMap<unsigned int, MaterialProperties>> & props)
@@ -671,8 +718,7 @@ MaterialPropertyStorageDump(
       unsigned int cnt = 0;
       for (const auto & mat_prop : side_it.second)
       {
-        MaterialProperty<Real> * mp = dynamic_cast<MaterialProperty<Real> *>(mat_prop);
-        if (mp)
+        if (auto mp = dynamic_cast<const MaterialProperty<Real> *>(&mat_prop))
         {
           Moose::out << "    Property " << cnt << '\n';
           cnt++;
@@ -697,10 +743,19 @@ removeColor(std::string & msg)
 }
 
 void
+addLineBreaks(std::string & message,
+              unsigned int line_width /*= ConsoleUtils::console_line_length*/)
+{
+  for (auto i : make_range(int(message.length() / line_width)))
+    message.insert((i + 1) * (line_width + 2) - 2, "\n");
+}
+
+void
 indentMessage(const std::string & prefix,
               std::string & message,
               const char * color /*= COLOR_CYAN*/,
-              bool indent_first_line)
+              bool indent_first_line,
+              const std::string & post_prefix)
 {
   // First we need to see if the message we need to indent (with color) also contains color codes
   // that span lines.
@@ -723,7 +778,7 @@ indentMessage(const std::string & prefix,
     match_color.FindAndConsume(&line_piece, &color_code);
 
     if (!first || indent_first_line)
-      colored_message += color + prefix + ": " + curr_color;
+      colored_message += color + prefix + post_prefix + curr_color;
 
     colored_message += line;
 
@@ -766,30 +821,83 @@ listDir(const std::string path, bool files_only)
 }
 
 std::list<std::string>
-getFilesInDirs(const std::list<std::string> & directory_list)
+getFilesInDirs(const std::list<std::string> & directory_list, const bool files_only /* = true */)
 {
   std::list<std::string> files;
 
   for (const auto & dir_name : directory_list)
-    files.splice(files.end(), listDir(dir_name, true));
+    files.splice(files.end(), listDir(dir_name, files_only));
 
   return files;
 }
 
 std::string
-getLatestMeshCheckpointFile(const std::list<std::string> & checkpoint_files)
+getLatestCheckpointFilePrefix(const std::list<std::string> & checkpoint_files)
 {
-  const static std::vector<std::string> extensions{"cpr"};
+  // Create storage for newest restart files
+  // Note that these might have the same modification time if the simulation was fast.
+  // In that case we're going to save all of the "newest" files and sort it out momentarily
+  std::time_t newest_time = 0;
+  std::list<std::string> newest_restart_files;
 
-  return getLatestCheckpointFileHelper(checkpoint_files, extensions, true);
-}
+  // Loop through all possible files and store the newest
+  for (const auto & cp_file : checkpoint_files)
+  {
+    if (MooseUtils::hasExtension(cp_file, "rd"))
+    {
+      struct stat stats;
+      stat(cp_file.c_str(), &stats);
 
-std::string
-getLatestAppCheckpointFileBase(const std::list<std::string> & checkpoint_files)
-{
-  const static std::vector<std::string> extensions{"xda", "xdr"};
+      std::time_t mod_time = stats.st_mtime;
+      if (mod_time > newest_time)
+      {
+        newest_restart_files.clear(); // If the modification time is greater, clear the list
+        newest_time = mod_time;
+      }
 
-  return getLatestCheckpointFileHelper(checkpoint_files, extensions, false);
+      if (mod_time == newest_time)
+        newest_restart_files.push_back(cp_file);
+    }
+  }
+
+  // Loop through all of the newest files according the number in the file name
+  int max_file_num = -1;
+  std::string max_file;
+  std::string max_prefix;
+
+  // Pull out the path including the number and the number itself
+  // This takes something_blah_out_cp/0024-restart-1.rd
+  // and returns "something_blah_out_cp/0024" as the "prefix"
+  // and then "24" as the number itself
+  pcrecpp::RE re_file_num("(.*?(\\d+))-restart-\\d+.rd$");
+
+  // Now, out of the newest files find the one with the largest number in it
+  for (const auto & res_file : newest_restart_files)
+  {
+    int file_num = 0;
+
+    // All of the file up to and including the digits
+    std::string file_prefix;
+
+    re_file_num.FullMatch(res_file, &file_prefix, &file_num);
+
+    if (file_num > max_file_num)
+    {
+      // Need both the header and the data
+      if (!RestartableDataReader::isAvailable(res_file))
+        continue;
+
+      max_file_num = file_num;
+      max_file = res_file;
+      max_prefix = file_prefix;
+    }
+  }
+
+  // Error if nothing was located
+  if (max_file_num == -1)
+    mooseError("No checkpoint file found!");
+
+  return max_prefix;
 }
 
 bool
@@ -977,7 +1085,7 @@ toLower(const std::string & name)
 ExecFlagEnum
 getDefaultExecFlagEnum()
 {
-  return moose::internal::getExecFlagRegistry().getDefaultFlags();
+  return moose::internal::ExecFlagRegistry::getExecFlagRegistry().getDefaultFlags();
 }
 
 int
@@ -1200,9 +1308,11 @@ prettyCppType(const std::string & cpp_type)
   // On mac many of the std:: classes are inline namespaced with __1
   // On linux std::string can be inline namespaced with __cxx11
   std::string s = cpp_type;
+  // Remove all spaces surrounding a >
+  pcrecpp::RE("\\s(?=>)").GlobalReplace("", &s);
   pcrecpp::RE("std::__\\w+::").GlobalReplace("std::", &s);
   // It would be nice if std::string actually looked normal
-  pcrecpp::RE("\\s*std::basic_string<char, std::char_traits<char>, std::allocator<char> >\\s*")
+  pcrecpp::RE("\\s*std::basic_string<char, std::char_traits<char>, std::allocator<char>>\\s*")
       .GlobalReplace("std::string", &s);
   // It would be nice if std::vector looked normal
   pcrecpp::RE r("std::vector<([[:print:]]+),\\s?std::allocator<\\s?\\1\\s?>\\s?>");
@@ -1211,142 +1321,7 @@ prettyCppType(const std::string & cpp_type)
   r.GlobalReplace("std::vector<\\1>", &s);
   return s;
 }
-
-template <typename Consumers>
-std::deque<MaterialBase *>
-buildRequiredMaterials(const Consumers & mat_consumers,
-                       const std::vector<std::shared_ptr<MaterialBase>> & mats,
-                       const bool allow_stateful)
-{
-  std::deque<MaterialBase *> required_mats;
-
-  std::unordered_set<unsigned int> needed_mat_props;
-  for (const auto & consumer : mat_consumers)
-  {
-    const auto & mp_deps = consumer->getMatPropDependencies();
-    needed_mat_props.insert(mp_deps.begin(), mp_deps.end());
-  }
-
-  // A predicate of calling this function is that these materials come in already sorted by
-  // dependency with the front of the container having no other material dependencies and following
-  // materials potentially depending on the ones in front of them. So we can start at the back and
-  // iterate forward checking whether the current material supplies anything that is needed, and if
-  // not we discard it
-  for (auto it = mats.rbegin(); it != mats.rend(); ++it)
-  {
-    auto * const mat = it->get();
-    bool supplies_needed = false;
-
-    const auto & supplied_props = mat->getSuppliedPropIDs();
-
-    // Do O(N) with the small container
-    for (const auto supplied_prop : supplied_props)
-    {
-      if (needed_mat_props.count(supplied_prop))
-      {
-        supplies_needed = true;
-        break;
-      }
-    }
-
-    if (!supplies_needed)
-      continue;
-
-    if (!allow_stateful && mat->hasStatefulProperties())
-      mooseError("Someone called buildRequiredMaterials with allow_stateful = false but a material "
-                 "dependency ",
-                 mat->name(),
-                 " computes stateful properties.");
-
-    const auto & mp_deps = mat->getMatPropDependencies();
-    needed_mat_props.insert(mp_deps.begin(), mp_deps.end());
-    required_mats.push_front(mat);
-  }
-
-  return required_mats;
-}
-
-template std::deque<MaterialBase *>
-buildRequiredMaterials(const std::vector<MortarConstraintBase *> &,
-                       const std::vector<std::shared_ptr<MaterialBase>> &,
-                       bool);
-template std::deque<MaterialBase *>
-buildRequiredMaterials(const std::array<const MortarNodalAuxKernelTempl<Real> *, 1> &,
-                       const std::vector<std::shared_ptr<MaterialBase>> &,
-                       bool);
-template std::deque<MaterialBase *>
-buildRequiredMaterials(const std::array<const MortarNodalAuxKernelTempl<RealVectorValue> *, 1> &,
-                       const std::vector<std::shared_ptr<MaterialBase>> &,
-                       bool);
 } // MooseUtils namespace
-
-std::string
-getLatestCheckpointFileHelper(const std::list<std::string> & checkpoint_files,
-                              const std::vector<std::string> extensions,
-                              bool keep_extension)
-{
-  // Create storage for newest restart files
-  // Note that these might have the same modification time if the simulation was fast.
-  // In that case we're going to save all of the "newest" files and sort it out momentarily
-  std::time_t newest_time = 0;
-  std::list<std::string> newest_restart_files;
-
-  // Loop through all possible files and store the newest
-  for (const auto & cp_file : checkpoint_files)
-  {
-    if (find_if(extensions.begin(),
-                extensions.end(),
-                [cp_file](const std::string & ext)
-                { return MooseUtils::hasExtension(cp_file, ext); }) != extensions.end())
-    {
-      struct stat stats;
-      stat(cp_file.c_str(), &stats);
-
-      std::time_t mod_time = stats.st_mtime;
-      if (mod_time > newest_time)
-      {
-        newest_restart_files.clear(); // If the modification time is greater, clear the list
-        newest_time = mod_time;
-      }
-
-      if (mod_time == newest_time)
-        newest_restart_files.push_back(cp_file);
-    }
-  }
-
-  // Loop through all of the newest files according the number in the file name
-  int max_file_num = -1;
-  std::string max_base;
-  std::string max_file;
-
-  pcrecpp::RE re_file_num(".*?(\\d+)(?:_mesh)?$"); // Pull out the embedded number from the file
-
-  // Now, out of the newest files find the one with the largest number in it
-  for (const auto & res_file : newest_restart_files)
-  {
-    auto dot_pos = res_file.find_last_of(".");
-    auto the_base = res_file.substr(0, dot_pos);
-    int file_num = 0;
-
-    re_file_num.FullMatch(the_base, &file_num);
-
-    if (file_num > max_file_num)
-    {
-      max_file_num = file_num;
-      max_base = the_base;
-      max_file = res_file;
-    }
-  }
-
-  // Error if nothing was located
-  if (max_file_num == -1)
-  {
-    max_base.clear();
-    max_file.clear();
-  }
-
-  return keep_extension ? max_file : max_base;
-}
 
 void
 removeSubstring(std::string & main, const std::string & sub)

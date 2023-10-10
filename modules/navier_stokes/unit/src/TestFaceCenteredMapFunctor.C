@@ -37,7 +37,7 @@ TEST(FaceCenteredMapFunctorTest, testArgs)
   const char * argv[2] = {"foo", "\0"};
 
   // First we create a simple mesh
-  auto app = AppFactory::createAppShared("NavierStokesApp", 1, (char **)argv);
+  auto app = AppFactory::createAppShared("NavierStokesUnitApp", 1, (char **)argv);
   auto * factory = &app->getFactory();
   std::string mesh_type = "MeshGeneratorMesh";
 
@@ -61,7 +61,7 @@ TEST(FaceCenteredMapFunctorTest, testArgs)
     mesh->setMeshBase(std::move(lm_mesh));
   }
 
-  mesh->prepare();
+  mesh->prepare(nullptr);
   MultiMooseEnum coord_type_enum("XYZ RZ RSPHERICAL", "XYZ");
   mesh->setCoordSystem({}, coord_type_enum);
   const auto & all_fi = mesh->allFaceInfo();
@@ -86,7 +86,7 @@ TEST(FaceCenteredMapFunctorTest, testArgs)
     const auto face_arg =
         Moose::FaceArg{&fi, Moose::FV::LimiterType::CentralDifference, true, false, nullptr};
 
-    const auto result = u(face_arg);
+    const auto result = u(face_arg, Moose::currentState());
 
     EXPECT_NEAR(result(0), -sin(face_center(0)) * cos(face_center(1)), 1e-14);
     EXPECT_NEAR(result(1), cos(face_center(0)) * sin(face_center(1)), 1e-14);
@@ -99,7 +99,7 @@ TEST(FaceCenteredMapFunctorTest, testArgs)
   {
     try
     {
-      u.gradient(arg);
+      u.gradient(arg, Moose::currentState());
       EXPECT_TRUE(false);
     }
     catch (std::runtime_error & e)
@@ -114,7 +114,7 @@ TEST(FaceCenteredMapFunctorTest, testArgs)
   {
     try
     {
-      u(arg);
+      u(arg, Moose::currentState());
       EXPECT_TRUE(false);
     }
     catch (std::runtime_error & e)
@@ -129,8 +129,8 @@ TEST(FaceCenteredMapFunctorTest, testArgs)
   const auto face_arg =
       Moose::FaceArg{&all_fi[0], Moose::FV::LimiterType::CentralDifference, true, false, nullptr};
   const auto elem_arg = ElemArg{all_fi[0].elemPtr(), false};
-  const auto elem_qp_arg = std::make_tuple(all_fi[0].elemPtr(), 0, &qrule);
-  const auto elem_side_qp_arg = std::make_tuple(all_fi[0].elemPtr(), 0, 0, &qrule);
+  const auto elem_qp_arg = ElemQpArg({all_fi[0].elemPtr(), 0, &qrule, Point(0)});
+  const auto elem_side_qp_arg = ElemSideQpArg({all_fi[0].elemPtr(), 0, 0, &qrule, Point(0)});
   const auto elem_point_arg = ElemPointArg({all_fi[0].elemPtr(), Point(0), false});
 
   test_gradient(elem_arg);
@@ -146,7 +146,8 @@ TEST(FaceCenteredMapFunctorTest, testArgs)
   try
   {
     unrestricted_error_test(
-        FaceArg{&all_fi[2], LimiterType::CentralDifference, true, false, nullptr});
+        FaceArg{&all_fi[2], LimiterType::CentralDifference, true, false, nullptr},
+        Moose::currentState());
     EXPECT_TRUE(false);
   }
   catch (std::runtime_error & e)
@@ -159,8 +160,8 @@ TEST(FaceCenteredMapFunctorTest, testArgs)
       restricted_error_test(*mesh, {1}, "is_restricted");
   try
   {
-    restricted_error_test(
-        FaceArg{&all_fi[2], LimiterType::CentralDifference, true, false, nullptr});
+    restricted_error_test(FaceArg{&all_fi[2], LimiterType::CentralDifference, true, false, nullptr},
+                          Moose::currentState());
     EXPECT_TRUE(false);
   }
   catch (std::runtime_error & e)

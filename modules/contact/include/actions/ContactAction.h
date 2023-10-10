@@ -17,7 +17,7 @@ enum class ContactModel
 {
   FRICTIONLESS,
   GLUED,
-  COULOMB,
+  COULOMB
 };
 
 enum class ContactFormulation
@@ -27,7 +27,14 @@ enum class ContactFormulation
   PENALTY,
   AUGMENTED_LAGRANGE,
   TANGENTIAL_PENALTY,
-  MORTAR
+  MORTAR,
+  MORTAR_PENALTY
+};
+
+enum class ProximityMethod
+{
+  NODE,
+  CENTROID
 };
 
 /**
@@ -71,6 +78,12 @@ public:
   static MooseEnum getSmoothingEnum();
 
   /**
+   * Get proximity method for automatic pairing
+   * @return enum
+   */
+  static MooseEnum getProximityMethod();
+
+  /**
    * Define parameters used by multiple contact objects
    * @return InputParameters object populated with common parameters
    */
@@ -78,7 +91,10 @@ public:
 
 protected:
   /// Primary/Secondary boundary name pairs for mechanical contact
-  const std::vector<std::pair<BoundaryName, BoundaryName>> _boundary_pairs;
+  std::vector<std::pair<BoundaryName, BoundaryName>> _boundary_pairs;
+
+  /// List of all possible boundaries for contact for automatic pairing (optional)
+  std::vector<BoundaryName> _automatic_pairing_boundaries;
 
   /// Contact model type enum
   const ContactModel _model;
@@ -88,9 +104,6 @@ protected:
 
   /// Whether to use the dual Mortar approach
   bool _use_dual;
-
-  /// Whether to use correct edge dropping treatment
-  const bool _correct_edge_dropping;
 
   /// Whether to generate the mortar mesh (useful in a restart simulation e.g.).
   const bool _generate_mortar_mesh;
@@ -110,4 +123,22 @@ private:
    * Generate constraints for node to face contact
    */
   void addNodeFaceContact();
+  /**
+   * Add single contact pressure auxiliary kernel for various contact action objects
+   */
+  void addContactPressureAuxKernel();
+  /**
+   * Remove repeated contact pairs from _boundary_pairs.
+   */
+  void removeRepeatedPairs();
+  /**
+   * Create contact pairs between all boundaries whose centroids are within a user-specified
+   * distance of each other.
+   */
+  void createSidesetPairsFromGeometry();
+  /**
+   * Create contact pairs between all boundaries by determining that _nodes_ on both boundaries are
+   * close enough.
+   */
+  void createSidesetsFromNodeProximity();
 };

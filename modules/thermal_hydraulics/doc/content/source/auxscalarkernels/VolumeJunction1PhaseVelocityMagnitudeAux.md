@@ -1,18 +1,19 @@
-<!-- MOOSE Documentation Stub: Remove this when content is added. -->
+# VolumeJunction1PhaseVelocityMagnitudeAux
 
-# VolumeJunction1PhasePressureAux
+!syntax description /AuxScalarKernels/VolumeJunction1PhaseVelocityMagnitudeAux
 
-!alert construction title=Undocumented Class
-The VolumeJunction1PhasePressureAux has not been documented. The content contained on this page includes the
-typical automatic documentation associated with a MooseObject; however, what is contained is
-ultimately determined by what is necessary to make the documentation clear for users.
+The velocity magnitude is computed as
 
-!syntax description /AuxScalarKernels/VolumeJunction1PhasePressureAux
+!equation
+\|\mathbf{u}\| = \left\|\left(\dfrac{\rho u V}{\rho V}, \dfrac{\rho v V}{\rho V}, \dfrac{\rho w V}{\rho V}\right)\right\|
 
-!syntax parameters /AuxScalarKernels/VolumeJunction1PhasePressureAux
+where $\rho$ is the density of the single phase fluid at the junction, $\mathbf{u}=(u, v, w)$ is the fluid velocity vector,
+and $V$ is the volume of the junction.
 
-!syntax inputs /AuxScalarKernels/VolumeJunction1PhasePressureAux
+This object is automatically added to the simulation by the [VolumeJunction1Phase.md] component.
 
-!syntax children /AuxScalarKernels/VolumeJunction1PhasePressureAux
+!syntax parameters /AuxScalarKernels/VolumeJunction1PhaseVelocityMagnitudeAux
 
-!bibtex bibliography
+!syntax inputs /AuxScalarKernels/VolumeJunction1PhaseVelocityMagnitudeAux
+
+!syntax children /AuxScalarKernels/VolumeJunction1PhaseVelocityMagnitudeAux

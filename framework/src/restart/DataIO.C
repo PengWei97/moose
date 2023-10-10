@@ -11,6 +11,8 @@
 #include "MooseConfig.h"
 #include "DataIO.h"
 #include "MooseMesh.h"
+#include "FEProblemBase.h"
+#include "NonlinearSystemBase.h"
 
 #include "libmesh/vector_value.h"
 #include "libmesh/tensor_value.h"
@@ -36,6 +38,14 @@ dataStore(std::ostream & stream, std::string & v, void * /*context*/)
 
   // Write the string (Do not store the null byte)
   stream.write(v.c_str(), sizeof(char) * size);
+}
+
+template <>
+void
+dataStore(std::ostream & stream, VariableName & v, void * context)
+{
+  auto & name = static_cast<std::string &>(v);
+  dataStore(stream, name, context);
 }
 
 template <>
@@ -87,12 +97,8 @@ dataStore(std::ostream & stream, DualReal & dn, void * context)
     dataStore(stream, size, context);
     for (MooseIndex(size) i = 0; i < size; ++i)
     {
-#ifdef MOOSE_SPARSE_AD
       dataStore(stream, derivatives.raw_index(i), context);
       dataStore(stream, derivatives.raw_at(i), context);
-#else
-      dataStore(stream, derivatives[i], context);
-#endif
     }
   }
 }
@@ -175,13 +181,6 @@ dataStore(std::ostream & stream, std::stringstream & s, void * /* context */)
   stream.write((char *)&s_size, sizeof(s_size));
 
   stream.write(s_str.c_str(), sizeof(char) * (s_str.size()));
-}
-
-template <>
-void
-dataStore(std::ostream & stream, std::stringstream *& s, void * context)
-{
-  dataStore(stream, *s, context);
 }
 
 template <>
@@ -338,6 +337,14 @@ dataLoad(std::istream & stream, std::string & v, void * /*context*/)
 
 template <>
 void
+dataLoad(std::istream & stream, VariableName & v, void * context)
+{
+  auto & name = static_cast<std::string &>(v);
+  dataLoad(stream, name, context);
+}
+
+template <>
+void
 dataLoad(std::istream & stream, bool & v, void * /*context*/)
 {
   stream.read((char *)&v, sizeof(v));
@@ -362,18 +369,12 @@ dataLoad(std::istream & stream, DualReal & dn, void * context)
     auto & derivatives = dn.derivatives();
     std::size_t size = 0;
     stream.read((char *)&size, sizeof(size));
-#ifdef MOOSE_SPARSE_AD
     derivatives.resize(size);
-#endif
 
     for (MooseIndex(derivatives) i = 0; i < derivatives.size(); ++i)
     {
-#ifdef MOOSE_SPARSE_AD
       dataLoad(stream, derivatives.raw_index(i), context);
       dataLoad(stream, derivatives.raw_at(i), context);
-#else
-      dataLoad(stream, derivatives[i], context);
-#endif
     }
   }
 }
@@ -465,19 +466,12 @@ dataLoad(std::istream & stream, std::stringstream & s, void * /* context */)
   size_t s_size = 0;
   stream.read((char *)&s_size, sizeof(s_size));
 
-  std::unique_ptr<char[]> s_s(new char[s_size]);
+  std::unique_ptr<char[]> s_s = std::make_unique<char[]>(s_size);
   stream.read(s_s.get(), s_size);
 
   // Clear the stringstream before loading new data into it.
   s.str(std::string());
   s.write(s_s.get(), s_size);
-}
-
-template <>
-void
-dataLoad(std::istream & stream, std::stringstream *& s, void * context)
-{
-  dataLoad(stream, *s, context);
 }
 
 template <>

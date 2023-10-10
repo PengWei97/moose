@@ -36,8 +36,10 @@ SideSetsFromBoundingBoxGenerator::validParams()
       "bottom_left", "The bottom left point (in x,y,z with spaces in-between).");
   params.addRequiredParam<RealVectorValue>(
       "top_right", "The bottom left point (in x,y,z with spaces in-between).");
-  params.addRequiredParam<subdomain_id_type>(
-      "block_id", "Subdomain id to set for inside/outside the bounding box");
+  params.addDeprecatedParam<subdomain_id_type>(
+      "block_id",
+      "Subdomain id to set for inside/outside the bounding box",
+      "The parameter 'block_id' is not used.");
   params.addDeprecatedParam<std::vector<BoundaryName>>(
       "boundary_id_old",
       "Boundary id on specified block within the bounding box to select",
@@ -65,7 +67,6 @@ SideSetsFromBoundingBoxGenerator::SideSetsFromBoundingBoxGenerator(
   : MeshGenerator(parameters),
     _input(getMesh("input")),
     _location(parameters.get<MooseEnum>("location")),
-    _block_id(parameters.get<SubdomainID>("block_id")),
     _bounding_box(MooseUtils::buildBoundingBox(parameters.get<RealVectorValue>("bottom_left"),
                                                parameters.get<RealVectorValue>("top_right"))),
     _boundary_id_overlap(parameters.get<bool>("boundary_id_overlap"))
@@ -112,9 +113,15 @@ SideSetsFromBoundingBoxGenerator::generate()
   // Attempt to get the new boundary id from the name
   auto boundary_id_new = MooseMeshUtils::getBoundaryID(_boundary_new, *mesh);
 
-  // If the new boundary id/name is not valid, make it instead
+  // If the new boundary id is not valid, make it instead
   if (boundary_id_new == Moose::INVALID_BOUNDARY_ID)
+  {
     boundary_id_new = MooseMeshUtils::getNextFreeBoundaryID(*mesh);
+
+    // Write the name alias of the boundary id to the mesh boundary info
+    boundary_info.sideset_name(boundary_id_new) = _boundary_new;
+    boundary_info.nodeset_name(boundary_id_new) = _boundary_new;
+  }
 
   if (!_boundary_id_overlap)
   {
@@ -191,5 +198,6 @@ SideSetsFromBoundingBoxGenerator::generate()
       mooseError("No nodes found within the bounding box");
   }
 
+  mesh->set_isnt_prepared();
   return dynamic_pointer_cast<MeshBase>(mesh);
 }

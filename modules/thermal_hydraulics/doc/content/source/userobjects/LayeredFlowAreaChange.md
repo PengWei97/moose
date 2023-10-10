@@ -1,18 +1,16 @@
-<!-- MOOSE Documentation Stub: Remove this when content is added. -->
-
 # LayeredFlowAreaChange
 
-!alert construction title=Undocumented Class
-The LayeredFlowAreaChange has not been documented. The content contained on this page includes the
-typical automatic documentation associated with a MooseObject; however, what is contained is
-ultimately determined by what is necessary to make the documentation clear for users.
-
 !syntax description /UserObjects/LayeredFlowAreaChange
+
+On each layer $l$, the flow area change is computed as:
+
+!equation
+\int_l - \vec{n} \cdot \vec{d} d\Omega
+
+where $\vec{n}$ is the local normal, and $\vec{d}$ is the displacement vector.
 
 !syntax parameters /UserObjects/LayeredFlowAreaChange
 
 !syntax inputs /UserObjects/LayeredFlowAreaChange
 
 !syntax children /UserObjects/LayeredFlowAreaChange
-
-!bibtex bibliography

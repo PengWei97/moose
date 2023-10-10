@@ -27,11 +27,10 @@ IsotropicPlasticityStressUpdateTempl<is_ad>::validParams()
   // Linear strain hardening parameters
   params.addParam<FunctionName>("yield_stress_function",
                                 "Yield stress as a function of temperature");
-  params.addParam<Real>(
-      "yield_stress", 0.0, "The point at which plastic strain begins accumulating");
+  params.addParam<Real>("yield_stress", "The point at which plastic strain begins accumulating");
   params.addParam<FunctionName>("hardening_function",
                                 "True stress as a function of plastic strain");
-  params.addParam<Real>("hardening_constant", 0.0, "Hardening slope");
+  params.addParam<Real>("hardening_constant", "Hardening slope");
   params.addCoupledVar("temperature", 0.0, "Coupled Temperature");
   params.addDeprecatedParam<std::string>(
       "plastic_prepend",
@@ -51,8 +50,11 @@ IsotropicPlasticityStressUpdateTempl<is_ad>::IsotropicPlasticityStressUpdateTemp
     _yield_stress_function(this->isParamValid("yield_stress_function")
                                ? &this->getFunction("yield_stress_function")
                                : nullptr),
-    _yield_stress(this->template getParam<Real>("yield_stress")),
-    _hardening_constant(this->template getParam<Real>("hardening_constant")),
+    _yield_stress(this->isParamValid("yield_stress") ? this->template getParam<Real>("yield_stress")
+                                                     : 0),
+    _hardening_constant(this->isParamValid("hardening_constant")
+                            ? this->template getParam<Real>("hardening_constant")
+                            : 0),
     _hardening_function(this->isParamValid("hardening_function")
                             ? &this->getFunction("hardening_function")
                             : nullptr),
@@ -71,11 +73,10 @@ IsotropicPlasticityStressUpdateTempl<is_ad>::IsotropicPlasticityStressUpdateTemp
   if (parameters.isParamSetByUser("yield_stress") && _yield_stress <= 0.0)
     mooseError("Yield stress must be greater than zero");
 
-  if (_yield_stress_function == nullptr && !parameters.isParamSetByUser("yield_stress"))
+  // Both of these parameters are given default values by derived classes, which makes them valid
+  if (_yield_stress_function == nullptr && !this->isParamValid("yield_stress"))
     mooseError("Either yield_stress or yield_stress_function must be given");
-
-  if (!parameters.isParamSetByUser("hardening_constant") &&
-      !this->isParamValid("hardening_function"))
+  if (!parameters.isParamValid("hardening_constant") && !this->isParamValid("hardening_function"))
     mooseError("Either hardening_constant or hardening_function must be defined");
 
   if (parameters.isParamSetByUser("hardening_constant") && this->isParamValid("hardening_function"))
@@ -107,6 +108,9 @@ IsotropicPlasticityStressUpdateTempl<is_ad>::computeStressInitialize(
     const GenericReal<is_ad> & effective_trial_stress,
     const GenericRankFourTensor<is_ad> & elasticity_tensor)
 {
+  RadialReturnStressUpdateTempl<is_ad>::computeStressInitialize(effective_trial_stress,
+                                                                elasticity_tensor);
+
   computeYieldStress(elasticity_tensor);
 
   _yield_condition = effective_trial_stress - _hardening_variable_old[_qp] - _yield_stress;
@@ -148,7 +152,7 @@ IsotropicPlasticityStressUpdateTempl<is_ad>::computeDerivative(
 
 template <bool is_ad>
 void
-IsotropicPlasticityStressUpdateTempl<is_ad>::iterationFinalize(GenericReal<is_ad> scalar)
+IsotropicPlasticityStressUpdateTempl<is_ad>::iterationFinalize(const GenericReal<is_ad> & scalar)
 {
   if (_yield_condition > 0.0)
     _hardening_variable[_qp] = computeHardeningValue(scalar);

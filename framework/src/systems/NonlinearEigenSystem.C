@@ -145,10 +145,10 @@ NonlinearEigenSystem::postAddResidualObject(ResidualObject & object)
   // be singular because boundary elements are zero.
   if (_precond_matrix_includes_eigen && !dynamic_cast<EigenDirichletBC *>(&object) &&
       !dynamic_cast<EigenArrayDirichletBC *>(&object))
-    object.useMatrixTag(_precond_tag);
+    object.useMatrixTag(_precond_tag, {});
 
-  auto & vtags = object.getVectorTags();
-  auto & mtags = object.getMatrixTags();
+  auto & vtags = object.getVectorTags({});
+  auto & mtags = object.getMatrixTags({});
   // If it is an eigen kernel, mark its variable as eigen
   if (vtags.find(_Bx_tag) != vtags.end() || mtags.find(_B_tag) != mtags.end())
   {
@@ -167,18 +167,18 @@ NonlinearEigenSystem::postAddResidualObject(ResidualObject & object)
   if (vtags.find(_Bx_tag) == vtags.end() && mtags.find(_B_tag) == mtags.end())
   {
     // Noneigen Vector tag
-    object.useVectorTag(_Ax_tag);
+    object.useVectorTag(_Ax_tag, {});
     // Noneigen Matrix tag
-    object.useMatrixTag(_A_tag);
+    object.useMatrixTag(_A_tag, {});
     // Noneigen Kernels
-    object.useMatrixTag(_precond_tag);
+    object.useMatrixTag(_precond_tag, {});
   }
   else
   {
     // Associate the eigen matrix tag and the vector tag
     // if this is a eigen kernel
-    object.useMatrixTag(_B_tag);
-    object.useVectorTag(_Bx_tag);
+    object.useMatrixTag(_B_tag, {});
+    object.useVectorTag(_Bx_tag, {});
   }
 }
 
@@ -206,11 +206,9 @@ NonlinearEigenSystem::solve()
     else
       computeScaling();
   }
-#ifdef MOOSE_GLOBAL_AD_INDEXING
   // We do not know a priori what variable a global degree of freedom corresponds to, so we need a
   // map from global dof to scaling factor. We just use a ghosted NumericVector for that mapping
   assembleScalingVector();
-#endif
 
 // In DEBUG mode, Libmesh will check the residual automatically. This may cause
 // an error because B does not need to assembly by default.
@@ -247,7 +245,7 @@ NonlinearEigenSystem::solve()
   for (unsigned int n = 0; n < n_converged_eigenvalues; n++)
     _eigen_values[n] = getConvergedEigenvalue(n);
 
-  // Update the active eigenvector to the solution vector
+  // Update the solution vector to the active eigenvector
   if (n_converged_eigenvalues)
     getConvergedEigenpair(_eigen_problem.activeEigenvalueIndex());
 }

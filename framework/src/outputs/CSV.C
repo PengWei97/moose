@@ -90,6 +90,25 @@ CSV::initialSetup()
       MooseUtils::clearSymlink(out_final);
     }
   }
+
+  // See https://github.com/idaholab/moose/issues/25211.
+  mooseAssert(advancedExecuteOn().contains("postprocessors"),
+              "Missing expected postprocessors key");
+  mooseAssert(advancedExecuteOn().contains("scalars"), "Missing expected scalars key");
+  mooseAssert(advancedExecuteOn().contains("reporters"), "Missing expected reporters key");
+  const auto pp_execute_on = advancedExecuteOn().find("postprocessors")->second;
+  const auto scalar_execute_on = advancedExecuteOn().find("scalars")->second;
+  const auto reporter_execute_on = advancedExecuteOn().find("reporters")->second;
+  const auto n_pps = getPostprocessorOutput().size();
+  const auto n_scalars = getScalarOutput().size();
+  const auto n_reporters = getReporterOutput().size();
+  const bool pp_active = n_pps > 0 && !pp_execute_on.contains(EXEC_NONE);
+  const bool scalar_active = n_scalars > 0 && !scalar_execute_on.contains(EXEC_NONE);
+  const bool reporter_active = n_reporters > 0 && !reporter_execute_on.contains(EXEC_NONE);
+  if ((pp_execute_on != scalar_execute_on && pp_active && scalar_active) ||
+      (pp_execute_on != reporter_execute_on && pp_active && reporter_active))
+    mooseError("The parameters 'execute_postprocessors_on', 'execute_scalars_on', and "
+               "'execute_reporters_on' must be the same for CSV output.");
 }
 
 std::string
@@ -140,8 +159,21 @@ CSV::getVectorPostprocessorFileName(const std::string & vpp_name,
     file_name << '_' << short_name;
 
   if (include_time_step)
+  {
     file_name << '_' << std::setw(_padding) << std::setprecision(0) << std::setfill('0')
               << std::right << timeStep();
+
+    if (_current_execute_flag == EXEC_NONLINEAR || _current_execute_flag == EXEC_LINEAR)
+    {
+      file_name << '_' << std::setw(_padding) << std::setprecision(0) << std::setfill('0')
+                << std::right << _nonlinear_iter;
+    }
+    if (_current_execute_flag == EXEC_LINEAR)
+    {
+      file_name << '_' << std::setw(_padding) << std::setprecision(0) << std::setfill('0')
+                << std::right << _linear_iter;
+    }
+  }
 
   file_name << ".csv";
 
@@ -150,15 +182,14 @@ CSV::getVectorPostprocessorFileName(const std::string & vpp_name,
     int digits = MooseUtils::numDigits(n_processors());
     file_name << "." << std::setw(digits) << std::setfill('0') << processor_id();
   }
-
   return file_name.str();
 }
 
 void
-CSV::output(const ExecFlagType & type)
+CSV::output()
 {
   // Call the base class output (populates tables)
-  TableOutput::output(type);
+  TableOutput::output();
 
   // Print the table containing all the data to a file
   if (_write_all_table && !_all_data_table.empty() && processor_id() == 0)
@@ -222,7 +253,7 @@ CSV::output(const ExecFlagType & type)
     }
   }
 
-  if (type == EXEC_FINAL && _create_final_symlink)
+  if (_current_execute_flag == EXEC_FINAL && _create_final_symlink)
   {
     for (const auto & name_tuple : _latest_vpp_filenames)
     {

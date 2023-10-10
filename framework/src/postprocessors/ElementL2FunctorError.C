@@ -38,7 +38,7 @@ ElementL2FunctorErrorTempl<is_ad>::ElementL2FunctorErrorTempl(const InputParamet
 
 template <bool is_ad>
 Real
-ElementL2FunctorErrorTempl<is_ad>::getValue()
+ElementL2FunctorErrorTempl<is_ad>::getValue() const
 {
   return std::sqrt(ElementIntegralPostprocessor::getValue());
 }
@@ -47,8 +47,9 @@ template <bool is_ad>
 Real
 ElementL2FunctorErrorTempl<is_ad>::computeQpIntegral()
 {
-  Moose::ElemQpArg elem_qp = {_current_elem, _qp, _qrule};
-  Real diff = MetaPhysicL::raw_value(_approx(elem_qp)) - MetaPhysicL::raw_value(_exact(elem_qp));
+  Moose::ElemQpArg elem_qp = {_current_elem, _qp, _qrule, _q_point[_qp]};
+  Real diff = MetaPhysicL::raw_value(_approx(elem_qp, determineState())) -
+              MetaPhysicL::raw_value(_exact(elem_qp, determineState()));
   return diff * diff;
 }
 

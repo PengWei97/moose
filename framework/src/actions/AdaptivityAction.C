@@ -79,6 +79,7 @@ AdaptivityAction::validParams()
       "show_initial_progress", true, "Show the progress of the initial adaptivity");
   params.addParam<bool>(
       "recompute_markers_during_cycles", false, "Recompute markers during adaptivity cycles");
+  params.addParam<bool>("switch_h_to_p_refinement", false, "True to perform p-refinement");
   return params;
 }
 
@@ -123,7 +124,7 @@ AdaptivityAction::act()
 
   else if (_current_task == "add_geometric_rm")
   {
-    auto rm_params = _factory.getValidParams("MooseGhostPointNeighbors");
+    auto rm_params = _factory.getValidParams("ElementPointNeighborLayers");
 
     rm_params.set<std::string>("for_whom") = "Adaptivity";
     rm_params.set<MooseMesh *>("mesh") = _mesh.get();
@@ -133,7 +134,7 @@ AdaptivityAction::act()
     if (rm_params.areAllRequiredParamsValid())
     {
       auto rm_obj = _factory.create<RelationshipManager>(
-          "MooseGhostPointNeighbors", "adaptivity_geometric_ghosting", rm_params);
+          "ElementPointNeighborLayers", "adaptivity_geometric_ghosting", rm_params);
 
       // Delete the resources created on behalf of the RM if it ends up not being added to the
       // App.
@@ -141,7 +142,7 @@ AdaptivityAction::act()
         _factory.releaseSharedObjects(*rm_obj);
     }
     else
-      mooseError("Invalid initialization of MooseGhostPointNeighbors");
+      mooseError("Invalid initialization of ElementPointNeighborLayers");
   }
 
   else if (_current_task == "setup_adaptivity")
@@ -153,7 +154,7 @@ AdaptivityAction::act()
     // we don't need to run mesh modifiers *again* after they ran already during the mesh
     // splitting process. Adaptivity::init must be called for any adaptivity to work, however, so we
     // can't just skip it for the useSplit case.
-    if (_app.isUseSplit())
+    if (_mesh->isSplit())
       adapt.init(0, 0);
     else
       adapt.init(getParam<unsigned int>("steps"), getParam<unsigned int>("initial_adaptivity"));
@@ -202,6 +203,8 @@ AdaptivityAction::act()
 
     adapt.setTimeActive(getParam<Real>("start_time"), getParam<Real>("stop_time"));
     adapt.setInterval(getParam<unsigned int>("interval"));
+    if (getParam<bool>("switch_h_to_p_refinement"))
+      adapt.switchHToPRefinement();
   }
 }
 

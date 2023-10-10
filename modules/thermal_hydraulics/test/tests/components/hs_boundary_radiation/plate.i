@@ -52,16 +52,11 @@ E_change = ${fparse scale * heat_flux * A * t}
     T_ambient = ${T_ambient}
     emissivity = ${emissivity}
     view_factor = ${view_factor}
-    scale_pp = bc_scale_pp
+    scale = ${scale}
   []
 []
 
 [Postprocessors]
-  [bc_scale_pp]
-    type = FunctionValuePostprocessor
-    function = ${scale}
-    execute_on = 'INITIAL TIMESTEP_END'
-  []
   [E_hs]
     type = ADHeatStructureEnergy
     block = 'hs:region'
@@ -90,6 +85,9 @@ E_change = ${fparse scale * heat_flux * A * t}
   dt = ${t}
   num_steps = 1
   abort_on_solve_fail = true
+
+  petsc_options_iname = '-pc_type'
+  petsc_options_value = 'lu'
 []
 
 [Outputs]

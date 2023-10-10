@@ -1,18 +1,21 @@
-<!-- MOOSE Documentation Stub: Remove this when content is added. -->
-
 # ADOneD3EqnMomentumFriction
 
-!alert construction title=Undocumented Class
-The ADOneD3EqnMomentumFriction has not been documented. The content contained on this page includes the
-typical automatic documentation associated with a MooseObject; however, what is contained is
-ultimately determined by what is necessary to make the documentation clear for users.
-
 !syntax description /Kernels/ADOneD3EqnMomentumFriction
+
+The friction loss term in the momentum equation strong form is:
+
+!equation
+\dfrac{1}{2 D_h} f_D \rho u |u| A
+
+where $\rho$ is the density, $A$ the area of the component, $u$ the one-dimensional velocity, $D_h$
+the hydraulic diameter and $f_D$ the Darcy friction factor.
+
+!alert note
+In THM, most kernels are added automatically by components or flow models. This kernel is created by the
+[FlowModelSinglePhase.md] to act inside components with single-phase fluid flow.
 
 !syntax parameters /Kernels/ADOneD3EqnMomentumFriction
 
 !syntax inputs /Kernels/ADOneD3EqnMomentumFriction
 
 !syntax children /Kernels/ADOneD3EqnMomentumFriction
-
-!bibtex bibliography

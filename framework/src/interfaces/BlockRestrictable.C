@@ -20,7 +20,6 @@
 InputParameters
 BlockRestrictable::validParams()
 {
-
   // Create InputParameters object that will be appended to the parameters for the inheriting object
   InputParameters params = emptyInputParameters();
 
@@ -83,7 +82,7 @@ BlockRestrictable::initializeBlockRestrictable(const MooseObject * moose_object)
 
   // Populate the MaterialData pointer
   if (_blk_feproblem != NULL)
-    _blk_material_data = _blk_feproblem->getMaterialData(Moose::BLOCK_MATERIAL_DATA, _blk_tid);
+    _blk_material_data = &_blk_feproblem->getMaterialData(Moose::BLOCK_MATERIAL_DATA, _blk_tid);
 
   // The 'block' input is defined
   if (moose_object->isParamValid("block"))
@@ -91,14 +90,15 @@ BlockRestrictable::initializeBlockRestrictable(const MooseObject * moose_object)
     // Extract the blocks from the input
     _blocks = moose_object->getParam<std::vector<SubdomainName>>("block");
 
-    // Get the IDs from the supplied names
-    _vec_ids = _blk_mesh->getSubdomainIDs(_blocks);
-
     // Store the IDs in a set, handling ANY_BLOCK_ID if supplied
     if (std::find(_blocks.begin(), _blocks.end(), "ANY_BLOCK_ID") != _blocks.end())
       _blk_ids.insert(Moose::ANY_BLOCK_ID);
     else
+    {
+      // Get the IDs from the supplied names
+      _vec_ids = _blk_mesh->getSubdomainIDs(_blocks);
       _blk_ids.insert(_vec_ids.begin(), _vec_ids.end());
+    }
   }
 
   // When 'blocks' is not set and there is a "variable", use the blocks from the variable
@@ -164,6 +164,12 @@ BlockRestrictable::initializeBlockRestrictable(const MooseObject * moose_object)
       moose_object->paramError("block", msg.str());
     }
   }
+
+  // Get the mesh dimension for the blocks
+  if (blockRestricted())
+    _blk_dim = _blk_mesh->getBlocksMaxDimension(_blocks);
+  else
+    _blk_dim = _blk_mesh->dimension();
 }
 
 bool
@@ -181,7 +187,10 @@ BlockRestrictable::blocks() const
 const std::set<SubdomainID> &
 BlockRestrictable::blockIDs() const
 {
-  return _blk_ids;
+  if (_blk_ids.find(Moose::ANY_BLOCK_ID) != _blk_ids.end())
+    return _blk_mesh->meshSubdomains();
+  else
+    return _blk_ids;
 }
 
 unsigned int

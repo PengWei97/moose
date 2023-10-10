@@ -11,6 +11,10 @@ MOOSE_JOBS        ?= 8
 # Include variables defined by MOOSE configure if it's been run
 -include $(MOOSE_DIR)/conf_vars.mk
 
+# PREFIX should be set in conf_vars. If however the user didn't run configure we
+# won't have a prefix. We'll use the automake default then:
+PREFIX ?= '/usr/local'
+
 # If the user has no environment variable
 # called METHOD, they get optimized mode.
 ifeq (x$(METHOD),x)
@@ -52,6 +56,12 @@ else
     libmesh_CXXFLAGS += -DHAVE_GPERFTOOLS -I$(GPERF_DIR)/include
     libmesh_LDFLAGS := -L$(GPERF_DIR)/lib -Wl,-rpath,$(GPERF_DIR)/lib -ltcmalloc_and_profiler $(libmesh_LDFLAGS)
 endif
+endif
+
+# Give us that sweet std::filesystem (not needed on mac)
+# Hopefully this can go in libMesh one day
+ifneq ($(shell uname -s),Darwin)
+	libmesh_LDFLAGS += -lstdc++fs
 endif
 
 # Google Test relies on static construction of objects in test
@@ -106,11 +116,7 @@ endif
 
 all:
 
-# Add all header symlinks as dependencies to this target
-header_symlinks:
-
 unity_files:
-
 
 #
 # C++ rules
@@ -224,7 +230,7 @@ endif
 %.$(obj-suffix) : %.f90
 	@echo "Compiling Fortran90 (in "$(METHOD)" mode) "$<"..."
 	@$(libmesh_LIBTOOL) --tag=FC $(LIBTOOLFLAGS) --mode=compile --quiet \
-	  $(libmesh_F90) $(libmesh_FFLAGS) $(app_INCLUDES) $(libmesh_INCLUDE) -c $< $(module_dir_flag) -o $@
+	  $(libmesh_F90) -ffree-line-length-none $(libmesh_FFLAGS) $(app_INCLUDES) $(libmesh_INCLUDE) -c $< $(module_dir_flag) -o $@
 
 # Add method to list of defines passed to the compiler
 libmesh_CXXFLAGS += -DMETHOD=$(METHOD)
@@ -308,8 +314,9 @@ endif
 # out to be more trouble than it was worth to get working.
 #
 PLUGIN_FLAGS := -shared -fPIC -Wl,-undefined,dynamic_lookup
+
+# we add include/base so that MooseConfig.h can be found, which is absent from the symlink dirs
 %-$(METHOD).plugin : %.C
-	# we add include/base so that MooseConfig.h can be found, which is absent from the symlink dirs
 	@$(libmesh_CXX) $(libmesh_CPPFLAGS) $(ADDITIONAL_CPPFLAGS) $(CXXFLAGS) $(libmesh_CXXFLAGS) $(PLUGIN_FLAGS) $(app_INCLUDES) $(libmesh_INCLUDE) -I $(FRAMEWORK_DIR)/include/base $< -o $@
 %-$(METHOD).plugin : %.c
 	@echo "Compiling C Plugin (in "$(METHOD)" mode) "$<"..."
@@ -319,7 +326,7 @@ PLUGIN_FLAGS := -shared -fPIC -Wl,-undefined,dynamic_lookup
 	@$(libmesh_F77) $(libmesh_FFLAGS) $(PLUGIN_FLAGS) $(app_INCLUDES) $(libmesh_INCLUDE) $< -o $@
 %-$(METHOD).plugin : %.f90
 	@echo "Compiling Fortan Plugin (in "$(METHOD)" mode) "$<"..."
-	@$(libmesh_F90) $(libmesh_FFLAGS) $(PLUGIN_FLAGS) $(app_INCLUDES) $(libmesh_INCLUDE) $< -o $@
+	@$(libmesh_F90) -ffree-line-length-none $(libmesh_FFLAGS) $(PLUGIN_FLAGS) $(app_INCLUDES) $(libmesh_INCLUDE) $< -o $@
 
 # Define the "test" target, we'll use a variable name so that we can override it without warnings if needed
 TEST ?= test

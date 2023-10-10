@@ -17,12 +17,13 @@
  * primary variables such as porepressure and saturation at the nodes
  * and quadpoints for all phases as required
  */
-class PorousFlowVariableBase : public DerivativeMaterialInterface<PorousFlowMaterial>
+template <bool is_ad>
+class PorousFlowVariableBaseTempl : public DerivativeMaterialInterface<PorousFlowMaterial>
 {
 public:
   static InputParameters validParams();
 
-  PorousFlowVariableBase(const InputParameters & parameters);
+  PorousFlowVariableBaseTempl(const InputParameters & parameters);
 
 protected:
   virtual void initQpStatefulProperties() override;
@@ -38,13 +39,13 @@ protected:
   const unsigned int _num_pf_vars;
 
   /// Computed nodal or quadpoint values of porepressure of the phases
-  MaterialProperty<std::vector<Real>> & _porepressure;
+  GenericMaterialProperty<std::vector<Real>, is_ad> & _porepressure;
 
   /// d(porepressure)/d(PorousFlow variable)
-  MaterialProperty<std::vector<std::vector<Real>>> & _dporepressure_dvar;
+  MaterialProperty<std::vector<std::vector<Real>>> * const _dporepressure_dvar;
 
   /// Grad(p) at the quadpoints
-  MaterialProperty<std::vector<RealGradient>> * const _gradp_qp;
+  GenericMaterialProperty<std::vector<RealGradient>, is_ad> * const _gradp_qp;
 
   /// d(grad porepressure)/d(grad PorousFlow variable) at the quadpoints
   MaterialProperty<std::vector<std::vector<Real>>> * const _dgradp_qp_dgradv;
@@ -53,13 +54,13 @@ protected:
   MaterialProperty<std::vector<std::vector<RealGradient>>> * const _dgradp_qp_dv;
 
   /// Computed nodal or qp saturation of the phases
-  MaterialProperty<std::vector<Real>> & _saturation;
+  GenericMaterialProperty<std::vector<Real>, is_ad> & _saturation;
 
   /// d(saturation)/d(PorousFlow variable)
-  MaterialProperty<std::vector<std::vector<Real>>> & _dsaturation_dvar;
+  MaterialProperty<std::vector<std::vector<Real>>> * const _dsaturation_dvar;
 
   /// Grad(s) at the quadpoints
-  MaterialProperty<std::vector<RealGradient>> * const _grads_qp;
+  GenericMaterialProperty<std::vector<RealGradient>, is_ad> * const _grads_qp;
 
   /// d(grad saturation)/d(grad PorousFlow variable) at the quadpoints
   MaterialProperty<std::vector<std::vector<Real>>> * const _dgrads_qp_dgradv;
@@ -67,3 +68,24 @@ protected:
   /// d(grad saturation)/d(PorousFlow variable) at the quadpoints
   MaterialProperty<std::vector<std::vector<RealGradient>>> * const _dgrads_qp_dv;
 };
+
+#define usingPorousFlowVariableBaseMembers                                                         \
+  using PorousFlowVariableBaseTempl<is_ad>::_dictator;                                             \
+  using PorousFlowVariableBaseTempl<is_ad>::_porepressure;                                         \
+  using PorousFlowVariableBaseTempl<is_ad>::_saturation;                                           \
+  using PorousFlowVariableBaseTempl<is_ad>::_dporepressure_dvar;                                   \
+  using PorousFlowVariableBaseTempl<is_ad>::_dsaturation_dvar;                                     \
+  using PorousFlowVariableBaseTempl<is_ad>::_qp;                                                   \
+  using PorousFlowVariableBaseTempl<is_ad>::_num_phases;                                           \
+  using PorousFlowVariableBaseTempl<is_ad>::_gradp_qp;                                             \
+  using PorousFlowVariableBaseTempl<is_ad>::_grads_qp;                                             \
+  using PorousFlowVariableBaseTempl<is_ad>::_dgradp_qp_dgradv;                                     \
+  using PorousFlowVariableBaseTempl<is_ad>::_dgrads_qp_dgradv;                                     \
+  using PorousFlowVariableBaseTempl<is_ad>::_dgradp_qp_dv;                                         \
+  using PorousFlowVariableBaseTempl<is_ad>::_dgrads_qp_dv;                                         \
+  using PorousFlowVariableBaseTempl<is_ad>::_nodal_material;                                       \
+  using Coupleable::coupled;                                                                       \
+  using Coupleable::coupledGradient
+
+typedef PorousFlowVariableBaseTempl<false> PorousFlowVariableBase;
+typedef PorousFlowVariableBaseTempl<true> ADPorousFlowVariableBase;

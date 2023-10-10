@@ -14,16 +14,17 @@
 class PorousFlowCapillaryPressure;
 
 /**
- * Base material designed to calculate fluid phase porepressure and saturation
+ * Material designed to calculate fluid phase porepressure and saturation
  * for the single-phase situation assuming constant effective saturation and
  * porepressure as the nonlinear variable
  */
-class PorousFlow1PhaseP : public PorousFlowVariableBase
+template <bool is_ad>
+class PorousFlow1PhasePTempl : public PorousFlowVariableBaseTempl<is_ad>
 {
 public:
   static InputParameters validParams();
 
-  PorousFlow1PhaseP(const InputParameters & parameters);
+  PorousFlow1PhasePTempl(const InputParameters & parameters);
 
 protected:
   virtual void initQpStatefulProperties() override;
@@ -35,13 +36,18 @@ protected:
   void buildQpPPSS();
 
   /// Nodal or quadpoint value of porepressure of the fluid phase
-  const VariableValue & _porepressure_var;
+  const GenericVariableValue<is_ad> & _porepressure_var;
   /// Gradient(_porepressure at quadpoints)
-  const VariableGradient & _gradp_qp_var;
+  const GenericVariableGradient<is_ad> & _gradp_qp_var;
   /// Moose variable number of the porepressure
   const unsigned int _porepressure_varnum;
   /// The PorousFlow variable number of the porepressure
   const unsigned int _p_var_num;
   /// Capillary pressure UserObject
   const PorousFlowCapillaryPressure & _pc_uo;
+
+  usingPorousFlowVariableBaseMembers;
 };
+
+typedef PorousFlow1PhasePTempl<false> PorousFlow1PhaseP;
+typedef PorousFlow1PhasePTempl<true> ADPorousFlow1PhaseP;

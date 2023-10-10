@@ -31,7 +31,7 @@
 
 [AuxKernels]
   [c]
-    type = SelfAux
+    type = ProjectionAux
     variable = c
     v = d
     execute_on = 'INITIAL TIMESTEP_END FINAL'
@@ -101,7 +101,7 @@
   []
   [free_energy]
     type = MathEBFreeEnergy
-    f_name = F
+    property_name = F
     c = d
   []
 []

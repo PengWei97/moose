@@ -23,6 +23,7 @@ HeatFluxBaseBC::validParams()
   params.addRequiredParam<unsigned int>("n_unit", "Number of units of heat structure");
   params.addRequiredParam<bool>("hs_coord_system_is_cylindrical",
                                 "Is the heat structure coordinate system cylindrical?");
+  params.addClassDescription("Base class for heat flux boundary conditions");
   return params;
 }
 
@@ -82,7 +83,7 @@ HeatFluxBaseBC::computeOffDiagJacobian(const unsigned int jvar_num)
           for (_j = 0; _j < jvar.phiNeighborSize(); _j++)
             Ke(_i, _j) += _JxW[_qp] * _coord[_qp] * computeQpOffDiagJacobianNeighbor(jvar_num);
 
-      _assembly.cacheJacobianBlock(Ke, idofs, jdofs, _var.scalingFactor());
+      addJacobian(_assembly, Ke, idofs, jdofs, _var.scalingFactor());
     }
   }
 }

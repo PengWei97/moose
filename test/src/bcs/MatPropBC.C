@@ -28,5 +28,7 @@ MatPropBC::MatPropBC(const InputParameters & parameters)
 ADReal
 MatPropBC::computeQpResidual()
 {
-  return _test[_i][_qp] * _coef(std::make_tuple(_current_elem, _current_side, _qp, _qrule));
+  return _test[_i][_qp] *
+         _coef(Moose::ElemSideQpArg{_current_elem, _current_side, _qp, _qrule, _q_point[_qp]},
+               Moose::currentState());
 }

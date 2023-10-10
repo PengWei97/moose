@@ -33,13 +33,6 @@ FVDiffusion::FVDiffusion(const InputParameters & params)
     _coeff_interp_method(
         Moose::FV::selectInterpolationMethod(getParam<MooseEnum>("coeff_interp_method")))
 {
-#ifndef MOOSE_GLOBAL_AD_INDEXING
-  mooseError(
-      "FVDiffusion is not supported by local AD indexing. In order to use this object, please run "
-      "the configure script in the root MOOSE directory with the configure option "
-      "'--with-ad-indexing-type=global'. Note that global indexing is now the default "
-      "configuration for AD indexing type.");
-#endif
   if ((_var.faceInterpolationMethod() == Moose::FV::InterpMethod::SkewCorrectedAverage) &&
       (_tid == 0))
     adjustRMGhostLayers(std::max((unsigned short)(3), _pars.get<unsigned short>("ghost_layers")));
@@ -49,20 +42,29 @@ ADReal
 FVDiffusion::computeQpResidual()
 {
   using namespace Moose::FV;
+  const auto state = determineState();
 
-  auto dudn = gradUDotNormal();
+  auto dudn = gradUDotNormal(state);
   ADReal coeff;
 
   // If we are on internal faces, we interpolate the diffusivity as usual
   if (_var.isInternalFace(*_face_info))
-    interpolate(
-        _coeff_interp_method, coeff, _coeff(elemArg()), _coeff(neighborArg()), *_face_info, true);
+  {
+    const ADReal coeff_elem = _coeff(elemArg(), state);
+    const ADReal coeff_neighbor = _coeff(neighborArg(), state);
+    // If the diffusion coefficients are zero, then we can early return 0 (and avoid warnings if we
+    // have a harmonic interpolation)
+    if (!coeff_elem.value() && !coeff_neighbor.value())
+      return 0;
+
+    interpolate(_coeff_interp_method, coeff, coeff_elem, coeff_neighbor, *_face_info, true);
+  }
   // Else we just use the boundary values (which depend on how the diffusion
   // coefficient is constructed)
   else
   {
     const auto face = singleSidedFaceArg();
-    coeff = _coeff(face);
+    coeff = _coeff(face, state);
   }
 
   return -1 * coeff * dudn;

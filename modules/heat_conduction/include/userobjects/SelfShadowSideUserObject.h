@@ -35,9 +35,9 @@ public:
   virtual void threadJoin(const UserObject & y) override;
 
   // API to check if a QP is illuminated
-  int illumination(const SideIDType & id) const;
+  unsigned int illumination(const SideIDType & id) const;
 
-  /// API to chek if teh UO runs on the displaced mesh
+  /// API to chek if the UO runs on the displaced mesh
   bool useDisplacedMesh() const { return getParam<bool>("use_displaced_mesh"); }
 
   using Triangle = std::tuple<Point, Point, Point, SideIDType>;

@@ -1,18 +1,13 @@
-<!-- MOOSE Documentation Stub: Remove this when content is added. -->
-
 # ADConstantMaterial
 
-!alert construction title=Undocumented Class
-The ADConstantMaterial has not been documented. The content contained on this page includes the
-typical automatic documentation associated with a MooseObject; however, what is contained is
-ultimately determined by what is necessary to make the documentation clear for users.
-
 !syntax description /Materials/ADConstantMaterial
+
+This is the [automatic differentiation (AD)](automatic_differentiation/index.md) version of the [ConstantMaterial.md].
+Please refer to the regular version for additional documentation.
+Because it uses AD, it does not require setting additional material properties to define the 0 derivatives.
 
 !syntax parameters /Materials/ADConstantMaterial
 
 !syntax inputs /Materials/ADConstantMaterial
 
 !syntax children /Materials/ADConstantMaterial
-
-!bibtex bibliography

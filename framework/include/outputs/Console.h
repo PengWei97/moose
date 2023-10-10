@@ -49,7 +49,7 @@ public:
    * added
    * as well.
    */
-  virtual void output(const ExecFlagType & type) override;
+  virtual void output() override;
 
   /**
    * Creates the output file name
@@ -86,6 +86,24 @@ public:
           "accessing console system information flags is not allowed after console initial setup");
     return _system_info_flags;
   }
+
+  /**
+   * Time formatting options
+   */
+  enum class TimeFormatEnum
+  {
+    PLAIN = 0,
+    SECOND = 1,
+    MINUTE = 2,
+    HOUR = 3,
+    DAY = 4,
+    DTIME = 5
+  };
+
+  /**
+   * A reference to the time format to allow callers to set a new format for this console object
+   */
+  TimeFormatEnum & timeFormat() { return _time_format; }
 
 protected:
   /**
@@ -150,6 +168,9 @@ protected:
    */
   void writeVariableNorms();
 
+  /// A help function to format a time
+  std::string formatTime(const Real t) const;
+
   /// The max number of table rows
   unsigned int _max_rows;
 
@@ -197,6 +218,9 @@ protected:
 
   /// Number of significant digits
   unsigned int _precision;
+
+  /// Time format
+  TimeFormatEnum _time_format;
 
 private:
   /**

@@ -1,18 +1,14 @@
-<!-- MOOSE Documentation Stub: Remove this when content is added. -->
-
 # ADWallHeatTransferCoefficient3EqnDittusBoelterMaterial
 
-!alert construction title=Undocumented Class
-The ADWallHeatTransferCoefficient3EqnDittusBoelterMaterial has not been documented. The content contained on this page includes the
-typical automatic documentation associated with a MooseObject; however, what is contained is
-ultimately determined by what is necessary to make the documentation clear for users.
-
 !syntax description /Materials/ADWallHeatTransferCoefficient3EqnDittusBoelterMaterial
+
+This is the [automatic differentiation (AD)](automatic_differentiation/index.md) version of the
+[WallHeatTransferCoefficient3EqnDittusBoelterMaterial.md].
+Please refer to the regular version for additional documentation.
+Because it uses AD, it does not declare additional material properties for the derivatives.
 
 !syntax parameters /Materials/ADWallHeatTransferCoefficient3EqnDittusBoelterMaterial
 
 !syntax inputs /Materials/ADWallHeatTransferCoefficient3EqnDittusBoelterMaterial
 
 !syntax children /Materials/ADWallHeatTransferCoefficient3EqnDittusBoelterMaterial
-
-!bibtex bibliography

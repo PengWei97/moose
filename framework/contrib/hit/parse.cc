@@ -1,4 +1,3 @@
-
 #include <algorithm>
 #include <iterator>
 #include <memory>
@@ -10,15 +9,8 @@
 
 #include "parse.h"
 
-// the EOF macro wreaks havok on our TokType enum which has an EOF member. So undefine it and the
-// redefine it at the end of this file.
-#define TMPEOF EOF
-#undef EOF
-
 namespace hit
 {
-
-static const Token EOFToken{TokType::EOF, "", ""};
 
 std::string
 quoteChar(const std::string & s)
@@ -86,23 +78,6 @@ toBool(const std::string & val, bool * dst)
   return false;
 }
 
-// clang-format off
-std::string
-nodeTypeName(NodeType t)
-{
-  #define nodecase(type) case NodeType::type: return #type;
-  switch (t)
-    {
-      nodecase(Root)
-      nodecase(Section)
-      nodecase(Comment)
-      nodecase(Field)
-      default : return std::to_string((int)t);
-    }
-  #undef nodecase
-}
-// clang-format on
-
 Error::Error(const std::string & msg) : msg(msg) {}
 
 const char *
@@ -163,7 +138,53 @@ pathJoin(const std::vector<std::string> & paths)
   return fullpath.substr(1);
 }
 
-Node::Node(NodeType t) : _type(t) {}
+Node::Node() : _parent(nullptr)
+{
+  Node * root = hit::parse("blankline", "# blankline");
+  const auto & first_child = *root->_children.front();
+  _dhi = first_child._dhi;
+  _hnv = first_child._hnv;
+  _hnv.set_type(wasp::BLANK_LINE);
+  delete root;
+}
+
+Node::Node(std::shared_ptr<wasp::DefaultHITInterpreter> dhi, wasp::HITNodeView hnv)
+  : _dhi(dhi), _hnv(hnv), _parent(nullptr)
+{
+}
+
+Node::Node(const std::string & field, const std::string & val) : _parent(nullptr)
+{
+  std::string input = field + " = " + val;
+  Node * root = hit::parse("field", input);
+  const auto & first_child = *root->_children.front();
+  _dhi = first_child._dhi;
+  _hnv = first_child._hnv;
+  delete root;
+}
+
+Node::Node(const std::string & section) : _parent(nullptr)
+{
+  std::string input = "[" + (section.empty() ? "-" : section) + "][]";
+  Node * root = hit::parse("section", input);
+  const auto & first_child = *root->_children.front();
+  _dhi = first_child._dhi;
+  _hnv = first_child._hnv;
+  for (auto child : first_child._children)
+    addChild(child->clone());
+  delete root;
+}
+
+Node::Node(const std::string & comment, bool is_inline) : _parent(nullptr)
+{
+  (void)is_inline; // suppress unused variable warning
+  Node * root = hit::parse("comment", comment);
+  const auto & first_child = *root->_children.front();
+  _dhi = first_child._dhi;
+  _hnv = first_child._hnv;
+  delete root;
+}
+
 Node::~Node()
 {
   while (_children.size() > 0)
@@ -190,21 +211,28 @@ Node::remove()
   delete this;
 }
 
+wasp::HITNodeView
+Node::getNodeView()
+{
+  return _hnv;
+}
+
 const std::string &
 Node::filename()
 {
-  if (_toks.size() > 0)
-    return _toks[0].name;
-  static std::string unknown_name = "[unknown]";
-  return unknown_name;
+  return _dhi->stream_name();
 }
 
 int
 Node::line()
 {
-  if (_toks.size() > 0)
-    return _toks[0].line;
-  return 0;
+  return _hnv.line();
+}
+
+int
+Node::column()
+{
+  return _hnv.column();
 }
 
 #define valthrow() throw Error("non-field node '" + fullpath() + "' has no value to retrieve")
@@ -254,7 +282,15 @@ Node::vecStrVal()
 NodeType
 Node::type()
 {
-  return _type;
+  if (_hnv.type() == wasp::BLANK_LINE)
+    return NodeType::Blank;
+  else if (_hnv.type() == wasp::COMMENT)
+    return NodeType::Comment;
+  if (_hnv.type() == wasp::OBJECT || _hnv.type() == wasp::DOCUMENT_ROOT)
+    return NodeType::Section;
+  else if (_hnv.type() == wasp::KEYED_VALUE || _hnv.type() == wasp::ARRAY)
+    return NodeType::Field;
+  return NodeType::Other;
 }
 
 void
@@ -286,7 +322,7 @@ Node::children(NodeType t)
 std::string
 Node::render(int indent, const std::string & indent_text, int maxlen)
 {
-  if (_type == NodeType::Root)
+  if (root() != this)
     indent = -1;
 
   std::string s;
@@ -312,7 +348,10 @@ Node::root()
 std::string
 Node::path()
 {
-  return "";
+  if (!_override_path.empty())
+    return _override_path;
+  std::string node_name = std::string(_hnv.name());
+  return _hnv.type() == wasp::DOCUMENT_ROOT ? "" : node_name;
 }
 
 std::string
@@ -330,13 +369,16 @@ Node::fullpath()
 void
 Node::walk(Walker * w, NodeType t, TraversalOrder o)
 {
+  if (!_dhi->size())
+    return;
+
   // traverse children first
   if (o == TraversalOrder::AfterChildren)
     for (auto child : _children)
       child->walk(w, t, o);
 
   // execute walker
-  if (_type == t || t == NodeType::All)
+  if (type() == t || t == NodeType::All)
     w->walk(fullpath(), pathNorm(path()), this);
 
   // traverse children last
@@ -348,147 +390,186 @@ Node::walk(Walker * w, NodeType t, TraversalOrder o)
 Node *
 Node::find(const std::string & path)
 {
-  if (path == "" && fullpath() == "")
-    return this;
-  return findInner(pathNorm(path), "");
-}
+  std::stringstream search(path);
+  std::vector<Node *> parent_nodes{this};
 
-std::vector<Token> &
-Node::tokens()
-{
-  return _toks;
-}
-
-Node *
-Node::findInner(const std::string & path, const std::string & prefix)
-{
-  for (auto child : _children)
+  for (std::string name; std::getline(search, name, '/');)
   {
-    NodeType t = child->type();
-    if (t != NodeType::Section && t != NodeType::Field)
+    if (name.empty())
       continue;
 
-    std::string fullpath;
-    if (prefix.size() == 0)
-      fullpath = child->path();
-    else
-      fullpath = prefix + "/" + child->path();
+    std::vector<Node *> child_nodes;
+    for (auto parent_node : parent_nodes)
+      for (auto child : parent_node->children())
+        if (child->path() == name)
+          child_nodes.push_back(child);
 
-    fullpath = pathNorm(fullpath);
-    if (fullpath == path)
-      return child;
-    else if (path.find(fullpath) == std::string::npos)
-      continue;
+    parent_nodes.clear();
+    parent_nodes = child_nodes;
 
-    if (child->type() == NodeType::Section)
-    {
-      Node * result = child->findInner(path, fullpath);
-      if (result != nullptr)
-        return result;
-    }
+    if (parent_nodes.empty())
+      break;
   }
+
+  if (!parent_nodes.empty())
+    return parent_nodes.front();
   return nullptr;
 }
 
-Comment::Comment(const std::string & text, bool is_inline)
-  : Node(NodeType::Comment), _text(text), _isinline(is_inline)
+Comment::Comment(const std::string & text, bool is_inline = false)
+  : Node(text, is_inline), _isinline(is_inline)
+{
+}
+
+Comment::Comment(std::shared_ptr<wasp::DefaultHITInterpreter> dhi, wasp::HITNodeView hnv)
+  : Node(dhi, hnv), _isinline(false)
 {
 }
 
 std::string
 Comment::render(int indent, const std::string & indent_text, int /*maxlen*/)
 {
+  const auto & comment_text = _hnv.data();
+
   if (_isinline)
-    return " " + _text;
-  return "\n" + strRepeat(indent_text, indent) + _text;
+    return " " + comment_text;
+  return "\n" + strRepeat(indent_text, indent) + comment_text;
 }
 
 Node *
-Comment::clone(bool)
+Comment::clone(bool
+                   absolute_path
+)
 {
-  auto n = new Comment(_text, _isinline);
-  n->tokens() = tokens();
+  auto n = new Comment(_dhi, _hnv);
+  n->setInline(_isinline);
+  if (absolute_path)
+    n->setOverridePath(fullpath());
   return n;
 }
 
 void
 Comment::setText(const std::string & text)
 {
-  _text = text;
+  if (text != _hnv.data() && _hnv.is_leaf())
+    _hnv.set_data(text.c_str());
 }
 
-Section::Section(const std::string & path) : Node(NodeType::Section), _path(pathNorm(path)) {}
+void
+Comment::setInline(bool is_inline)
+{
+  _isinline = is_inline;
+}
+
+Section::Section(const std::string & path) : Node(path) {}
+
+Section::Section(std::shared_ptr<wasp::DefaultHITInterpreter> dhi, wasp::HITNodeView hnv)
+  : Node(dhi, hnv)
+{
+}
+
+void
+Section::clearLegacyMarkers()
+{
+  if (_hnv.child_count() > 3 && _hnv.child_at(2).type() == wasp::DECL && _hnv.child_at(1).is_leaf())
+    _hnv.child_at(1).set_data("");
+
+  auto term_node = _hnv.first_child_by_name("term");
+  if (!term_node.is_null() && term_node.is_leaf())
+    term_node.set_data("[]");
+}
 
 std::string
 Section::path()
 {
-  return _path;
+  return Node::path();
 }
 
 std::string
 Section::render(int indent, const std::string & indent_text, int maxlen)
 {
   std::string s;
-  if (path() != "" && tokens().size() > 4)
-    s = "\n" + strRepeat(indent_text, indent) + "[" + tokens()[1].val + "]";
-  else if (path() != "")
-    s = "\n" + strRepeat(indent_text, indent) + "[" + _path + "]";
+
+  if (!path().empty() && path() != "-")
+  {
+    std::string opening_marks;
+    if (_hnv.child_count() > 3 && _hnv.child_at(2).type() == wasp::DECL &&
+        _hnv.child_at(1).is_leaf())
+      opening_marks = _hnv.child_at(1).data();
+    std::string decl_data = "[" + opening_marks + path() + "]";
+    s = "\n" + strRepeat(indent_text, indent) + decl_data;
+  }
 
   for (auto child : children())
-    if (path() == "")
-      s += child->render(indent, indent_text, maxlen);
-    else
+  {
+    if (!path().empty() && path() != "-")
       s += child->render(indent + 1, indent_text, maxlen);
+    else
+      s += child->render(indent, indent_text, maxlen);
+  }
 
-  if (path() != "" && tokens().size() > 4)
-    s += "\n" + strRepeat(indent_text, indent) + "[" + tokens()[4].val + "]";
-  else if (path() != "")
-    s += "\n" + strRepeat(indent_text, indent) + "[]";
+  if (!path().empty() && path() != "-")
+  {
+    wasp::HITNodeView term_node = _hnv.first_child_by_name("term");
+    std::string term_data = !term_node.is_null() ? term_node.data() : "[]";
+    s += "\n" + strRepeat(indent_text, indent) + term_data;
+  }
 
   if (indent == 0 &&
       ((root() == this && s[0] == '\n') || (parent() && parent()->children()[0] == this)))
     s = s.substr(1);
+
   return s;
 }
 
 Node *
 Section::clone(bool absolute_path)
 {
-  auto n = new Section(absolute_path ? fullpath() : _path);
-  // Although we don't usually copy over tokens for cloned nodes, we make an exception here
-  // in order to "remember" whether or not the user used the legacy "../" section closing marker.
-  n->tokens() = tokens();
+  auto n = new Section(_dhi, _hnv);
+  if (absolute_path)
+    n->setOverridePath(fullpath());
+
   for (auto child : children())
     n->addChild(child->clone());
   return n;
 }
 
 Field::Field(const std::string & field, Kind k, const std::string & val)
-  : Node(NodeType::Field), _kind(k), _path(pathNorm(field)), _field(field), _val(val)
+  : Node(field, val), _kind(k)
+{
+}
+
+Field::Field(std::shared_ptr<wasp::DefaultHITInterpreter> dhi, wasp::HITNodeView hnv)
+  : Node(dhi, hnv), _kind(Kind::None)
 {
 }
 
 std::string
 Field::path()
 {
-  return _path;
+  return Node::path();
 }
 
 std::string
 Field::render(int indent, const std::string & indent_text, int maxlen)
 {
-  std::string s = "\n" + strRepeat(indent_text, indent) + _field + " = ";
+  auto render_field = path();
+  auto render_val = val();
+  auto render_kind = kind();
+
+  std::string s = "\n" + strRepeat(indent_text, indent) + render_field + " = ";
+
   size_t prefix_len = s.size() - 1;
-  auto quote = quoteChar(_val);
+  auto quote = quoteChar(render_val);
   int max = maxlen - prefix_len - 1;
 
   // special rendering logic for double quoted strings that go over maxlen:
-  if (_kind == Kind::String && quote == "\"" && max > 0)
+  if (render_kind == Kind::String && quote == "\"" && max > 0)
   {
-    if (_val.find('\n') == std::string::npos)
+    if (render_val.find('\n') == std::string::npos)
     {
       // strip outer quotes - will will add back our own for each line
-      std::string unquoted = _val.substr(1, _val.size() - 2);
+      std::string unquoted = render_val.substr(1, render_val.size() - 2);
 
       // iterate over the string in chunks of size "max"
       size_t pos = 0;
@@ -496,8 +577,9 @@ Field::render(int indent, const std::string & indent_text, int maxlen)
       {
         // to avoid splitting words, walk backwards from the "max" sized chunk boundary to find a
         // space character
+        const std::string space = " \t";
         size_t boundary = pos + max;
-        while (boundary > pos && !charIn(unquoted[boundary], " \t"))
+        while (boundary > pos && space.find(unquoted[boundary]) == std::string::npos)
           boundary--;
 
         // if we didn't find a space, just fall back to the original max sized chunk boundary and
@@ -505,8 +587,8 @@ Field::render(int indent, const std::string & indent_text, int maxlen)
         if (boundary == pos)
           boundary = pos + max;
 
-        // shift the boundary to after the space character (instead of before it) unless that would
-        // make the index beyond the string length.
+        // shift the boundary to after the space character (instead of before it) unless that
+        // would make the index beyond the string length.
         boundary = std::min(boundary + 1, unquoted.size());
 
         // add the leading indentation and newline - skip it for the first chunk of a string
@@ -530,24 +612,24 @@ Field::render(int indent, const std::string & indent_text, int maxlen)
     }
     else
     {
-      const int delta_indent = prefix_len - tokens()[2].column;
+      const int delta_indent = _hnv.child_count() > 2 ? prefix_len - _hnv.child_at(2).column() : 0;
 
       // first line is always added as is
       std::size_t start = 0;
-      std::size_t end = _val.find('\n', start);
-      s += _val.substr(start, end - start + 1);
+      std::size_t end = render_val.find('\n', start);
+      s += render_val.substr(start, end - start + 1);
 
       // remaining lines
       do
       {
         start = end + 1;
-        end = _val.find('\n', start);
+        end = render_val.find('\n', start);
         if (end == std::string::npos)
-          end = _val.length() - 1;
+          end = render_val.length() - 1;
 
         // remove leading whitespace
         const auto old_start = start;
-        while (_val[start] == ' ' || _val[start] == '\t')
+        while (render_val[start] == ' ' || render_val[start] == '\t')
           ++start;
 
         // correct indentation
@@ -562,65 +644,161 @@ Field::render(int indent, const std::string & indent_text, int maxlen)
           s += std::string(delta_indent + 1, ' ');
         }
 
-        s += _val.substr(start, end - start + 1);
-      } while (end < _val.length() - 1);
+        s += render_val.substr(start, end - start + 1);
+      } while (end < render_val.length() - 1);
     }
   }
-  else if (_val.size() == 0)
+  else if (render_val.size() == 0)
     s += "''";
-  else if (quote == "" && _val.find_first_of("\n\r \t") != std::string::npos)
-    s += "'" + _val + "'";
+  else if (quote == "" && render_val.find_first_of("\n\r \t") != std::string::npos)
+    s += "'" + render_val + "'";
   else
-    s += _val;
+    s += render_val;
 
   for (auto child : children())
     s += child->render(indent + 1, indent_text, maxlen);
+
   return s;
 }
 
 Node *
 Field::clone(bool absolute_path)
 {
-  auto n = new Field(absolute_path ? fullpath() : _field, _kind, _val);
-  n->tokens() = tokens();
+  auto n = new Field(_dhi, _hnv);
+  if (absolute_path)
+    n->setOverridePath(fullpath());
   return n;
 }
 
 Field::Kind
 Field::kind()
 {
-  return _kind;
+  if (_kind != Kind::None)
+    return _kind;
+
+  Kind value_kind = Kind::String;
+
+  try
+  {
+    boolVal();
+    value_kind = Kind::Bool;
+  }
+  catch (...)
+  {
+  }
+
+  try
+  {
+    floatVal();
+    value_kind = Kind::Float;
+  }
+  catch (...)
+  {
+  }
+
+  try
+  {
+    intVal();
+    value_kind = Kind::Int;
+  }
+  catch (...)
+  {
+  }
+
+  return value_kind;
 }
+
 void
-Field::setVal(const std::string & val, Kind kind)
+Field::setVal(const std::string & value, Kind kind)
 {
-  _val = val;
   if (kind != Kind::None)
     _kind = kind;
+
+  if (value == val())
+    return;
+
+  wasp::HITNodeView node = _hnv;
+
+  if (node.type() == wasp::KEYED_VALUE || node.type() == wasp::ARRAY)
+  {
+    wasp::HITNodeView data_node;
+
+    for (std::size_t i = 0, count = node.child_count(); i < count; i++)
+    {
+      auto ch = node.child_at(i);
+      if (i > 1 || (ch.type() != wasp::DECL && ch.type() != wasp::ASSIGN))
+        if (ch.is_leaf())
+        {
+          ch.set_data("");
+          if (data_node.is_null())
+            data_node = ch;
+        }
+    }
+
+    node = data_node;
+  }
+
+  if (node.is_leaf())
+    node.set_data(value.c_str());
 }
+
 std::string
 Field::val()
 {
-  return _val;
+  std::string value = _hnv.data();
+
+  size_t equal_index = value.find("=");
+  if (equal_index != std::string::npos)
+    value = value.substr(equal_index + 1);
+
+  value = hit::trim(value);
+  std::string quote = quoteChar(value);
+  if (quote.empty())
+    return value;
+
+  std::string chain;
+  size_t start_pos = 0;
+  size_t found_pos = value.find_first_of("\\" + quote, start_pos);
+  bool inside_quotes = false;
+
+  while (found_pos != std::string::npos)
+  {
+    if (inside_quotes)
+      chain += value.substr(start_pos, found_pos - start_pos);
+
+    start_pos = found_pos;
+
+    if (value[start_pos] == '\\')
+    {
+      chain += "\\";
+      start_pos++;
+      chain += value[start_pos];
+      start_pos++;
+    }
+    else // value[start_pos] == (non-escaped) 'quote'
+    {
+      start_pos++;
+      inside_quotes = !inside_quotes;
+      if (!inside_quotes)
+        start_pos = value.find_first_not_of(" \r\n\t", start_pos);
+    }
+
+    found_pos = value.find_first_of("\\" + quote, start_pos);
+  }
+
+  return quote + chain + quote;
 }
 
 std::vector<bool>
 Field::vecBoolVal()
 {
-  auto items = vecStrVal();
   std::vector<bool> vec;
-  for (auto & s : items)
+  for (const auto & s : vecStrVal())
   {
-    try
-    {
-      bool converted_val = false;
-      toBool(s, &converted_val);
-      vec.push_back(converted_val);
-    }
-    catch (...)
-    {
-      throw Error("cannot convert '" + s + "' to bool");
-    }
+    bool converted_val = false;
+    if (!toBool(s, &converted_val))
+      throw Error("cannot convert field '" + fullpath() + "' value '" + s + "' to bool");
+    vec.push_back(converted_val);
   }
   return vec;
 }
@@ -628,23 +806,14 @@ Field::vecBoolVal()
 std::vector<int>
 Field::vecIntVal()
 {
-  auto items = vecStrVal();
   std::vector<int> vec;
-  for (auto & s : items)
+  for (const auto & s : vecStrVal())
   {
-    try
-    {
-      size_t pos = 0;
-      auto converted_val = std::stoi(s, &pos);
-      if (pos != s.size())
-        throw std::invalid_argument("dummy");
-
-      vec.push_back(converted_val);
-    }
-    catch (...)
-    {
-      throw Error("cannot convert '" + s + "' to int");
-    }
+    std::istringstream iss(s);
+    int conversion;
+    if ((iss >> conversion).fail() || !iss.eof())
+      throw Error("cannot convert field '" + fullpath() + "' value '" + s + "' to integer");
+    vec.push_back(conversion);
   }
   return vec;
 }
@@ -652,99 +821,78 @@ Field::vecIntVal()
 std::vector<double>
 Field::vecFloatVal()
 {
-  auto items = vecStrVal();
   std::vector<double> vec;
-  for (auto & s : items)
+  for (const auto & s : vecStrVal())
   {
-    try
-    {
-      size_t pos = 0;
-      auto converted_val = std::stod(s, &pos);
-      if (pos != s.size())
-        throw std::invalid_argument("dummy");
-
-      vec.push_back(converted_val);
-    }
-    catch (...)
-    {
-      throw Error("cannot convert '" + s + "' to float");
-    }
+    std::istringstream iss(s);
+    double conversion;
+    if ((iss >> conversion).fail() || !iss.eof())
+      throw Error("cannot convert field '" + fullpath() + "' value '" + s + "' to float");
+    vec.push_back(conversion);
   }
   return vec;
 }
+
 std::vector<std::string>
 Field::vecStrVal()
 {
-  if (_kind != Kind::String && _kind != Kind::Int && _kind != Kind::Float)
-    throw Error("field node '" + fullpath() + "' does not hold a vec-typed value (val='" + _val +
-                "')");
-
-  std::string unquoted = _val;
-  if (unquoted[0] == '\'' || unquoted[0] == '"')
+  std::string unquoted = val();
+  if (!quoteChar(unquoted).empty())
     unquoted = unquoted.substr(1, unquoted.size() - 2);
   return split(unquoted);
 }
+
 bool
 Field::boolVal()
 {
-  if (_kind != Kind::Bool && _kind != Kind::Int)
-    throw Error("field node '" + fullpath() + "' does not hold a bool-typed value (val='" + _val +
-                "')");
-
-  if (_kind == Kind::Int)
-    return intVal();
-  bool v = false;
-  toBool(_val, &v);
-  return v;
+  bool bool_value = false;
+  try
+  {
+    int int_value = intVal();
+    return int_value;
+  }
+  catch (...)
+  {
+    std::string str_value = val();
+    if (!toBool(str_value, &bool_value))
+      throw Error("field node '" + fullpath() + "' does not hold a bool-typed value (val='" +
+                  str_value + "')");
+  }
+  return bool_value;
 }
+
 int64_t
 Field::intVal()
 {
-  if (_kind != Kind::Int)
-    throw Error("field node '" + fullpath() + "' does not hold an int-typed value (val='" + _val +
-                "')");
-  try
-  {
-    size_t pos = 0;
-    auto converted_val = std::stoll(_val, &pos);
-    if (pos != _val.size())
-      throw std::invalid_argument("dummy");
-    return converted_val;
-  }
-  catch (...)
-  {
-    throw Error("cannot convert '" + _val + "' to int");
-  }
+  std::string str_value = val();
+  std::istringstream iss(str_value);
+  int64_t converted_val;
+  if ((iss >> converted_val).fail() || !iss.eof())
+    throw Error("cannot convert field '" + fullpath() + "' value '" + str_value + "' to integer");
+  return converted_val;
 }
+
 double
 Field::floatVal()
 {
-  if (_kind != Kind::Float && _kind != Kind::Int)
-    throw Error("field node '" + fullpath() + "' does not hold a float-typed value (val='" + _val +
-                "')");
-  try
-  {
-    size_t pos = 0;
-    auto converted_val = std::stod(_val, &pos);
-    if (pos != _val.size())
-      throw std::invalid_argument("dummy");
-    return converted_val;
-  }
-  catch (...)
-  {
-    throw Error("cannot convert '" + _val + "' to float");
-  }
+  std::string str_value = val();
+  std::istringstream iss(str_value);
+  double converted_val;
+  if ((iss >> converted_val).fail() || !iss.eof())
+    throw Error("cannot convert field '" + fullpath() + "' value '" + str_value + "' to float");
+  return converted_val;
 }
 
 std::string
 Field::strVal()
 {
-  std::string s = _val;
+  const auto value = val();
+  std::string s = value;
 
-  auto quote = quoteChar(_val);
+  const auto quote = quoteChar(value);
   if (quote != "")
   {
-    s = _val.substr(1, _val.size() - 2);
+    s = value.substr(1, value.size() - 2);
 
     size_t pos = s.find("\\" + quote, 0);
     while (pos != std::string::npos)
@@ -758,256 +906,24 @@ Field::strVal()
   return s;
 }
 
-// Parser is a helper class to track progress consuming/traversing a tokenized/lexed input.
-class Parser
-{
-public:
-  Parser(const std::string & name, const std::string & input, std::vector<Token> tokens)
-    : _name(name), _input(input), _tokens(tokens)
-  {
-  }
-
-  size_t start() { return _start; }
-  size_t pos() { return _pos; }
-  std::vector<Token> & tokens() { return _tokens; }
-
-  const Token & next()
-  {
-    if (_pos >= _tokens.size())
-    {
-      _pos++;
-      return EOFToken;
-    }
-    const auto & tok = _tokens[_pos];
-    _pos++;
-    return tok;
-  }
-  void backup() { _pos--; }
-  const Token & peek()
-  {
-    const auto & tok = next();
-    backup();
-    return tok;
-  }
-  void error(const Token & loc, const std::string & msg)
-  {
-    throw ParseError(_name + ":" + std::to_string(loc.line) + ": " + msg);
-  }
-
-  const Token & require(TokType t, const std::string & err_msg)
-  {
-    const auto & tok = next();
-    if (tok.type == TokType::Error)
-      error(tok, tok.val);
-    else if (tok.type != t)
-      error(tok, err_msg + " (found " + tok.str() + " instead)");
-    return tok;
-  }
-  void ignore() { _start = _pos; }
-  Node * emit(Node * n)
-  {
-    if (n->type() == NodeType::Section)
-      _current_scope.push_back(n);
-    for (size_t i = _start; i < _pos; i++)
-      n->tokens().push_back(_tokens[i]);
-    _start = _pos;
-    return n;
-  }
-  Node * scope()
-  {
-    if (_current_scope.size() == 0)
-      return nullptr;
-    return _current_scope.back();
-  }
-  void scopeclose() { _current_scope.pop_back(); }
-
-private:
-  std::vector<Node *> _current_scope;
-  std::string _name;
-  std::string _input;
-  std::vector<Token> _tokens;
-  size_t _start = 0;
-  size_t _pos = 0;
-};
-
-void parseSectionBody(Parser * p, Node * n);
-void parseField(Parser * p, Node * n);
-void parseComment(Parser * p, Node * n);
-void parseEnterPath(Parser * p, Node * n);
-void parseExitPath(Parser * p, Node * n);
-
-void
-parseExitPath(Parser * p, Node * n)
-{
-  const auto & secOpenToks = p->scope()->tokens();
-
-  const auto & tok = p->next();
-  if (tok.type != TokType::LeftBracket)
-    p->error(secOpenToks[0], "missing closing '[]' for section");
-
-  const auto & path = p->require(TokType::Path, "malformed section close, expected PATH");
-  p->require(TokType::RightBracket, "expected ']'");
-
-  auto s = n->children().back();
-  for (size_t i = p->start(); i < p->pos(); i++)
-    s->tokens().push_back(p->tokens()[i]);
-
-  if (path.val != "../" && path.val != "")
-    p->error(path, "invalid closing path");
-  p->ignore();
-
-  p->scopeclose();
-}
-
-void
-parseEnterPath(Parser * p, Node * n)
-{
-  p->ignore();
-  p->require(TokType::LeftBracket, "");
-  const auto & tok = p->require(TokType::Path, "invalid path in section header");
-  p->require(TokType::RightBracket, "missing ']'");
-  if (tok.val == "./" || tok.val == "")
-    p->error(tok, "empty section name - did you mean '../'?");
-  auto section = p->emit(new Section(tok.val));
-  n->addChild(section);
-  parseSectionBody(p, section);
-  parseExitPath(p, n);
-}
-
-void
-parseSectionBody(Parser * p, Node * n)
-{
-  while (true)
-  {
-    const auto & tok = p->next();
-    const auto & next = p->peek();
-    p->backup();
-    if (tok.type == TokType::BlankLine)
-    {
-      p->require(TokType::BlankLine, "parser is horribly broken");
-      n->addChild(p->emit(new Blank()));
-    }
-    else if (tok.type == TokType::Ident)
-      parseField(p, n);
-    else if (tok.type == TokType::Comment || tok.type == TokType::InlineComment)
-      parseComment(p, n);
-    else if (tok.type == TokType::LeftBracket)
-    {
-      if (next.type == TokType::Path && (next.val != "../" && next.val != ""))
-        parseEnterPath(p, n);
-      else if (p->scope() == nullptr)
-        p->error(tok, "extra closing '[" + next.val + "]' found");
-      else // found section closing - we are done here
-        return;
-    }
-
-    else if (tok.type == TokType::Error)
-      p->error(tok, tok.val);
-    else if (tok.type == TokType::EOF)
-      return;
-    else
-      p->error(tok, "unexpected token " + tok.str());
-  }
-}
-
-void
-parseField(Parser * p, Node * n)
-{
-  p->ignore();
-  const auto & fieldtok = p->require(TokType::Ident, "unexpected token for field");
-  p->require(TokType::Equals, "missing '='");
-
-  Node * field = nullptr;
-  auto * valtok = &p->next();
-  if (valtok->type == TokType::Number)
-  {
-    std::string s = valtok->val;
-    Field::Kind kind = Field::Kind::Int;
-    try
-    {
-      if (charIn('e', s) || charIn('E', s) || charIn('.', s))
-        kind = Field::Kind::Float;
-      else if ((double)std::stoll(s) != std::stod(s))
-        kind = Field::Kind::Float;
-    }
-    catch (...) // integer might be too big to fit in int - use float
-    {
-      kind = Field::Kind::Float;
-    }
-
-    field = p->emit(new Field(fieldtok.val, kind, s));
-  }
-  else if (valtok->type == TokType::String)
-  {
-    bool v = false;
-    bool isbool = toBool(valtok->val, &v);
-    if (isbool)
-      field = p->emit(new Field(fieldtok.val, Field::Kind::Bool, valtok->val));
-    else
-    {
-      std::string strval;
-      std::string quote = quoteChar(valtok->val);
-      while (true)
-      {
-        if (valtok->type == TokType::String)
-        {
-          auto s = valtok->val;
-          if (quote != "")
-            s = s.substr(1, s.size() - 2);
-          strval += s;
-        }
-
-        if (p->peek().type != TokType::BlankLine && p->peek().type != TokType::String)
-        {
-          if (valtok->type == TokType::BlankLine)
-            p->backup();
-          break;
-        }
-        valtok = &p->next();
-      }
-      strval = quote + strval + quote;
-      field = p->emit(new Field(fieldtok.val, Field::Kind::String, strval));
-    }
-  }
-  else if (valtok->type == TokType::Error)
-    p->error(*valtok, valtok->val);
-  else
-    p->error(*valtok,
-             "missing value for field '" + fieldtok.val + "' - found '" + valtok->val + "'");
-  n->addChild(field);
-}
-
-void
-parseComment(Parser * p, Node * n)
-{
-  p->ignore();
-  const auto & tok = p->next();
-  bool isinline = false;
-  if (tok.type == TokType::Comment)
-    isinline = false;
-  else if (tok.type == TokType::InlineComment)
-    isinline = true;
-  else
-    p->error(tok, "the parser is broken");
-
-  auto comment = p->emit(new Comment(tok.val, isinline));
-  if (tok.type == TokType::InlineComment && n->children().size() > 0)
-    n->children()[n->children().size() - 1]->addChild(comment);
-  else
-    n->addChild(comment);
-}
-
 // parse tokenizes the given hit input from fname using a Lexer with the lexHit as the
 // starting LexFunc.  Parsing is implemented as recursive-descent with the functions in this file
 // named "parse[Bla]".
 Node *
 parse(const std::string & fname, const std::string & input)
 {
-  Lexer lex(fname, input);
-  auto tokens = lex.run(lexHit);
-  Parser parser(fname, input, tokens);
-  std::unique_ptr<Node> root(new Section(""));
-  parseSectionBody(&parser, root.get());
+  std::stringstream input_errors;
+  std::shared_ptr<wasp::DefaultHITInterpreter> interpreter =
+      std::make_shared<wasp::DefaultHITInterpreter>(input_errors);
+
+  std::stringstream input_stream(input);
+  if (!interpreter->parseStream(input_stream, fname))
+    throw ParseError(input_errors.str());
+
+  std::unique_ptr<Node> root(new Section(interpreter, interpreter->root()));
+  std::size_t starting_line = 0;
+  buildHITTree(interpreter, interpreter->root(), root.get(), starting_line);
+
   return root.release();
 }
 
@@ -1073,61 +989,21 @@ merge(Node * from, Node * into)
 Node *
 explode(Node * n)
 {
-  if (n->type() == NodeType::Field || n->type() == NodeType::Section)
-  {
-    size_t pos = n->path().find("/", 0);
-    if (pos != std::string::npos)
-    {
-      auto prefix = n->path().substr(0, pos);
-      auto postfix = n->path().substr(pos + 1, n->path().size() - pos - 1);
-      hit::Node * existing = nullptr;
-      if (n->parent())
-        existing = n->parent()->find(prefix);
-
-      Node * newnode = nullptr;
-      if (n->type() == NodeType::Field)
-      {
-        auto f = static_cast<Field *>(n);
-        newnode = new Field(postfix, f->kind(), f->val());
-      }
-      else
-        newnode = new Section(postfix);
-
-      for (auto child : n->children())
-        newnode->addChild(child->clone());
-      newnode->tokens() = n->tokens();
-
-      if (existing && existing->type() == NodeType::Section)
-        existing->addChild(newnode);
-      else
-      {
-        auto newsec = new Section(prefix);
-        if (n->parent())
-          n->parent()->addChild(newsec);
-        newsec->addChild(newnode);
-        newsec->tokens() = n->tokens();
-      }
-      auto newroot = explode(newnode);
-      delete n;
-      return newroot->root();
-    }
-  }
-
-  for (auto child : n->children())
-    explode(child);
+  /// all of the explode logic that expands shorthand path notation
+  /// into sections is handled by a combination of the wasp interpreter and
+  /// the buildHITTree so this method is a no-op and is temporarily here
+  /// for interface purposes
   return n->root();
 }
 
-// When a node tree is walked with this, it removes/clears all tokens from all nodes in the tree.
-// This can be useful to clear tokens that might otherwise cause the tree to be rendered with
-// legacy "../" section closing paths or leading "./" in section headers.
-class TokenClearer : public hit::Walker
+/// when a node tree is walked with this, all legacy markers in section
+/// headers './' and legacy markers in section closers '../'are removed
+class LegacyMarkerRemover : public Walker
 {
 public:
-  void
-  walk(const std::string & /*fullpath*/, const std::string & /*nodepath*/, hit::Node * n) override
+  void walk(const std::string & /*fullpath*/, const std::string & /*nodepath*/, Node * n) override
   {
-    n->tokens().clear();
+    static_cast<Section *>(n)->clearLegacyMarkers();
   }
 };
 
@@ -1193,9 +1069,9 @@ Formatter::format(const std::string & fname, const std::string & input)
 void
 Formatter::format(hit::Node * root)
 {
-  TokenClearer tc;
+  LegacyMarkerRemover walker;
   if (canonical_section_markers)
-    root->walk(&tc, hit::NodeType::Section);
+    root->walk(&walker, hit::NodeType::Section);
 
   root->walk(this, hit::NodeType::All);
 }
@@ -1305,6 +1181,83 @@ Formatter::sortGroup(const std::vector<Node *> & nodes,
       unused.push_back(nodes[i]);
 }
 
-#define EOF TMPEOF
+void
+buildHITTree(std::shared_ptr<wasp::DefaultHITInterpreter> interpreter,
+             wasp::HITNodeView hnv_parent,
+             Node * hit_parent,
+             std::size_t & previous_line)
+{
+  if (hnv_parent.is_null())
+    return;
+
+  for (std::size_t i = 0, count = hnv_parent.child_count(); i < count; i++)
+  {
+    // wasp nodeview child will be stored in node if one is created and added
+    auto hnv_child = hnv_parent.child_at(i);
+
+    // create and add comment node as terminal leaf but do not recurse deeper
+    if (hnv_child.type() == wasp::COMMENT)
+    {
+      // add blank line if needed between previous node line and this node line
+      if (previous_line != 0 && hnv_child.line() > previous_line + 1)
+        hit_parent->addChild(new Blank());
+
+      auto hit_child = new Comment(interpreter, hnv_child);
+      if (hnv_child.line() == previous_line && hit_parent->children().size() > 0)
+      {
+        hit_child->setInline(true);
+        hit_parent->children().back()->addChild(hit_child);
+      }
+      else
+      {
+        hit_child->setInline(false);
+        hit_parent->addChild(hit_child);
+      }
+      previous_line = hnv_child.last_line();
+    }
+    // create and add field node as a combined leaf but do not recurse deeper
+    else if (hnv_child.type() == wasp::KEYED_VALUE || hnv_child.type() == wasp::ARRAY)
+    {
+      // add blank line if needed between previous node line and this node line
+      if (previous_line != 0 && hnv_child.line() > previous_line + 1)
+        hit_parent->addChild(new Blank());
+
+      auto hit_child = new Field(interpreter, hnv_child);
+      hit_parent->addChild(hit_child);
+      previous_line = hnv_child.last_line();
+    }
+    // section handling is dependant on if specification is explode or normal
+    else if (hnv_child.type() == wasp::OBJECT || hnv_child.type() == wasp::DOCUMENT_ROOT)
+    {
+      bool explode_section_found = false;
+
+      // explode section found so create and add nothing just recurse with it
+      wasp::HITNodeView decl_node = hnv_child.first_child_by_name("decl");
+
+      if (decl_node.is_null() || decl_node.data().find("/") != std::string::npos)
+      {
+        if (Node * hit_child = hit_parent->find(hnv_child.name()))
+        {
+          buildHITTree(interpreter, hnv_child, hit_child, previous_line);
+          explode_section_found = true;
+        }
+      }
+
+      // normal or absent section so create and add node then recurse with it
+      if (!explode_section_found)
+      {
+        // add blank line if needed between previous node line and this node line
+        if (previous_line != 0 && hnv_child.line() > previous_line + 1)
+          hit_parent->addChild(new Blank());
+
+        auto hit_child = new Section(interpreter, hnv_child);
+        hit_parent->addChild(hit_child);
+        previous_line = hnv_child.line();
+        buildHITTree(interpreter, hnv_child, hit_child, previous_line);
+        previous_line = hnv_child.last_line();
+      }
+    }
+  }
+}
 
 } // namespace hit

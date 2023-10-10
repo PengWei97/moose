@@ -1,18 +1,16 @@
-<!-- MOOSE Documentation Stub: Remove this when content is added. -->
-
 # ConvectiveHeatTransferCoefficientMaterial
 
-!alert construction title=Undocumented Class
-The ConvectiveHeatTransferCoefficientMaterial has not been documented. The content contained on this page includes the
-typical automatic documentation associated with a MooseObject; however, what is contained is
-ultimately determined by what is necessary to make the documentation clear for users.
-
 !syntax description /Materials/ConvectiveHeatTransferCoefficientMaterial
+
+The heat transfer coefficient $h$ is simply derived from the definition of the Nusselt number $Nu$:
+
+!equation
+Nu = \dfrac{Nu k}{D_h}
+
+with $k$ the thermal conductivity and $D_h$ the hydraulic diameter.
 
 !syntax parameters /Materials/ConvectiveHeatTransferCoefficientMaterial
 
 !syntax inputs /Materials/ConvectiveHeatTransferCoefficientMaterial
 
 !syntax children /Materials/ConvectiveHeatTransferCoefficientMaterial
-
-!bibtex bibliography

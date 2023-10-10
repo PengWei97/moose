@@ -1,14 +1,13 @@
-<!-- MOOSE Documentation Stub: Remove this when content is added. -->
-
 # THMDebugAction
-
-!alert construction title=Undocumented Class
-The THMDebugAction has not been documented. The content contained on this page includes the
-typical automatic documentation associated with an Action; however, what is contained is ultimately
-determined by what is necessary to make the documentation clear for users.
 
 !syntax description /Debug/THMDebugAction
 
+Currently, the only specific [Debug](syntax/Debug/index.md) option added is
+to request the [THMProblem.md] to check the Jacobian, using the [!param](/Debug/THMDebugAction/check_jacobian)
+parameter.
+
 !syntax parameters /Debug/THMDebugAction
 
-!bibtex bibliography
+!syntax inputs /Debug/THMDebugAction
+
+!syntax children /Debug/THMDebugAction

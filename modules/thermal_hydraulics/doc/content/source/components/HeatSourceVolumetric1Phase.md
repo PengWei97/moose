@@ -1,18 +1,13 @@
-<!-- MOOSE Documentation Stub: Remove this when content is added. -->
+# HeatSourceVolumetric1Phase
 
-# HeatSourceVolumetric
+!syntax description /Components/HeatSourceVolumetric1Phase
 
-!alert construction title=Undocumented Class
-The HeatSourceVolumetric has not been documented. The content contained on this page includes the
-typical automatic documentation associated with a MooseObject; however, what is contained is
-ultimately determined by what is necessary to make the documentation clear for users.
+The volumetric heat source is applied to the [1-phase flow channel](FlowChannel1Phase.md)
+volume using a [OneD3EqnEnergyHeatSource.md] kernel, added to the energy equation (with the
+$\rho E A$ variable).
 
-!syntax description /Components/HeatSourceVolumetric
+!syntax parameters /Components/HeatSourceVolumetric1Phase
 
-!syntax parameters /Components/HeatSourceVolumetric
+!syntax inputs /Components/HeatSourceVolumetric1Phase
 
-!syntax inputs /Components/HeatSourceVolumetric
-
-!syntax children /Components/HeatSourceVolumetric
-
-!bibtex bibliography
+!syntax children /Components/HeatSourceVolumetric1Phase

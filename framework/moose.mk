@@ -9,7 +9,7 @@ ENABLE_LIBTORCH ?= false
 
 # this allows us to modify the linked names/rpaths safely later for install targets
 ifneq (,$(findstring darwin,$(libmesh_HOST)))
-	libmesh_LDFLAGS += -headerpad_max_install_names
+	libmesh_LDFLAGS += -Wl,-headerpad_max_install_names
 endif
 
 #
@@ -33,7 +33,7 @@ pcre_LIB       :=  $(pcre_DIR)/libpcre-$(METHOD).la
 pcre_deps      := $(patsubst %.cc, %.$(obj-suffix).d, $(pcre_srcfiles)) \
 
 #
-# hit (new getpot parser)
+# hit
 #
 HIT_DIR ?= $(MOOSE_DIR)/framework/contrib/hit
 hit_CONTENT   := $(shell ls $(HIT_DIR) 2> /dev/null)
@@ -55,14 +55,38 @@ hit_CLI          := $(HIT_DIR)/hit
 pyhit_srcfiles  := $(HIT_DIR)/hit.cpp $(HIT_DIR)/lex.cc $(HIT_DIR)/parse.cc $(HIT_DIR)/braceexpr.cc
 
 #
+# Dynamic library suffix
+#
+lib_suffix := so
+ifeq ($(shell uname -s),Darwin)
+	lib_suffix := dylib
+endif
+
+#
+# wasp
+#
+WASP_DIR            ?= $(MOOSE_DIR)/framework/contrib/wasp/install
+ifeq ($(shell uname -s),Darwin)
+	wasp_LIBS         := $(shell find -E $(WASP_DIR)/lib -regex ".*/lib[a-z]+.$(lib_suffix)")
+else
+	wasp_LIBS         := $(wildcard $(WASP_DIR)/lib/libwasp*$(lib_suffix))
+endif
+wasp_LIBS           := $(notdir $(wasp_LIBS))
+wasp_LIBS           := $(patsubst %.$(lib_suffix),%,$(wasp_LIBS))
+wasp_LIBS           := $(patsubst lib%,-l%,$(wasp_LIBS))
+ifeq ($(wasp_LIBS),)
+  $(error WASP does not seem to be available. Make sure to either run scripts/update_and_rebuild_wasp.sh in your MOOSE directory, or set WASP_DIR to a valid WASP install)
+endif
+wasp_CXXFLAGS     := -DWASP_ENABLED -I$(WASP_DIR)/include
+wasp_LDFLAGS      := -Wl,-rpath,$(WASP_DIR)/lib -L$(WASP_DIR)/lib $(wasp_LIBS)
+libmesh_CXXFLAGS  += $(wasp_CXXFLAGS)
+libmesh_LDFLAGS   += $(wasp_LDFLAGS)
+
+#
 # Conditional parts if the user wants to compile MOOSE with torchlib
 #
 ifeq ($(ENABLE_LIBTORCH),true)
-  UNAME_S := $(shell uname -s)
-	LIBTORCH_LIB := libtorch.so
-  ifeq ($(UNAME_S),Darwin)
-    LIBTORCH_LIB := libtorch.dylib
-  endif
+	LIBTORCH_LIB := libtorch.$(lib_suffix)
 
   ifneq ($(wildcard $(LIBTORCH_DIR)/lib/$(LIBTORCH_LIB)),)
     # Enabling parts that have pytorch dependencies
@@ -109,6 +133,7 @@ else
 	pyhit_LIB          := $(HIT_DIR)/hit.so
 	pyhit_COMPILEFLAGS := -L$(shell $(pyconfig) --prefix)/lib $(shell $(pyconfig) --includes)
 endif
+pyhit_COMPILEFLAGS += $(wasp_CXXFLAGS) $(wasp_LDFLAGS)
 
 
 hit $(pyhit_LIB) $(hit_CLI): $(pyhit_srcfiles) $(hit_CLI_srcfiles)
@@ -178,7 +203,7 @@ $(moose_config_symlink): $(moose_config) | $(moose_all_header_dir)
 	@echo "Symlinking MOOSE configure "$(moose_config_symlink)
 	@ln -sf $(moose_config) $(moose_config_symlink)
 
-header_symlinks: $(all_header_dir) $(link_names)
+moose_header_symlinks: $(all_header_dir) $(link_names)
 moose_INC_DIRS := $(all_header_dir)
 
 else # No Header Symlinks
@@ -209,7 +234,8 @@ ifeq ($(MOOSE_UNITY),true)
 
 srcsubdirs := $(shell find $(FRAMEWORK_DIR)/src -type d -not -path '*/.libs*')
 
-moose_non_unity := %/base %/utils
+# This folder does not build with unity
+moose_non_unity := %/utils_nonunity
 
 # Add additional non-unity directories if libtorch is enabled
 ifeq ($(ENABLE_LIBTORCH),true)
@@ -307,7 +333,7 @@ app_DIRS     := $(FRAMEWORK_DIR)
 
 moose_revision_header := $(FRAMEWORK_DIR)/include/base/MooseRevision.h
 
-all: libmesh_submodule_status header_symlinks $(moose_revision_header) moose
+all: libmesh_submodule_status moose
 
 # revision header
 moose_GIT_DIR := $(shell cd "$(FRAMEWORK_DIR)" && which git &> /dev/null && git rev-parse --show-toplevel)
@@ -319,7 +345,7 @@ ifeq (x$(moose_HEADER_deps),x)
   moose_HEADER_deps := $(realpath $(moose_GIT_DIR)/HEAD $(moose_GIT_DIR)/index)
 endif
 
-$(moose_revision_header): $(moose_HEADER_deps)
+$(moose_revision_header): $(moose_HEADER_deps) | $(moose_all_header_dir)
 	@echo "Checking if header needs updating: "$@"..."
 	$(shell $(FRAMEWORK_DIR)/scripts/get_repo_revision.py $(FRAMEWORK_DIR) \
 	  $(moose_revision_header) MOOSE)
@@ -341,7 +367,7 @@ endif
 libmesh_submodule_status:
 	@if [ x$(libmesh_message) != "x" ]; then printf $(libmesh_message); fi
 
-moose: $(moose_LIB)
+moose: $(moose_revision_header) $(moose_LIB)
 
 # [JWP] With libtool, there is only one link command, it should work whether you are creating
 # shared or static libraries, and it should be portable across Linux and Mac...
@@ -371,7 +397,8 @@ $(moose_LIB): $(moose_objects) $(pcre_LIB) $(gtest_LIB) $(hit_LIB) $(pyhit_LIB)
 
 ifeq ($(MOOSE_HEADER_SYMLINKS),true)
 
-$(moose_objects): $(moose_config_symlink)
+
+$(moose_objects): $(moose_config_symlink) | moose_header_symlinks
 
 else
 
@@ -422,7 +449,7 @@ moose_share_dir = $(share_dir)/moose
 python_install_dir = $(moose_share_dir)/python
 bin_install_dir = $(PREFIX)/bin
 
-install: install_libs install_bin install_harness install_exodiff install_adreal_monolith install_hit install_data
+install: all install_libs install_bin install_harness install_exodiff install_adreal_monolith install_hit install_data
 
 install_data::
 	@mkdir -p $(moose_share_dir)
@@ -469,6 +496,7 @@ else
   patch_relink = :
   patch_rpath = patchelf --set-rpath '$$ORIGIN'/$(2):$$(patchelf --print-rpath $(1)) $(1)
 endif
+patch_la = $(FRAMEWORK_DIR)/scripts/patch_la.py $(1) $(2)
 
 libname_framework = $(shell grep "dlname='.*'" $(MOOSE_DIR)/framework/libmoose-$(METHOD).la 2>/dev/null | sed -E "s/dlname='(.*)'/\1/g")
 libpath_framework = $(MOOSE_DIR)/framework/$(libname_framework)

@@ -52,7 +52,7 @@ PolynomialRegressionTrainer::PolynomialRegressionTrainer(const InputParameters &
     mooseWarning("Penalty parameter is not used for OLS regression, found penalty=", _penalty);
 
   // Check if we have enough data points to solve the problem
-  if (_sampler.getNumberOfRows() <= _n_poly_terms)
+  if (_sampler.getNumberOfRows() < _n_poly_terms)
     mooseError("Number of data points must be greater than the number of terms in the polynomial.");
 
   // Creating calculators needed for feature standardization.
@@ -142,7 +142,10 @@ PolynomialRegressionTrainer::postTrain()
   unsigned int nrval = _rhs.size();
   gatherMax(nrval);
   for (unsigned int r = _rhs.size(); r < nrval; ++r)
+  {
     _rhs.emplace_back(_n_poly_terms, 0.0);
+    _r_sum.emplace_back(0.0);
+  }
 
   // Gather regression data
   gatherSum(_matrix.get_values());

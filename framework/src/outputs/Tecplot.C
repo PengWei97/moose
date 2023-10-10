@@ -34,7 +34,7 @@ Tecplot::validParams()
       "If true, append to an existing ASCII file rather than creating a new file each time");
 
   // Need a layer of geometric ghosting for mesh serialization
-  params.addRelationshipManager("MooseGhostPointNeighbors",
+  params.addRelationshipManager("ElementPointNeighborLayers",
                                 Moose::RelationshipManagerType::GEOMETRIC);
 
   // Add description for the Tecplot class
@@ -61,9 +61,9 @@ Tecplot::Tecplot(const InputParameters & parameters)
 }
 
 void
-Tecplot::output(const ExecFlagType & /*type*/)
+Tecplot::output()
 {
-  TecplotIO out(*_mesh_ptr, _binary, time() + _app.getGlobalTimeOffset());
+  TecplotIO out(*_mesh_ptr, _binary, getOutputTime() + _app.getGlobalTimeOffset());
 
   // Only set the append flag on the TecplotIO object if the user has
   // asked for it, and this is not the first time we called output().

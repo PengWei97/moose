@@ -36,10 +36,10 @@ NearestNodeLocator::NearestNodeLocator(SubProblem & subproblem,
                            Moose::stringify(boundary2)),
     _subproblem(subproblem),
     _mesh(mesh),
-    _secondary_node_range(nullptr),
     _boundary1(boundary1),
     _boundary2(boundary2),
     _first(true),
+    _reinit_iteration(true),
     _patch_update_strategy(_mesh.getPatchUpdateStrategy())
 {
   /*
@@ -57,7 +57,7 @@ NearestNodeLocator::NearestNodeLocator(SubProblem & subproblem,
   */
 }
 
-NearestNodeLocator::~NearestNodeLocator() { delete _secondary_node_range; }
+NearestNodeLocator::~NearestNodeLocator() = default;
 
 void
 NearestNodeLocator::findNodes()
@@ -70,7 +70,7 @@ NearestNodeLocator::findNodes()
    */
   const std::map<dof_id_type, std::vector<dof_id_type>> & node_to_elem_map = _mesh.nodeToElemMap();
 
-  if (_first)
+  if (_first || (_reinit_iteration && _patch_update_strategy == Moose::Iteration))
   {
     _first = false;
 
@@ -162,7 +162,8 @@ NearestNodeLocator::findNodes()
     }
 
     // Cache the secondary_node_range so we don't have to build it each time
-    _secondary_node_range = new NodeIdRange(_secondary_nodes.begin(), _secondary_nodes.end(), 1);
+    _secondary_node_range =
+        std::make_unique<NodeIdRange>(_secondary_nodes.begin(), _secondary_nodes.end(), 1);
   }
 
   _nearest_node_info.clear();
@@ -194,7 +195,7 @@ NearestNodeLocator::findNodes()
         for (const auto & dof : elems_connected_to_node)
           if (std::find(ghost.begin(), ghost.end(), dof) == ghost.end() &&
               _mesh.elemPtr(dof)->processor_id() != _mesh.processor_id())
-            mooseError("Error in NearestNodeLocator : The nearest neighbor lies outside the "
+            mooseError("Error in NearestNodeLocator: The nearest neighbor lies outside the "
                        "ghosted set of elements. Increase the ghosting_patch_size parameter in the "
                        "mesh block and try again.");
       }
@@ -208,8 +209,7 @@ NearestNodeLocator::reinit()
   TIME_SECTION("reinit", 3, "Reinitializing Nearest Node Search");
 
   // Reset all data
-  delete _secondary_node_range;
-  _secondary_node_range = nullptr;
+  _secondary_node_range.reset();
   _nearest_node_info.clear();
 
   _first = true;
@@ -219,8 +219,14 @@ NearestNodeLocator::reinit()
 
   _new_ghosted_elems.clear();
 
+  // After a call from system reinit, mesh has been updated with initial adaptivity.
+  // Moose::Iteration relies on data generated for ghosting (i.e. trial_primary_nodes)
+  _reinit_iteration = true;
+
   // Redo the search
   findNodes();
+
+  _reinit_iteration = false;
 }
 
 Real
@@ -341,7 +347,7 @@ NearestNodeLocator::updatePatch(std::vector<dof_id_type> & secondary_nodes)
       for (const auto & dof : elems_connected_to_node)
         if (std::find(ghost.begin(), ghost.end(), dof) == ghost.end() &&
             _mesh.elemPtr(dof)->processor_id() != _mesh.processor_id())
-          mooseError("Error in NearestNodeLocator : The nearest neighbor lies outside the ghosted "
+          mooseError("Error in NearestNodeLocator: The nearest neighbor lies outside the ghosted "
                      "set of elements. Increase the ghosting_patch_size parameter in the mesh "
                      "block and try again.");
     }

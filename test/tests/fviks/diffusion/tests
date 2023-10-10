@@ -6,7 +6,6 @@
     type = Exodiff
     input = test.i
     exodiff = 'test_out.e'
-    ad_indexing_type = 'global'
   []
   [diffusion-harmonic]
     issues = '#21923'
@@ -15,10 +14,17 @@
     type = Exodiff
     input = test.i
     exodiff = 'harmonic.e'
-    ad_indexing_type = 'global'
     cli_args = "FVKernels/diff_left/coeff_interp_method=harmonic "
                "FVKernels/diff_right/coeff_interp_method=harmonic "
                "FVInterfaceKernels/interface/coeff_interp_method=harmonic "
                "Outputs/file_base='harmonic'"
+  []
+  [diffusion-multisystem]
+    issues = '#25599'
+    design = 'FVDiffusionInterface.md Problem/index.md'
+    requirement = 'The system shall be able to solve a block-restricted diffusion problem where the variables live on different nonlinear systems.'
+    type = Exodiff
+    input = multisystem.i
+    exodiff = 'multisystem_out.e'
   []
 []

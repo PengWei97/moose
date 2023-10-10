@@ -12,12 +12,15 @@
 #include "InputParameters.h"
 #include "MooseApp.h"
 
-AppFactory AppFactory::_instance = AppFactory();
-
 AppFactory &
 AppFactory::instance()
 {
-  return _instance;
+  // We need a naked new here (_not_ a smart pointer or object instance) due to what seems like a
+  // bug in clang's static object destruction when using dynamic library loading.
+  static AppFactory * instance = nullptr;
+  if (!instance)
+    instance = new AppFactory;
+  return *instance;
 }
 
 AppFactory::~AppFactory() {}
@@ -25,11 +28,10 @@ AppFactory::~AppFactory() {}
 InputParameters
 AppFactory::getValidParams(const std::string & name)
 {
-  if (_name_to_params_pointer.find(name) == _name_to_params_pointer.end())
-    mooseError(std::string("A '") + name + "' is not a registered object\n\n");
+  if (const auto it = _name_to_build_info.find(name); it != _name_to_build_info.end())
+    return it->second->buildParameters();
 
-  InputParameters params = _name_to_params_pointer[name]();
-  return params;
+  mooseError(std::string("A '") + name + "' is not a registered object\n\n");
 }
 
 MooseAppPtr
@@ -62,8 +64,10 @@ AppFactory::createShared(const std::string & app_type,
                          MPI_Comm comm_world_in)
 {
   // Error if the application type is not located
-  if (_name_to_build_pointer.find(app_type) == _name_to_build_pointer.end())
+  const auto it = _name_to_build_info.find(app_type);
+  if (it == _name_to_build_info.end())
     mooseError("Object '" + app_type + "' was not registered.");
+  auto & build_info = it->second;
 
   // Take the app_type and add it to the parameters so that it can be retrieved in the Application
   parameters.set<std::string>("_type") = app_type;
@@ -84,5 +88,18 @@ AppFactory::createShared(const std::string & app_type,
   command_line->addCommandLineOptionsFromParams(parameters);
   command_line->populateInputParams(parameters);
 
-  return (*_name_to_build_pointer[app_type])(parameters);
+  build_info->_app_creation_count++;
+
+  return build_info->build(parameters);
+}
+
+std::size_t
+AppFactory::createdAppCount(const std::string & app_type) const
+{
+  // Error if the application type is not located
+  const auto it = _name_to_build_info.find(app_type);
+  if (it == _name_to_build_info.end())
+    mooseError("AppFactory::createdAppCount(): '", app_type, "' is not a registered app");
+
+  return it->second->_app_creation_count;
 }

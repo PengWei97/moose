@@ -16,7 +16,7 @@ registerMooseObject("NavierStokesApp", WCNSFVMassTimeDerivative);
 InputParameters
 WCNSFVMassTimeDerivative::validParams()
 {
-  InputParameters params = FVTimeKernel::validParams();
+  InputParameters params = FVFunctorTimeKernel::validParams();
   params.addClassDescription("Adds the time derivative term to the weakly-compressible "
                              "Navier-Stokes continuity equation.");
   params.addRequiredParam<MooseFunctorName>(NS::time_deriv(NS::density),
@@ -25,12 +25,12 @@ WCNSFVMassTimeDerivative::validParams()
 }
 
 WCNSFVMassTimeDerivative::WCNSFVMassTimeDerivative(const InputParameters & params)
-  : FVTimeKernel(params), _rho_dot(getFunctor<ADReal>(NS::time_deriv(NS::density)))
+  : FVFunctorTimeKernel(params), _rho_dot(getFunctor<ADReal>(NS::time_deriv(NS::density)))
 {
 }
 
 ADReal
 WCNSFVMassTimeDerivative::computeQpResidual()
 {
-  return _rho_dot(makeElemArg(_current_elem));
+  return _rho_dot(makeElemArg(_current_elem), determineState());
 }

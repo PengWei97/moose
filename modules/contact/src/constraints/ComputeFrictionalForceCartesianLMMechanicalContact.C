@@ -65,16 +65,11 @@ ComputeFrictionalForceCartesianLMMechanicalContact::
     _mu(getParam<Real>("mu")),
     _epsilon(getParam<Real>("epsilon"))
 {
-  if (_interpolate_normals)
-    mooseError("Frictional forces based on Cartesian Lagrange multipliers require using "
-               "nodal-based geometry");
 }
 
 void
 ComputeFrictionalForceCartesianLMMechanicalContact::computeQpProperties()
 {
-#ifdef MOOSE_GLOBAL_AD_INDEXING
-
   ComputeWeightedGapCartesianLMMechanicalContact::computeQpProperties();
 
   // Trim derivatives
@@ -113,8 +108,6 @@ ComputeFrictionalForceCartesianLMMechanicalContact::computeQpProperties()
     relative_velocity = {sec_x_dot - prim_x_dot, sec_y_dot - prim_y_dot, 0.0};
 
   _qp_tangential_velocity_nodal = relative_velocity * (_JxW_msm[_qp] * _coord[_qp]);
-
-#endif
 }
 
 void
@@ -147,12 +140,10 @@ ComputeFrictionalForceCartesianLMMechanicalContact::residualSetup()
 void
 ComputeFrictionalForceCartesianLMMechanicalContact::post()
 {
-#ifdef MOOSE_SPARSE_AD
   Moose::Mortar::Contact::communicateGaps(
-      _dof_to_weighted_gap, this->processor_id(), _mesh, _nodal, _normalize_c, _communicator);
+      _dof_to_weighted_gap, _mesh, _nodal, _normalize_c, _communicator, false);
   Moose::Mortar::Contact::communicateVelocities(
-      _dof_to_weighted_tangential_velocity, this->processor_id(), _mesh, _nodal, _communicator);
-#endif
+      _dof_to_weighted_tangential_velocity, _mesh, _nodal, _communicator, false);
 
   // Enforce frictional complementarity constraints
   for (const auto & pr : _dof_to_weighted_tangential_velocity)
@@ -178,12 +169,10 @@ void
 ComputeFrictionalForceCartesianLMMechanicalContact::incorrectEdgeDroppingPost(
     const std::unordered_set<const Node *> & inactive_lm_nodes)
 {
-#ifdef MOOSE_SPARSE_AD
   Moose::Mortar::Contact::communicateGaps(
-      _dof_to_weighted_gap, this->processor_id(), _mesh, _nodal, _normalize_c, _communicator);
+      _dof_to_weighted_gap, _mesh, _nodal, _normalize_c, _communicator, false);
   Moose::Mortar::Contact::communicateVelocities(
-      _dof_to_weighted_tangential_velocity, this->processor_id(), _mesh, _nodal, _communicator);
-#endif
+      _dof_to_weighted_tangential_velocity, _mesh, _nodal, _communicator, false);
 
   // Enforce frictional complementarity constraints
   for (const auto & pr : _dof_to_weighted_tangential_velocity)
@@ -216,6 +205,9 @@ ComputeFrictionalForceCartesianLMMechanicalContact::enforceConstraintOnDof(
 
   const auto dof_index_x = dof->dof_number(_sys.number(), _lm_vars[0]->number(), 0);
   const auto dof_index_y = dof->dof_number(_sys.number(), _lm_vars[1]->number(), 0);
+  const Real scaling_factor_x = _lm_vars[0]->scalingFactor();
+  const Real scaling_factor_y = _lm_vars[1]->scalingFactor();
+  Real scaling_factor_z = 1;
 
   ADReal lm_x = (*_sys.currentSolution())(dof_index_x);
   ADReal lm_y = (*_sys.currentSolution())(dof_index_y);
@@ -230,6 +222,7 @@ ComputeFrictionalForceCartesianLMMechanicalContact::enforceConstraintOnDof(
     dof_index_z = dof->dof_number(_sys.number(), _lm_vars[2]->number(), 0);
     lm_z = (*_sys.currentSolution())(dof_index_z);
     Moose::derivInsert(lm_z.derivatives(), dof_index_z, 1.);
+    scaling_factor_z = _lm_vars[2]->scalingFactor();
   }
 
   ADReal normal_pressure_value =
@@ -338,26 +331,27 @@ ComputeFrictionalForceCartesianLMMechanicalContact::enforceConstraintOnDof(
   else if (std::abs(nz) > threshold_for_Jacobian)
     component_normal = 2;
 
-  libmesh_ignore(component_normal);
+  addResidualsAndJacobian(
+      _assembly,
+      std::array<ADReal, 1>{{normal_dof_residual}},
+      std::array<dof_id_type, 1>{{component_normal == 0
+                                      ? dof_index_x
+                                      : (component_normal == 1 ? dof_index_y : dof_index_z)}},
+      component_normal == 0 ? scaling_factor_x
+                            : (component_normal == 1 ? scaling_factor_y : scaling_factor_z));
 
-#ifdef MOOSE_GLOBAL_AD_INDEXING
-  _assembly.processResidualAndJacobian(
-      normal_dof_residual,
-      component_normal == 0 ? dof_index_x : (component_normal == 1 ? dof_index_y : dof_index_z),
-      _vector_tags,
-      _matrix_tags);
-
-  _assembly.processResidualAndJacobian(
-      tangential_dof_residual,
-      (component_normal == 0 || component_normal == 2) ? dof_index_y : dof_index_x,
-      _vector_tags,
-      _matrix_tags);
+  addResidualsAndJacobian(
+      _assembly,
+      std::array<ADReal, 1>{{tangential_dof_residual}},
+      std::array<dof_id_type, 1>{
+          {(component_normal == 0 || component_normal == 2) ? dof_index_y : dof_index_x}},
+      (component_normal == 0 || component_normal == 2) ? scaling_factor_y : scaling_factor_x);
 
   if (_has_disp_z)
-    _assembly.processResidualAndJacobian(
-        tangential_dof_residual_dir,
-        (component_normal == 0 || component_normal == 1) ? dof_index_z : dof_index_x,
-        _vector_tags,
-        _matrix_tags);
-#endif
+    addResidualsAndJacobian(
+        _assembly,
+        std::array<ADReal, 1>{{tangential_dof_residual_dir}},
+        std::array<dof_id_type, 1>{
+            {(component_normal == 0 || component_normal == 1) ? dof_index_z : dof_index_x}},
+        (component_normal == 0 || component_normal == 1) ? scaling_factor_z : scaling_factor_x);
 }

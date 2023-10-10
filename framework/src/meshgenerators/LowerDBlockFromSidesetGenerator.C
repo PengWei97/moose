@@ -121,17 +121,19 @@ LowerDBlockFromSidesetGenerator::generate()
       // Don't need to send to self
       if (pid != mesh->processor_id() && need_boundary_elems[pid])
       {
-        push_element_data[pid] = elements_to_send;
-        push_node_data[pid] = connected_nodes;
+        if (elements_to_send.size())
+          push_element_data[pid] = elements_to_send;
+        if (connected_nodes.size())
+          push_node_data[pid] = connected_nodes;
       }
 
-    auto node_action_functor = [](processor_id_type, auto &)
+    auto node_action_functor = [](processor_id_type, const auto &)
     {
       // Node packing specialization already has unpacked node into mesh, so nothing to do
     };
     Parallel::push_parallel_packed_range(
         mesh->comm(), push_node_data, mesh.get(), node_action_functor);
-    auto elem_action_functor = [](processor_id_type, auto &)
+    auto elem_action_functor = [](processor_id_type, const auto &)
     {
       // Elem packing specialization already has unpacked elem into mesh, so nothing to do
     };
@@ -148,8 +150,16 @@ LowerDBlockFromSidesetGenerator::generate()
     if (sidesets.count(std::get<2>(triple)))
     {
       if (auto elem = mesh->query_elem_ptr(std::get<0>(triple)))
+      {
+        if (!elem->active())
+          mooseError(
+              "Only active, level 0 elements can be made interior parents of new level 0 lower-d "
+              "elements. Make sure that ",
+              type(),
+              "s are run before any refinement generators");
         element_sides_on_boundary.push_back(
             std::make_pair(counter, ElemSideDouble(elem, std::get<1>(triple))));
+      }
       ++counter;
     }
 

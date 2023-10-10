@@ -10,7 +10,7 @@
 #pragma once
 
 #include "INSFVPressureVariable.h"
-#include "FunctorInterface.h"
+#include "ADFunctorInterface.h"
 
 class InputParameters;
 
@@ -20,30 +20,38 @@ class InputParameters;
  * face while the upwind face is flagged as a Dirichlet face. The upwind Dirichlet value is computed
  * using the downwind extrapolated pressure value and the Bernoulli equation
  */
-class BernoulliPressureVariable : public INSFVPressureVariable, public FunctorInterface
+class BernoulliPressureVariable : public INSFVPressureVariable, public ADFunctorInterface
 {
 public:
   BernoulliPressureVariable(const InputParameters & params);
 
   static InputParameters validParams();
 
-  bool isExtrapolatedBoundaryFace(const FaceInfo & fi, const Elem * elem) const override;
+  bool isExtrapolatedBoundaryFace(const FaceInfo & fi,
+                                  const Elem * elem,
+                                  const Moose::StateArg & time) const override;
 
   void initialSetup() override;
 
 protected:
-  bool isDirichletBoundaryFace(const FaceInfo & fi, const Elem * elem) const override;
+  bool isDirichletBoundaryFace(const FaceInfo & fi,
+                               const Elem * elem,
+                               const Moose::StateArg & time) const override;
 
-  ADReal getDirichletBoundaryFaceValue(const FaceInfo & fi, const Elem * elem) const override;
+  ADReal getDirichletBoundaryFaceValue(const FaceInfo & fi,
+                                       const Elem * elem,
+                                       const Moose::StateArg & time) const override;
 
   /**
    * Checks to see whether the provided element is upwind of the provided face
    * @param elem the element to check whether it is upwind of the face
    * @param fi the face
+   * @param time The time at which to evaluate the velocity
    * @return a pair in which the first member is whether the element is upwind of the face and the
    * second member is the evaluated face superficial velocity
    */
-  std::pair<bool, ADRealVectorValue> elemIsUpwind(const Elem & elem, const FaceInfo & fi) const;
+  std::pair<bool, ADRealVectorValue>
+  elemIsUpwind(const Elem & elem, const FaceInfo & fi, const Moose::StateArg & time) const;
 
   /// The x-component of velocity
   const Moose::Functor<ADReal> * _u;
@@ -55,4 +63,8 @@ protected:
   const Moose::Functor<ADReal> * _eps;
   /// The density
   const Moose::Functor<ADReal> * _rho;
+
+private:
+  /// Switch to enable the two-term extrapolation on porosity jump faces.
+  const bool _allow_two_term_expansion_on_bernoulli_faces;
 };

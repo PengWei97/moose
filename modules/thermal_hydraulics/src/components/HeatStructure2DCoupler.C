@@ -36,8 +36,8 @@ HeatStructure2DCoupler::check() const
 {
   HeatStructure2DCouplerBase::check();
 
-  if (!_mesh_alignment.meshesAreCoincident())
-    logError("The primary and secondary boundaries must have coincident meshes.");
+  if (!_mesh_alignment.meshesAreAligned())
+    logError("The primary and secondary boundaries must be aligned.");
 }
 
 void
@@ -55,18 +55,14 @@ HeatStructure2DCoupler::addMooseObjects()
     params.set<NonlinearVariableName>("variable") = HeatConductionModel::TEMPERATURE;
     params.set<std::string>("coupled_variable") = HeatConductionModel::TEMPERATURE;
     params.set<std::vector<BoundaryName>>("boundary") = {_hs_boundaries[i]};
-    params.set<MeshAlignment2D2D *>("_mesh_alignment") = &_mesh_alignment;
+    params.set<MeshAlignment *>("_mesh_alignment") = &_mesh_alignment;
     params.set<FunctionName>("heat_transfer_coefficient") =
         getParam<FunctionName>("heat_transfer_coefficient");
+    params.set<Real>("coupling_area_fraction") = _coupling_area_fractions[i];
     if (_is_cylindrical[i])
     {
-      const HeatStructureCylindricalBase & hs_cylindrical =
-          getComponentByName<HeatStructureCylindricalBase>(_hs_names[i]);
-
       params.set<Point>("axis_point") = hs.getPosition();
       params.set<RealVectorValue>("axis_dir") = hs.getDirection();
-      params.set<Real>("offset") =
-          hs_cylindrical.getInnerRadius() - hs_cylindrical.getAxialOffset();
     }
     getTHMProblem().addBoundaryCondition(class_name, genName(name(), class_name, i), params);
   }

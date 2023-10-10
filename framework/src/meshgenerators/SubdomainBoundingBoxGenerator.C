@@ -99,7 +99,7 @@ SubdomainBoundingBoxGenerator::generate()
   else
   {
     // Loop over the elements
-    for (const auto & elem : mesh->active_element_ptr_range())
+    for (const auto & elem : mesh->element_ptr_range())
     {
       if (_has_restriction && restricted_ids.count(elem->subdomain_id()) == 0)
         continue;
@@ -114,5 +114,6 @@ SubdomainBoundingBoxGenerator::generate()
       mesh->subdomain_name(_block_id) = getParam<SubdomainName>("block_name");
   }
 
+  mesh->set_isnt_prepared();
   return dynamic_pointer_cast<MeshBase>(mesh);
 }

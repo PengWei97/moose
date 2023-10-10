@@ -11,8 +11,9 @@
 
 #include "Moose.h"
 #include "HashMap.h"
-#include "DataIO.h"
 #include "MaterialProperty.h"
+#include "MaterialPropertyRegistry.h"
+#include "MaterialData.h"
 
 // Forward declarations
 class MaterialBase;
@@ -26,6 +27,11 @@ class QBase;
 class Elem;
 }
 
+class MaterialPropertyStorage;
+
+void dataStore(std::ostream & stream, MaterialPropertyStorage & storage, void * context);
+void dataLoad(std::istream & stream, MaterialPropertyStorage & storage, void * context);
+
 /**
  * Stores the stateful material properties computed by materials.
  *
@@ -34,8 +40,7 @@ class Elem;
 class MaterialPropertyStorage
 {
 public:
-  MaterialPropertyStorage();
-  virtual ~MaterialPropertyStorage();
+  MaterialPropertyStorage(MaterialPropertyRegistry & registry);
 
   /**
    * Creates storage for newly created elements from mesh Adaptivity.  Also, copies values from the
@@ -63,21 +68,23 @@ public:
    *    Call on boundary MaterialPropertyStorage and pass volume MaterialPropertyStorage for
    * parent_material_props
    *
+   * @param pid - processor id of children to prolong to
    * @param refinement_map - 2D array of QpMap objects
    * @param qrule The current quadrature rule
    * @param qrule_face The current face qrule
    * @param parent_material_props The place to pull parent material property values from
-   * @param child_material_data MaterialData object used for computing the data
+   * @param tid The thread ID
    * @param elem The parent element that was just refined
    * @param input_parent_side - the side of the parent for which material properties are prolonged
    * @param input_child - the number of the child
    * @param input_child_side - the side on the child where material properties will be prolonged
    */
-  void prolongStatefulProps(const std::vector<std::vector<QpMap>> & refinement_map,
+  void prolongStatefulProps(processor_id_type pid,
+                            const std::vector<std::vector<QpMap>> & refinement_map,
                             const QBase & qrule,
                             const QBase & qrule_face,
                             MaterialPropertyStorage & parent_material_props,
-                            MaterialData & child_material_data,
+                            const THREAD_ID tid,
                             const Elem & elem,
                             const int input_parent_side,
                             const int input_child,
@@ -91,7 +98,7 @@ public:
    * @param coarsened_element_children - a pointer to a vector of coarsened element children
    * @param qrule The current quadrature rule
    * @param qrule_face The current face qrule
-   * @param material_data MaterialData object used for computing the data
+   * @param tid The thread ID
    * @param elem The parent element that was just refined
    * @param input_side Side of the element 'elem' (0 for volumetric material properties)
    */
@@ -99,23 +106,23 @@ public:
                              const std::vector<const Elem *> & coarsened_element_children,
                              const QBase & qrule,
                              const QBase & qrule_face,
-                             MaterialData & material_data,
+                             const THREAD_ID tid,
                              const Elem & elem,
                              int input_side = -1);
 
   /**
    * Initialize stateful material properties
-   * @param material_data MaterilData object used for computing the data
+   * @param tid The thread ID
    * @param mats Materials that will compute the initial values
    * @param n_qpoints Number of quadrature points
    * @param elem Element we are on
    * @param side Side of the element 'elem' (0 for volumetric material properties)
    */
-  void initStatefulProps(MaterialData & material_data,
+  void initStatefulProps(const THREAD_ID tid,
                          const std::vector<std::shared_ptr<MaterialBase>> & mats,
-                         unsigned int n_qpoints,
+                         const unsigned int n_qpoints,
                          const Elem & elem,
-                         unsigned int side = 0);
+                         const unsigned int side = 0);
 
   /**
    * Shift the material properties in time.
@@ -134,13 +141,13 @@ public:
    *          We can't currently check to ensure that they're on processor here because this isn't a
    * ParallelObject.
    *
-   * @param material_data MaterialData object to work with
+   * @param tid The thread ID
    * @param elem_to Element to copy data to
    * @param elem_from Element to copy data from
    * @param side Side number (elemental material properties have this equal to zero)
    * @param n_qpoints number of quadrature points to work with
    */
-  void copy(MaterialData & material_data,
+  void copy(const THREAD_ID tid,
             const Elem & elem_to,
             const Elem & elem_from,
             unsigned int side,
@@ -150,13 +157,13 @@ public:
    * Copy material properties from elem_from to elem_to.
    * Similar to the other method but using pointers to elements instead of references.
    *
-   * @param material_data MaterialData object to work with
+   * @param tid The thread ID
    * @param elem_to Pointer to the element to copy data to
    * @param elem_from Pointer to the element to copy data from
    * @param side Side number (elemental material properties have this equal to zero)
    * @param n_qpoints number of quadrature points to work with
    */
-  void copy(MaterialData & material_data,
+  void copy(const THREAD_ID tid,
             const Elem * elem_to,
             const Elem * elem_from,
             unsigned int side,
@@ -165,95 +172,71 @@ public:
   /**
    * Swap (shallow copy) material properties in MaterialData and MaterialPropertyStorage
    * Thread safe
-   * @param material_data MaterialData object to work with
+   * @param tid The thread id
    * @param elem Element id
    * @param side Side number (elemental material properties have this equal to zero)
    */
-  void swap(MaterialData & material_data, const Elem & elem, unsigned int side);
+  void swap(const THREAD_ID tid, const Elem & elem, unsigned int side);
 
   /**
    * Swap (shallow copy) material properties in MaterialPropertyStorage and MaterialDat
    * Thread safe
-   * @param material_data MaterialData object to work with
+   * @param tid The thread id
    * @param elem Element id
    * @param side Side number (elemental material properties have this equal to zero)
    */
-  void swapBack(MaterialData & material_data, const Elem & elem, unsigned int side);
+  void swapBack(const THREAD_ID tid, const Elem & elem, unsigned int side);
 
   /**
    * @return a Boolean indicating whether stateful properties exist on this material
    */
-  bool hasStatefulProperties() const { return _has_stateful_props; }
+  bool hasStatefulProperties() const { return maxState() > 0; }
 
   /**
    * @return a Boolean indicating whether or not this material has older properties declared
    */
-  bool hasOlderProperties() const { return _has_older_prop; }
+  bool hasOlderProperties() const { return maxState() > 1; }
+
+  /**
+   * Accessible type of the stored material property data.
+   *
+   * This probably should have been returned as a proxy class; only
+   * access it via foo[elem][side] and maybe we'll be able to refactor
+   * it in the future without breaking your code.
+   */
+  typedef HashMap<const Elem *, HashMap<unsigned int, MaterialProperties>> PropsType;
 
   ///@{
   /**
-   * Access methods to the stored material property data
-   *
+   * Access methods to the stored material property data with the given state \p state.
    */
-  HashMap<const Elem *, HashMap<unsigned int, MaterialProperties>> & props()
-  {
-    return *_props_elem;
-  }
-  HashMap<const Elem *, HashMap<unsigned int, MaterialProperties>> & propsOld()
-  {
-    return *_props_elem_old;
-  }
-  HashMap<const Elem *, HashMap<unsigned int, MaterialProperties>> & propsOlder()
-  {
-    return *_props_elem_older;
-  }
-  const HashMap<const Elem *, HashMap<unsigned int, MaterialProperties>> & props() const
-  {
-    return *_props_elem;
-  }
-  const HashMap<const Elem *, HashMap<unsigned int, MaterialProperties>> & propsOld() const
-  {
-    return *_props_elem_old;
-  }
-  const HashMap<const Elem *, HashMap<unsigned int, MaterialProperties>> & propsOlder() const
-  {
-    return *_props_elem_older;
-  }
-  MaterialProperties & props(const Elem * elem, unsigned int side)
-  {
-    return (*_props_elem)[elem][side];
-  }
-  MaterialProperties & propsOld(const Elem * elem, unsigned int side)
-  {
-    return (*_props_elem_old)[elem][side];
-  }
-  MaterialProperties & propsOlder(const Elem * elem, unsigned int side)
-  {
-    return (*_props_elem_older)[elem][side];
-  }
+  const PropsType & props(const unsigned int state = 0) const;
+  const MaterialProperties &
+  props(const Elem * elem, unsigned int side, const unsigned int state = 0) const;
+  MaterialProperties & setProps(const Elem * elem, unsigned int side, const unsigned int state = 0);
   ///@}
 
-  bool hasProperty(const std::string & prop_name) const;
+  bool hasProperty(const std::string & prop_name) const { return _registry.hasProperty(prop_name); }
 
-  /// The addProperty functions are idempotent - calling multiple times with
-  /// the same name will provide the same id and works fine.
-  unsigned int addProperty(const std::string & prop_name);
-  unsigned int addPropertyOld(const std::string & prop_name);
-  unsigned int addPropertyOlder(const std::string & prop_name);
+  /**
+   * Adds a property with the name \p prop_name and state \p state (0 = current, 1 = old, etc)
+   *
+   * This is idempotent - calling multiple times with the same name will provide the same id and
+   * works fine.
+   */
+  unsigned int addProperty(const std::string & prop_name, const unsigned int state);
 
-  std::vector<unsigned int> & statefulProps() { return _stateful_prop_id_to_prop_id; }
   const std::vector<unsigned int> & statefulProps() const { return _stateful_prop_id_to_prop_id; }
-  const std::map<unsigned int, std::string> statefulPropNames() const { return _prop_names; }
+  const std::unordered_map<unsigned int, std::string> & statefulPropNames() const
+  {
+    return _stateful_prop_names;
+  }
 
-  /// Returns the property ID for the given prop_name, adding the property and
-  /// creating a new ID if it hasn't already been created.
-  unsigned int getPropertyId(const std::string & prop_name);
-
-  unsigned int retrievePropertyId(const std::string & prop_name) const;
+  const MaterialPropertyRegistry & getMaterialPropertyRegistry() const { return _registry; }
 
   bool isStatefulProp(const std::string & prop_name) const
   {
-    return _prop_names.count(retrievePropertyId(prop_name)) > 0;
+    return _stateful_prop_names.count(_registry.getID(prop_name));
   }
 
   /**
@@ -263,40 +246,43 @@ public:
    */
   void eraseProperty(const Elem * elem);
 
-  static const std::map<std::string, unsigned int> & propIDs() { return _prop_ids; }
+  /**
+   * @returns The current maximum stored state (0 = none, 1 = old, 2 = older)
+   */
+  unsigned int maxState() const
+  {
+    mooseAssert(_max_state < _storage.size(), "Too big");
+    return _max_state;
+  }
+  /**
+   * @returns The number of stored states (2 = up to old, 3 = up to older)
+   */
+  unsigned int numStates() const { return maxState() + 1; }
+  /**
+   * @returns A range over states to be used in range-based for loops
+   */
+  IntRange<unsigned int> stateIndexRange() const { return IntRange<unsigned int>(0, numStates()); }
+  /**
+   * @returns A range over stateful states to be used in range-based for loops
+   *
+   * Will be an empty range if there are no stateful states
+   */
+  IntRange<unsigned int> statefulIndexRange() const
+  {
+    return IntRange<unsigned int>(1, numStates());
+  }
+
+  /**
+   * @return The MaterialData for thread \p tid
+   */
+  MaterialData & getMaterialData(const THREAD_ID tid) { return _material_data[tid]; }
 
 protected:
-  /// Release all internal data structures
-  void releaseProperties();
+  /// The actual storage
+  std::array<PropsType, MaterialData::max_state + 1> _storage;
 
-  /// Internal property storage release helper
-  void releasePropertyMap(HashMap<unsigned int, MaterialProperties> & inner_map);
-
-  // indexing: [element][side]->material_properties
-  std::unique_ptr<HashMap<const Elem *, HashMap<unsigned int, MaterialProperties>>> _props_elem;
-  std::unique_ptr<HashMap<const Elem *, HashMap<unsigned int, MaterialProperties>>> _props_elem_old;
-  std::unique_ptr<HashMap<const Elem *, HashMap<unsigned int, MaterialProperties>>>
-      _props_elem_older;
-
-  /// mapping from property name to property ID
-  /// NOTE: this is static so the property numbering is global within the simulation (not just FEProblemBase - should be useful when we will use material properties from
-  /// one FEPRoblem in another one - if we will ever do it)
-  static std::map<std::string, unsigned int> _prop_ids;
-
-  /**
-   * Whether or not we have stateful properties.  This will get automatically
-   * set to true if a stateful property is declared.
-   */
-  bool _has_stateful_props;
-
-  /**
-   * True if any material requires older properties to be computed.  This will get automatically
-   * set to true if a older stateful property is declared.
-   */
-  bool _has_older_prop;
-
-  /// mapping from property ID to property name
-  std::map<unsigned int, std::string> _prop_names;
+  /// Mapping from stateful property ID to property name
+  std::unordered_map<unsigned int, std::string> _stateful_prop_names;
   /// the vector of stateful property ids (the vector index is the map to stateful prop_id)
   std::vector<unsigned int> _stateful_prop_id_to_prop_id;
 
@@ -305,33 +291,101 @@ protected:
 private:
   /// Initializes hashmap entries for element and side to proper qpoint and
   /// property count sizes.
-  void initProps(MaterialData & material_data,
+  void initProps(const THREAD_ID tid, const Elem * elem, unsigned int side, unsigned int n_qpoints);
+
+  /// Initializes just one hashmap's entries
+  void initProps(const THREAD_ID tid,
+                 const unsigned int state,
                  const Elem * elem,
                  unsigned int side,
                  unsigned int n_qpoints);
 
+  ///@{
+  /**
+   * Shallow copies of material properties
+   *
+   */
+  static void shallowSwapData(const std::vector<unsigned int> & stateful_prop_ids,
+                              MaterialProperties & data,
+                              MaterialProperties & data_from);
+  static void shallowSwapDataBack(const std::vector<unsigned int> & stateful_prop_ids,
+                                  MaterialProperties & data,
+                                  MaterialProperties & data_from);
+  ///@}
+
+  /**
+   * @returns A writeable reference to the properties at state \p state.
+   */
+  PropsType & setProps(const unsigned int state);
+
+  /**
+   * @returns A writeable reference to the properties for elem \p elem,
+   * side \p side, and state \p state.
+   *
+   * Similar to setProps, but will initialize (default construct) the
+   * entry if it does not exist.
+   */
+  MaterialProperties &
+  initAndSetProps(const Elem * elem, const unsigned int side, const unsigned int state);
+
+  /// The maximum state (0 = current, 1 = old, 2 = older)
+  unsigned int _max_state;
+
+  // You'd think a private mutex would work here, so I'll leave this
+  // in the namespace for when that happens, but CI thinks that can
+  // make us crash, so I'll just initialize this to Threads::spin_mtx
+  libMesh::Threads::spin_mutex & _spin_mtx;
+
+  /// Shared registry (across storage objects) for property names and IDs
+  MaterialPropertyRegistry & _registry;
+
+  /// The threaded material data
+  std::vector<MaterialData> _material_data;
+
   // Need to be able to eraseProperty from here
   friend class ProjectMaterialProperties;
+
+  // Need to be able to initProps from here
+  friend class RedistributeProperties;
+
+  // Need non-const props from here
+  friend void dataLoad(std::istream &, MaterialPropertyStorage &, void *);
+  friend void dataStore(std::ostream &, MaterialPropertyStorage &, void *);
 };
 
-template <>
-inline void
-dataStore(std::ostream & stream, MaterialPropertyStorage & storage, void * context)
+inline const MaterialPropertyStorage::PropsType &
+MaterialPropertyStorage::props(const unsigned int state) const
 {
-  dataStore(stream, storage.props(), context);
-  dataStore(stream, storage.propsOld(), context);
-
-  if (storage.hasOlderProperties())
-    dataStore(stream, storage.propsOlder(), context);
+  mooseAssert(state < _storage.size(), "Invalid material property state " + std::to_string(state));
+  return _storage[state];
 }
 
-template <>
-inline void
-dataLoad(std::istream & stream, MaterialPropertyStorage & storage, void * context)
+inline const MaterialProperties &
+MaterialPropertyStorage::props(const Elem * elem, unsigned int side, const unsigned int state) const
 {
-  dataLoad(stream, storage.props(), context);
-  dataLoad(stream, storage.propsOld(), context);
+  const auto find_elem = props(state).find(elem);
+  mooseAssert(find_elem != props(state).end(), "Material property does not have elem entry");
+  const auto find_side = find_elem->second.find(side);
+  mooseAssert(find_side != find_elem->second.end(), "Material property does not have side entry");
+  return find_side->second;
+}
 
-  if (storage.hasOlderProperties())
-    dataLoad(stream, storage.propsOlder(), context);
+inline MaterialProperties &
+MaterialPropertyStorage::setProps(const Elem * elem, unsigned int side, const unsigned int state)
+{
+  return const_cast<MaterialProperties &>(std::as_const(*this).props(elem, side, state));
+}
+
+inline MaterialProperties &
+MaterialPropertyStorage::initAndSetProps(const Elem * elem,
+                                         unsigned int side,
+                                         const unsigned int state)
+{
+  return setProps(state)[elem][side];
+}
+
+inline MaterialPropertyStorage::PropsType &
+MaterialPropertyStorage::setProps(const unsigned int state)
+{
+  return const_cast<MaterialPropertyStorage::PropsType &>(std::as_const(*this).props(state));
 }

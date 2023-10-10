@@ -488,6 +488,42 @@ stringify(const VarFieldType & t)
 }
 
 std::string
+stringify(SolutionIterationType t)
+{
+  switch (t)
+  {
+    case SolutionIterationType::Time:
+      return "time";
+    case SolutionIterationType::Nonlinear:
+      return "nonlinear";
+    default:
+      mooseError("Unhandled SolutionIterationType");
+  }
+}
+
+std::string
+stringify(ElementType t)
+{
+  switch (t)
+  {
+    case ElementType::Element:
+      return "ELEMENT";
+    case ElementType::Neighbor:
+      return "NEIGHBOR";
+    case ElementType::Lower:
+      return "LOWER";
+    default:
+      mooseError("unrecognized type");
+  }
+}
+
+std::string
+stringify(libMesh::ElemType t)
+{
+  return libMesh::Utility::enum_to_string(t);
+}
+
+std::string
 stringify(const std::string & s)
 {
   return s;

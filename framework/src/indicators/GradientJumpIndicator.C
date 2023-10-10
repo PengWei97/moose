@@ -23,11 +23,6 @@ GradientJumpIndicator::validParams()
 GradientJumpIndicator::GradientJumpIndicator(const InputParameters & parameters)
   : InternalSideIndicator(parameters)
 {
-#ifndef MOOSE_GLOBAL_AD_INDEXING
-  if (_var.isFV())
-    mooseError("Use of GradientJumpIndicator with finite volume variables is currently only "
-               "supported with a global AD indexing configuration.");
-#endif
 }
 
 Real
@@ -36,10 +31,16 @@ GradientJumpIndicator::computeQpIntegral()
   Real jump = 0;
   if (_var.isFV())
   {
-    jump = (MetaPhysicL::raw_value(
-                _var.gradient(Moose::ElemArg{_current_elem, /*correct_skewness=*/false})) -
-            MetaPhysicL::raw_value(_var.gradient(Moose::ElemArg{_neighbor_elem, false}))) *
-           _normals[_qp];
+    // If the variable is not defined in the neighbor cell, we cant define the block
+    if (_var.hasBlocks(_neighbor_elem->subdomain_id()))
+      jump =
+          (MetaPhysicL::raw_value(_var.gradient(
+               Moose::ElemArg{_current_elem, /*correct_skewness=*/false}, Moose::currentState())) -
+           MetaPhysicL::raw_value(
+               _var.gradient(Moose::ElemArg{_neighbor_elem, false}, Moose::currentState()))) *
+          _normals[_qp];
+    else
+      jump = 0;
   }
   else
     jump = (_grad_u[_qp] - _grad_u_neighbor[_qp]) * _normals[_qp];

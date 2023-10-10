@@ -15,6 +15,7 @@
 
 // Forward Declarations
 class ContactLineSearchBase;
+class AugmentedLagrangianContactProblemInterface;
 enum class ContactModel;
 enum class ContactFormulation;
 
@@ -35,9 +36,8 @@ public:
 
   virtual bool AugmentedLagrangianContactConverged();
 
-  virtual void updateAugmentedLagrangianMultiplier(bool beginning_of_step = false);
-
-  virtual void updateContactStatefulData(bool beginning_of_step = false);
+  virtual void updateAugmentedLagrangianMultiplier(bool beginning_of_step);
+  virtual void updateContactStatefulData(bool beginning_of_step);
 
   virtual Real computeQpSecondaryValue() override;
 
@@ -83,14 +83,14 @@ public:
   virtual bool addCouplingEntriesToJacobian() override { return _primary_secondary_jacobian; }
 
   bool shouldApply() override;
-  void computeContactForce(PenetrationInfo * pinfo, bool update_contact_set);
+  void computeContactForce(const Node & node, PenetrationInfo * pinfo, bool update_contact_set);
 
 protected:
   MooseSharedPointer<DisplacedProblem> _displaced_problem;
-  Real gapOffset(const Node * node);
-  Real nodalArea(PenetrationInfo & pinfo);
-  Real getPenalty(PenetrationInfo & pinfo);
-  Real getTangentialPenalty(PenetrationInfo & pinfo);
+  Real gapOffset(const Node & node);
+  Real nodalArea(const Node & node);
+  Real getPenalty(const Node & node);
+  Real getTangentialPenalty(const Node & node);
 
   const unsigned int _component;
   const ContactModel _model;
@@ -98,6 +98,7 @@ protected:
   const bool _normalize_penalty;
 
   const Real _penalty;
+  const Real _penalty_multiplier;
   Real _penalty_tangential;
   const Real _friction_coefficient;
   const Real _tension_release;
@@ -144,4 +145,11 @@ protected:
 
   const bool _print_contact_nodes;
   static Threads::spin_mutex _contact_set_mutex;
+
+  AugmentedLagrangianContactProblemInterface * const _augmented_lagrange_problem;
+  const static unsigned int _no_iterations;
+  const unsigned int & _lagrangian_iteration_number;
+
+  DenseMatrix<Number> _Knn;
+  DenseMatrix<Number> _Ken;
 };

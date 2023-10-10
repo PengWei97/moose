@@ -1,8 +1,10 @@
-## Uninstall Conda MOOSE Environment
+## Uninstall
 
+!style! halign=left
 If you wish to remove the moose environment at any time, you may do so using the following commands:
+!style-end!
 
 ```bash
-conda deactivate   # if 'moose' was currently activated
-conda env remove -n moose
+mamba activate base
+mamba env remove -n moose
 ```
