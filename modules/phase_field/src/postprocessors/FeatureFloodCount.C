@@ -2267,4 +2267,3 @@ const std::size_t FeatureFloodCount::invalid_size_t = std::numeric_limits<std::s
 const unsigned int FeatureFloodCount::invalid_id = std::numeric_limits<unsigned int>::max();
 const processor_id_type FeatureFloodCount::invalid_proc_id =
     std::numeric_limits<processor_id_type>::max();
-    
