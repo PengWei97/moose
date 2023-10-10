@@ -92,6 +92,7 @@ GrainTracker::GrainTracker(const InputParameters & parameters)
     _n_reserve_ops(getParam<unsigned short>("reserve_op")),
     _reserve_op_index(_n_reserve_ops <= _n_vars ? _n_vars - _n_reserve_ops : 0),
     _reserve_op_threshold(getParam<Real>("reserve_op_threshold")),
+    _bound_value(getParam<Real>("bound_value")),
     _remap(getParam<bool>("remap_grains")),
     _tolerate_failure(getParam<bool>("tolerate_failure")),
     _nl(_fe_problem.getNonlinearSystemBase()),
@@ -367,7 +368,7 @@ GrainTracker::finalize()
    */
   broadcastAndUpdateGrainData();
 
-  if (_merge_grains_based_misorientaion && _t_step > 2) // _tracking_step
+  if (_merge_grains_based_misorientaion && _t_step > _tracking_step)
     remapMisorientedGrains();
 
   /**
@@ -819,7 +820,7 @@ GrainTracker::trackGrains()
         // Must be a nucleating grain (status is still not set)
         if (grain._status == Status::CLEAR)
         {
-          auto new_index = 0; // getNextUniqueID();
+          auto new_index = getNextUniqueID();
           grain._id = new_index;          // Set the ID
           grain._status = Status::MARKED; // Mark it
 
@@ -834,7 +835,7 @@ GrainTracker::trackGrains()
     }
 
     // The reason for _t_step > 2 is to allow reasonable refinement of the mesh at grain boundaries.
-    if (_merge_grains_based_misorientaion && _t_step > 2) // _tracking_step  && _t_step > 2
+    if (_merge_grains_based_misorientaion && _t_step > _tracking_step)
       mergeGrainsBasedMisorientation();
 
     // Case 2 (inactive grains in _feature_sets_old)
@@ -992,7 +993,7 @@ GrainTracker::remapGrains()
              * what we want and hope it all works out. Make the GrainTracker great again!
              */
             grain1._var_index = grain2._var_index;
-            grain1._status |= Status::DIRTY;
+            grain1._status |= Status::DIRTY;           
           }
         }
       }
