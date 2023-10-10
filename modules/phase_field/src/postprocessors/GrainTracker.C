@@ -50,6 +50,7 @@ GrainTracker::validParams()
 {
   InputParameters params = FeatureFloodCount::validParams();
   params += GrainTrackerInterface::validParams();
+  params.addParam<bool>("merge_grains_based_misorientaion", false, "Grain merge would be considered if true");
 
   // FeatureFloodCount adds a relationship manager, but we need to extend that for GrainTracker
   params.clearRelationshipManagers();
@@ -84,6 +85,7 @@ GrainTracker::validParams()
 GrainTracker::GrainTracker(const InputParameters & parameters)
   : FeatureFloodCount(parameters),
     GrainTrackerInterface(),
+    _merge_grains_based_misorientaion(getParam<bool>("merge_grains_based_misorientaion")),
     _tracking_step(getParam<int>("tracking_step")),
     _halo_level(getParam<unsigned short>("halo_level")),
     _max_remap_recursion_depth(getParam<unsigned short>("max_remap_recursion_depth")),
@@ -366,6 +368,9 @@ GrainTracker::finalize()
    */
   broadcastAndUpdateGrainData();
 
+  if (_merge_grains_based_misorientaion && _t_step > _tracking_step)
+    remapMisorientedGrains();
+
   /**
    * Remap Grains
    */
@@ -382,6 +387,12 @@ GrainTracker::finalize()
   // TODO: Release non essential memory
   if (_verbosity_level > 0)
     _console << "Finished inside of GrainTracker\n" << std::endl;
+}
+
+void
+GrainTracker::mergeGrainsBasedMisorientation()
+{
+  _console << "This function needs to be defined in the derived class\n" << std::endl;
 }
 
 void
@@ -823,6 +834,10 @@ GrainTracker::trackGrains()
       }
     }
 
+    // The reason for _t_step > 2 is to allow reasonable refinement of the mesh at grain boundaries.
+    if (_merge_grains_based_misorientaion && _t_step > _tracking_step)
+      mergeGrainsBasedMisorientation();
+
     // Case 2 (inactive grains in _feature_sets_old)
     for (auto & grain : _feature_sets_old)
     {
@@ -978,7 +993,7 @@ GrainTracker::remapGrains()
              * what we want and hope it all works out. Make the GrainTracker great again!
              */
             grain1._var_index = grain2._var_index;
-            grain1._status |= Status::DIRTY;
+            grain1._status |= Status::DIRTY;           
           }
         }
       }
@@ -1172,6 +1187,10 @@ GrainTracker::remapGrains()
     if (_verbosity_level > 1)
       _console << "Swaps complete" << std::endl;
   }
+}
+void
+GrainTracker::remapMisorientedGrains()
+{
 }
 
 void
