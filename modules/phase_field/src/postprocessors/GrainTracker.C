@@ -50,6 +50,7 @@ GrainTracker::validParams()
 {
   InputParameters params = FeatureFloodCount::validParams();
   params += GrainTrackerInterface::validParams();
+  params.addParam<bool>("merge_grains_based_misorientaion", false, "Grain merge would be considered if true");
 
   // FeatureFloodCount adds a relationship manager, but we need to extend that for GrainTracker
   params.clearRelationshipManagers();
@@ -84,13 +85,13 @@ GrainTracker::validParams()
 GrainTracker::GrainTracker(const InputParameters & parameters)
   : FeatureFloodCount(parameters),
     GrainTrackerInterface(),
+    _merge_grains_based_misorientaion(getParam<bool>("merge_grains_based_misorientaion")),
     _tracking_step(getParam<int>("tracking_step")),
     _halo_level(getParam<unsigned short>("halo_level")),
     _max_remap_recursion_depth(getParam<unsigned short>("max_remap_recursion_depth")),
     _n_reserve_ops(getParam<unsigned short>("reserve_op")),
     _reserve_op_index(_n_reserve_ops <= _n_vars ? _n_vars - _n_reserve_ops : 0),
     _reserve_op_threshold(getParam<Real>("reserve_op_threshold")),
-    _bound_value(getParam<Real>("bound_value")),
     _remap(getParam<bool>("remap_grains")),
     _tolerate_failure(getParam<bool>("tolerate_failure")),
     _nl(_fe_problem.getNonlinearSystemBase()),
@@ -366,6 +367,9 @@ GrainTracker::finalize()
    */
   broadcastAndUpdateGrainData();
 
+  if (_merge_grains_based_misorientaion && _t_step > 2) // _tracking_step
+    remapMisorientedGrains();
+
   /**
    * Remap Grains
    */
@@ -382,6 +386,12 @@ GrainTracker::finalize()
   // TODO: Release non essential memory
   if (_verbosity_level > 0)
     _console << "Finished inside of GrainTracker\n" << std::endl;
+}
+
+void
+GrainTracker::mergeGrainsBasedMisorientation()
+{
+  _console << "This function needs to be defined in the derived class\n" << std::endl;
 }
 
 void
@@ -809,7 +819,7 @@ GrainTracker::trackGrains()
         // Must be a nucleating grain (status is still not set)
         if (grain._status == Status::CLEAR)
         {
-          auto new_index = getNextUniqueID();
+          auto new_index = 0; // getNextUniqueID();
           grain._id = new_index;          // Set the ID
           grain._status = Status::MARKED; // Mark it
 
@@ -822,6 +832,10 @@ GrainTracker::trackGrains()
         }
       }
     }
+
+    // The reason for _t_step > 2 is to allow reasonable refinement of the mesh at grain boundaries.
+    if (_merge_grains_based_misorientaion && _t_step > 2) // _tracking_step  && _t_step > 2
+      mergeGrainsBasedMisorientation();
 
     // Case 2 (inactive grains in _feature_sets_old)
     for (auto & grain : _feature_sets_old)
@@ -1172,6 +1186,10 @@ GrainTracker::remapGrains()
     if (_verbosity_level > 1)
       _console << "Swaps complete" << std::endl;
   }
+}
+void
+GrainTracker::remapMisorientedGrains()
+{
 }
 
 void
