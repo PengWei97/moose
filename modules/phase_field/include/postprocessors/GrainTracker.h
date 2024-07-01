@@ -69,13 +69,16 @@ public:
   virtual bool isFeaturePercolated(unsigned int feature_id) const override;
   virtual std::vector<unsigned int> getNewGrainIDs() const override;
 
+  // True if two grains are determined to perform a merge operation
+  bool _merge_grains_based_misorientaion;  
+  
 protected:
   virtual void updateFieldInfo() override;
   virtual Real getThreshold(std::size_t current_index) const override;
 
   /**
    * This method extracts the necessary state from the passed in object necessary to continue
-   * tracking grains. This method is meant to be used with the PolycrystalUserobjectBase class
+   * tracking grains. This method is meant to be used with the PolycrystalUserObjectBase class
    * that sets up initial conditions for Polycrystal simulations. We can use the state of that
    * object rather than rediscovering everything ourselves.
    */
@@ -99,6 +102,11 @@ protected:
    * This method should only be called on the root processor
    */
   void trackGrains();
+  
+  /**
+   * This method is called when considering grain re-merging due to misorientation angle. 
+   */
+  virtual void mergeGrainsBasedMisorientation();
 
   /**
    * This method is called when a new grain is detected. It can be overridden by a derived class to
@@ -107,10 +115,15 @@ protected:
   virtual void newGrainCreated(unsigned int new_grain_id);
 
   /**
+   * This method is called after mergeGrainsBasedMisorientation to remap grains that have the same Grain ID.
+   */
+  virtual void remapMisorientedGrains();
+
+  /**
    * This method is called after trackGrains to remap grains that are too close to each other.
    */
   void remapGrains();
-
+  
   /**
    * Broadcast essential Grain information to all processors. This method is used to get certain
    * attributes like centroids distributed and whether or not a grain intersects a boundary updated.
