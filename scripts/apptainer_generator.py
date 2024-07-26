@@ -43,6 +43,7 @@ class ApptainerGenerator:
         self.project = library_meta['name_base']
         self.name = library_meta['name']
         self.tag = library_meta['tag']
+        self.version = library_meta['tag']
 
         if hasattr(self.args, 'modify') and self.args.modify is not None:
             self.def_path = os.path.abspath(self.args.modify)
@@ -288,13 +289,13 @@ class ApptainerGenerator:
         self.run(command)
         return file
 
-    def apptainer_push(self, project: str, name: str, from_tag: str, to_tag=None):
+    def apptainer_push(self, project: str, name: str, from_tag: str, to_tag=None, project_suffix=None):
         """
         Pushes the given image via apptainer
         """
         if to_tag is None:
             to_tag = from_tag
-        oras_uri = self.oras_uri(project, name, to_tag)
+        oras_uri = self.oras_uri(project, name, to_tag, project_suffix=project_suffix)
         file = self.container_path(name, from_tag)
         self.print(f'Pushing {file}')
         command = ['apptainer', 'push', file, oras_uri]
@@ -463,6 +464,33 @@ class ApptainerGenerator:
             contents += f'{name}.civet.job {civet_server}/job/{civet_job_id}\n'
         return definition + '\n\n' + self.add_def_whitespace(contents)
 
+    def _add_definition_environment(self, definition):
+        """
+        Adds to the definition environment
+        """
+        if self.version == self.tag:
+            name_summary = f'{self.name}:{self.tag}'
+        else:
+            name_summary = f'{self.name}:{self.tag}({self.version})'
+
+        content = [f'#',
+                   f'# Begin environment for {name_summary}',
+                   f'#',
+                   f'export MOOSE_APPTAINER_GENERATOR_LIBRARY="{self.args.library}"',
+                   f'export MOOSE_APPTAINER_GENERATOR_NAME="{self.name}"',
+                   f'export MOOSE_APPTAINER_GENERATOR_NAME_SUMMARY="{name_summary}"',
+                   f'export MOOSE_APPTAINER_GENERATOR_TAG="{self.tag}"',
+                   f'export MOOSE_APPTAINER_GENERATOR_VERSION="{self.version}"']
+        content = '\n    ' + '\n    '.join(content) + '\n'
+
+        env_header = '%environment'
+        if env_header in definition:
+            definition = definition.replace(env_header, env_header + content)
+        else:
+            definition += '\n' + env_header + content
+
+        return definition
+
     @staticmethod
     def create_filename(app_root, section_key, actions):
         """
@@ -571,7 +599,7 @@ class ApptainerGenerator:
                 meta_yaml = os.path.join(MOOSE_DIR, f'conda/{package}/meta.yaml')
                 if os.path.exists(meta_yaml):
                     with open(meta_yaml, 'r') as meta_contents:
-                        _, version, _, _ = Versioner.conda_meta_jinja(meta_contents.read())
+                        _, version, _, _, _, = Versioner.conda_meta_jinja(meta_contents.read())
                         variable_name = 'MOOSE_'
                         variable_name += package.upper().replace('-', '_')
                         variable_name += '_VERSION'
@@ -580,10 +608,16 @@ class ApptainerGenerator:
             package = 'libmesh-vtk'
             meta_yaml = os.path.join(MOOSE_DIR, f'conda/{package}/meta.yaml')
             with open(meta_yaml, 'r') as meta_contents:
-                _, _, _, meta = Versioner.conda_meta_jinja(meta_contents.read())
+                _, _, _, _, meta = Versioner.conda_meta_jinja(meta_contents.read())
+
+            # Jinja returns a list of dictionaries, when variants are involved.
+            # Dictionary comprehensions: https://stackoverflow.com/questions/28243504/convert-list-of-dictionaries-into-dict
+            # Thankfully, the value of 'var' below will always be the same no matter the variant
+            kv_pairs = {k:v for element in meta['source'] for k,v in element.items()}
+
             for var in ['url', 'sha256', 'vtk_friendly_version']:
                 jinja_var = f'vtk_{var}'
-                jinja_data[jinja_var] = meta['source'][var]
+                jinja_data[jinja_var] = kv_pairs[var]
 
         # Set petsc and libmesh versions
         need_versions = {'petsc': {'package': 'petsc', 'submodule': 'petsc'},
@@ -697,6 +731,9 @@ class ApptainerGenerator:
         # Add in a few labels
         new_definition = self._add_definition_labels(new_definition)
 
+        # Add in the environment which contains the version strings
+        new_definition = self._add_definition_environment(new_definition)
+
         # Definition file checks
         container_definition_path = self.container_path(self.name, self.tag, image=False)
         self.print(f'Writing definition to {container_definition_path}')
@@ -762,7 +799,7 @@ class ApptainerGenerator:
             else:
                 self.error(f'Tag {uri} already exists')
 
-        self.apptainer_push(self.project, self.name, from_tag, to_tag)
+        self.apptainer_push(self.project, self.name, from_tag, to_tag, project_suffix=self.args.to_project_suffix)
 
     def _action_path(self):
         """

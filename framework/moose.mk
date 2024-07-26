@@ -97,10 +97,17 @@ ifeq ($(ENABLE_LIBTORCH),true)
     # libtorch (which would cause errors in the testing phase)
     libmesh_CXXFLAGS += -isystem $(LIBTORCH_DIR)/include/torch/csrc/api/include
     libmesh_CXXFLAGS += -isystem $(LIBTORCH_DIR)/include
+		libmesh_CXXFLAGS += -isystem $(LIBTORCH_DIR)/include/c10
 
     # Dynamically linking with the available pytorch library
-    libmesh_LDFLAGS += -Wl,-rpath,$(LIBTORCH_DIR)/lib
+		ifeq ($(shell uname -s),Darwin)
+			libmesh_LDFLAGS += -Wl,-rpath,$(LIBTORCH_DIR)/lib
+		else
+		  libmesh_LDFLAGS += -Wl,--copy-dt-needed-entries,-rpath,$(LIBTORCH_DIR)/lib
+		endif
+
     libmesh_LDFLAGS += -L$(LIBTORCH_DIR)/lib -ltorch
+
   else
     $(error ERROR! Cannot locate any dynamic libraries of libtorch. Make sure to install libtorch (manually or using scripts/setup_libtorch.sh) and to run the configure --with-libtorch before compiling moose!)
   endif
@@ -381,10 +388,11 @@ endif
 wasp_submodule_status:
 	@if [ x$(wasp_submodule_message) != "x" ]; then printf $(wasp_submodule_message); exit 1; fi
 
-# pre-make for checking current dependency versions and showing useful warnings
-# if things like conda packages are out of date. the "-" in "@-" means that
-# it is allowed to not exit 0
-prebuild:
+# Pre-make for checking current dependency versions and showing useful warnings
+# if things like conda packages are out of date. The "-" in "@-" means that
+# it is allowed to not exit 0. "::" means that the rule can be appended by
+# applications that require prebuild steps.
+prebuild::
 	@-python3 $(FRAMEWORK_DIR)/../scripts/premake.py
 
 wasp_submodule_status $(moose_revision_header) $(moose_LIB): | prebuild
