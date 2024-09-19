@@ -321,6 +321,9 @@ FEProblemBase::validParams()
       "allow_invalid_solution",
       false,
       "Set to true to allow convergence even though the solution has been marked as 'invalid'");
+  params.addParam<bool>("show_invalid_solution_console",
+                        true,
+                        "Set to true to show the invalid solution occurance summary in console");
   params.addParam<bool>("immediately_print_invalid_solution",
                         false,
                         "Whether or not to report invalid solution warnings at the time the "
@@ -356,8 +359,9 @@ FEProblemBase::validParams()
       "Null space removal");
   params.addParamNamesToGroup("extra_tag_vectors extra_tag_matrices extra_tag_solutions",
                               "Tagging");
-  params.addParamNamesToGroup("allow_invalid_solution immediately_print_invalid_solution",
-                              "Solution validity control");
+  params.addParamNamesToGroup(
+      "allow_invalid_solution show_invalid_solution_console immediately_print_invalid_solution",
+      "Solution validity control");
 
   return params;
 }
@@ -463,6 +467,7 @@ FEProblemBase::FEProblemBase(const InputParameters & parameters)
     _skip_nl_system_check(getParam<bool>("skip_nl_system_check")),
     _fail_next_nonlinear_convergence_check(false),
     _allow_invalid_solution(getParam<bool>("allow_invalid_solution")),
+    _show_invalid_solution_console(getParam<bool>("show_invalid_solution_console")),
     _immediately_print_invalid_solution(getParam<bool>("immediately_print_invalid_solution")),
     _started_initial_setup(false),
     _has_internal_edge_residual_objects(false),
@@ -3492,6 +3497,13 @@ FEProblemBase::getMaterialData(Moose::MaterialDataType type, const THREAD_ID tid
   mooseError("FEProblemBase::getMaterialData(): Invalid MaterialDataType ", type);
 }
 
+bool
+FEProblemBase::acceptInvalidSolution() const
+{
+  return allowInvalidSolution() || // invalid solutions are always allowed
+         !_app.solutionInvalidity().hasInvalidSolutionError(); // if not allowed, check for errors
+}
+
 void
 FEProblemBase::addFunctorMaterial(const std::string & functor_material_name,
                                   const std::string & name,
@@ -5288,7 +5300,7 @@ FEProblemBase::addTransfer(const std::string & transfer_name,
   // flag so the set by user flag is not reset, calling set with the true flag causes the set
   // by user status to be reset, which should only be done if the EXEC_SAME_AS_MULTIAPP is
   // being applied to the object.
-  if (parameters.get<ExecFlagEnum>("execute_on").contains(EXEC_SAME_AS_MULTIAPP))
+  if (parameters.get<ExecFlagEnum>("execute_on").isValueSet(EXEC_SAME_AS_MULTIAPP))
   {
     ExecFlagEnum & exec_enum = parameters.set<ExecFlagEnum>("execute_on", true);
     std::shared_ptr<MultiApp> multiapp;
@@ -5314,11 +5326,11 @@ FEProblemBase::addTransfer(const std::string & transfer_name,
       std::dynamic_pointer_cast<MultiAppTransfer>(transfer);
   if (multi_app_transfer)
   {
-    if (multi_app_transfer->directions().contains(MultiAppTransfer::TO_MULTIAPP))
+    if (multi_app_transfer->directions().isValueSet(MultiAppTransfer::TO_MULTIAPP))
       _to_multi_app_transfers.addObject(multi_app_transfer);
-    if (multi_app_transfer->directions().contains(MultiAppTransfer::FROM_MULTIAPP))
+    if (multi_app_transfer->directions().isValueSet(MultiAppTransfer::FROM_MULTIAPP))
       _from_multi_app_transfers.addObject(multi_app_transfer);
-    if (multi_app_transfer->directions().contains(MultiAppTransfer::BETWEEN_MULTIAPP))
+    if (multi_app_transfer->directions().isValueSet(MultiAppTransfer::BETWEEN_MULTIAPP))
       _between_multi_app_transfers.addObject(multi_app_transfer);
   }
   else
@@ -5894,8 +5906,8 @@ FEProblemBase::init()
       nl->turnOffJacobian();
 
   for (auto & sys : _solver_systems)
-    sys->init();
-  _aux->init();
+    sys->preInit();
+  _aux->preInit();
 
   // Build the mortar segment meshes, if they haven't been already, for a couple reasons:
   // 1) Get the ghosting correct for both static and dynamic meshes
@@ -5913,6 +5925,10 @@ FEProblemBase::init()
     es().init();
   }
 
+  for (auto & sys : _solver_systems)
+    sys->postInit();
+  _aux->postInit();
+
   // Now that the equation system and the dof distribution is done, we can generate the
   // finite volume-related parts if needed.
   if (haveFV())
@@ -5924,7 +5940,14 @@ FEProblemBase::init()
 
   for (THREAD_ID tid = 0; tid < libMesh::n_threads(); ++tid)
     for (const auto i : index_range(_nl))
+    {
+      mooseAssert(
+          _cm[i],
+          "Coupling matrix not set for system "
+              << i
+              << ". This should only happen if a preconditioner was not setup for this system");
       _assembly[tid][i]->init(_cm[i].get());
+    }
 
   if (_displaced_problem)
     _displaced_problem->init();
@@ -7663,7 +7686,14 @@ FEProblemBase::meshChangedHelper(bool intermediate_change)
   if (intermediate_change)
     es().reinit_solutions();
   else
+  {
     es().reinit();
+    // Since the mesh has changed, we need to make sure that we update any of our
+    // MOOSE-system specific data.
+    for (auto & sys : _solver_systems)
+      sys->reinit();
+    _aux->reinit();
+  }
 
   // Updating MooseMesh first breaks other adaptivity code, unless we
   // then *again* update the MooseMesh caches.  E.g. the definition of
@@ -7761,12 +7791,6 @@ FEProblemBase::meshChangedHelper(bool intermediate_change)
     setVariableAllDoFMap(_uo_jacobian_moose_vars[0]);
 
   _has_jacobian = false; // we have to recompute jacobian when mesh changed
-
-  // Since the mesh has changed, we need to make sure that we update any of our
-  // MOOSE-system specific data. libmesh system data has already been updated
-  for (auto & sys : _solver_systems)
-    sys->update(/*update_libmesh_system=*/false);
-  _aux->update(/*update_libmesh_system=*/false);
 }
 
 void
@@ -8757,8 +8781,8 @@ FEProblemBase::shouldPrintExecution(const THREAD_ID tid) const
   if (tid != 0)
     return false;
 
-  if (_print_execution_on.contains(_current_execute_on_flag) ||
-      _print_execution_on.contains(EXEC_ALWAYS))
+  if (_print_execution_on.isValueSet(_current_execute_on_flag) ||
+      _print_execution_on.isValueSet(EXEC_ALWAYS))
     return true;
   else
     return false;

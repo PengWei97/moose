@@ -15,10 +15,12 @@ registerMooseObject("SolidMechanicsApp", ExecuteNEML2Model);
 #ifndef NEML2_ENABLED
 NEML2ObjectStubImplementationOpen(ExecuteNEML2Model, ElementUserObject);
 NEML2ObjectStubParam(std::vector<UserObjectName>, "gather_uos");
+NEML2ObjectStubParam(std::vector<UserObjectName>, "gather_param_uos");
 NEML2ObjectStubImplementationClose(ExecuteNEML2Model, ElementUserObject);
 #else
 
 #include "MOOSEToNEML2.h"
+#include "MOOSEToNEML2Parameter.h"
 #include "neml2/misc/math.h"
 #include <set>
 
@@ -31,6 +33,9 @@ ExecuteNEML2Model::validParams()
   // we need the user to explicitly list the UOs so we can set up a construction order independent
   // dependency chain
   params.addParam<std::vector<UserObjectName>>("gather_uos", "List of MOOSE*ToNEML2 user objects");
+
+  params.addParam<std::vector<UserObjectName>>(
+      "gather_param_uos", {}, "List of MOOSE*ToNEML2Parameter user objects");
 
   // time input
   params.addParam<std::string>("neml2_time", "forces/t", "(optional) NEML2 variable name for time");
@@ -60,19 +65,27 @@ ExecuteNEML2Model::ExecuteNEML2Model(const InputParameters & params)
     _output_ready(false)
 {
   const auto gather_uo_names = getParam<std::vector<UserObjectName>>("gather_uos");
+  const auto gather_param_uo_names = getParam<std::vector<UserObjectName>>("gather_param_uos");
 
   // add user object dependencies by name (the UOs do not need to exist yet for this)
   for (const auto & uo_name : gather_uo_names)
     _depend_uo.insert(uo_name);
 
-  for (const auto & output : model().output_axis().variable_accessors(true))
+  for (const auto & uo_name : gather_param_uo_names)
+    _depend_uo.insert(uo_name);
+
+  for (const auto & output : model().output_axis().variable_names())
   {
     // reserve Batch tensors for each output
-    _outputs[output] = neml2::BatchTensor();
+    _outputs[output] = neml2::Tensor();
 
     // reserve Batch tensors for each output derivative
     for (const auto & uo_name : gather_uo_names)
-      _doutputs[std::make_pair(output, uo_name)] = neml2::BatchTensor();
+      _doutputs[std::make_pair(output, uo_name)] = neml2::Tensor();
+
+    // reserve Batch tensors for each model parameter derivative
+    for (const auto & param : model().named_parameters())
+      _doutputs_dparams[std::make_pair(output, param.first)] = neml2::Tensor();
   }
 
   for (const auto & var_name : getParam<std::vector<std::string>>("skip_variables"))
@@ -84,6 +97,10 @@ ExecuteNEML2Model::ExecuteNEML2Model(const InputParameters & params)
 void
 ExecuteNEML2Model::initialSetup()
 {
+  // Initialize the model with a dummy batch shape of 1
+  initModel(1);
+  _in = neml2::LabeledVector::zeros(1, {&model().input_axis()});
+
   // deal with the (old) time input
   if (model().input_axis().has_variable(_neml2_time))
     _provided_inputs.insert(_neml2_time);
@@ -109,7 +126,25 @@ ExecuteNEML2Model::initialSetup()
     addUOVariable(uo_name, uo.getNEML2Variable());
   }
 
-  std::set<neml2::VariableName> required_inputs = model().input_axis().variable_accessors(true);
+  // deal with user object provided parameters
+  for (const auto & uo_name : getParam<std::vector<UserObjectName>>("gather_param_uos"))
+  {
+    // gather coupled user objects late to ensure they are constructed. Do not add them as
+    // dependencies (that's already done in the constructor).
+    const auto & uo =
+        getUserObjectByName<MOOSEToNEML2Parameter>(uo_name, /*is_dependency = */ false);
+    _gather_param_uos.push_back(&uo);
+
+    // check if requested parameter exist in the model
+    if (!model().named_parameters().has_key(uo.getNEML2Parameter()))
+      mooseError("Trying to set scalar-valued material property named '",
+                 uo.getNEML2Parameter(),
+                 "' in the UserObject '",
+                 uo_name,
+                 "'. But there is not such parameter in the NEML2 material model.");
+  }
+
+  std::set<neml2::VariableName> required_inputs = model().input_axis().variable_names();
 
   // iterate over set of required inputs and error out if we find one that is not provided
   for (const auto & input : required_inputs)
@@ -124,7 +159,7 @@ ExecuteNEML2Model::initialSetup()
   // sufficient for stateful data management, but that's the best we can do here without being toooo
   // restrictive.
   for (const auto & input : required_inputs)
-    if (input.start_with("old_state") && !_retrieved_outputs.count(input.slice(1).on("state")))
+    if (input.start_with("old_state") && !_retrieved_outputs.count(input.slice(1).prepend("state")))
       mooseError(
           "The NEML2 model requires a stateful input variable `",
           input,
@@ -179,17 +214,21 @@ ExecuteNEML2Model::shouldCompute()
 void
 ExecuteNEML2Model::initialize()
 {
+  if (!shouldCompute())
+    return;
+
   _elem_to_batch_index.clear();
   _elem_to_batch_index_cache = {libMesh::invalid_uint, 0};
   _batch_index = 0;
-
-  if (shouldCompute())
-    _output_ready = false;
+  _output_ready = false;
 }
 
 void
 ExecuteNEML2Model::execute()
 {
+  if (!shouldCompute())
+    return;
+
   _elem_to_batch_index[_current_elem->id()] = _batch_index;
   _batch_index += _qrule->n_points();
 }
@@ -208,14 +247,16 @@ ExecuteNEML2Model::finalize()
 
   try
   {
-    initModel(_batch_index);
+    auto batch_shape = neml2::TensorShape{neml2::Size(_batch_index)};
 
-    // Reallocate the input only when the batch size has changed
-    if (_in.batch_sizes() != neml2::TorchShapeRef{neml2::TorchSize(_batch_index)})
-      _in = neml2::LabeledVector::zeros(_batch_index, {&model().input_axis()});
+    // Reallocate the variable storage only when the batch shape has changed
+    if (neml2::TensorShapeRef(batch_shape) != model().batch_sizes())
+    {
+      initModel(batch_shape);
+      _in = neml2::LabeledVector::zeros(batch_shape, {&model().input_axis()});
+    }
 
-    // Steps before stress update
-    // preCompute();
+    setParameter();
 
     updateForces();
 
@@ -227,14 +268,10 @@ ExecuteNEML2Model::finalize()
 
       // update output views
       for (auto & pair : _outputs)
-        pair.second = _out(pair.first);
+        pair.second = _out.base_index(pair.first);
 
-      // output retrieved derivatives
-      for (auto & [out, in, batch_tensor_ptr] : _retrieved_derivatives)
-        *batch_tensor_ptr = _dout_din(out, in);
+      getParameterDerivative();
 
-      // Additional calculations after stress update
-      // postCompute();
       _output_ready = true;
     }
   }
@@ -250,6 +287,43 @@ ExecuteNEML2Model::finalize()
                    e.what(),
                    "\nIt is possible that this error is related to NEML2.",
                    NEML2Utils::NEML2_help_message);
+  }
+}
+
+void
+ExecuteNEML2Model::setParameter()
+{
+  // Set model parameters from the parameter UOs
+  for (const auto & uo : _gather_param_uos)
+  {
+    auto batch_shape = neml2::TensorShape{neml2::Size(uo->size())};
+    if (neml2::TensorShapeRef(batch_shape) != model().batch_sizes())
+      mooseError("parameter batch shape ",
+                 batch_shape,
+                 " is inconsistent with model batch shape ",
+                 model().batch_sizes());
+    uo->insertIntoParameter(model());
+  }
+  // Request gradient for the properties that we request AD for
+  for (auto & [out, name, batch_tensor_ptr] : _retrieved_parameter_derivatives)
+  {
+    auto param = neml2::Tensor(model().get_parameter(name));
+    param.requires_grad_(true);
+  }
+}
+
+void
+ExecuteNEML2Model::getParameterDerivative()
+{
+  // output retrieved derivatives
+  for (auto & [out, in, batch_tensor_ptr] : _retrieved_derivatives)
+    *batch_tensor_ptr = _dout_din.base_index({out, in});
+
+  // output retrieved output variable derivatives wrt parameters
+  for (auto & [out, pname, batch_tensor_ptr] : _retrieved_parameter_derivatives)
+  {
+    auto param = neml2::Tensor(model().get_parameter(pname));
+    *batch_tensor_ptr = neml2::math::jacrev(_out.base_index(out), param);
   }
 }
 
@@ -329,7 +403,7 @@ ExecuteNEML2Model::checkExecutionStage() const
                "problem.");
 }
 
-const neml2::BatchTensor &
+const neml2::Tensor &
 ExecuteNEML2Model::getOutputView(const neml2::VariableName & output_name) const
 {
   checkExecutionStage();
@@ -350,7 +424,7 @@ ExecuteNEML2Model::getOutputView(const neml2::VariableName & output_name) const
   return it->second;
 }
 
-const neml2::BatchTensor &
+const neml2::Tensor &
 ExecuteNEML2Model::getOutputDerivativeView(const neml2::VariableName & output_name,
                                            const neml2::VariableName & input_name) const
 {
@@ -377,7 +451,7 @@ ExecuteNEML2Model::getOutputDerivativeView(const neml2::VariableName & output_na
       // save derivative as retrieved (we carefully cast constness away, which is ok, as the items
       // stored in _retrieved_derivatives will be used only in this object)
       _retrieved_derivatives.emplace(
-          output_name, input_name, const_cast<neml2::BatchTensor *>(&it->second));
+          output_name, input_name, const_cast<neml2::Tensor *>(&it->second));
 
       // return reference to derivative tensor view
       return it->second;
@@ -390,6 +464,36 @@ ExecuteNEML2Model::getOutputDerivativeView(const neml2::VariableName & output_na
              "` not found in ExecuteNEML2Model object `",
              name(),
              "`.");
+}
+
+const neml2::Tensor &
+ExecuteNEML2Model::getOutputParameterDerivativeView(const neml2::VariableName & output_name,
+                                                    const std::string & parameter_name) const
+{
+  checkExecutionStage();
+
+  if (!model().named_parameters().has_key(parameter_name))
+    mooseError("Trying to get derivative of ",
+               output_name,
+               " with respect to material property named ",
+               parameter_name,
+               ". But there is not such parameter in the NEML2 material model.");
+
+  const auto it = _doutputs_dparams.find(std::make_pair(output_name, parameter_name));
+  if (it == _doutputs_dparams.end())
+    mooseError("Requested derivative of `",
+               output_name,
+               "` with respect to `",
+               parameter_name,
+               "` not found in any ExecuteNEML2Model object.");
+
+  // save derivative as retrieved (we carefully cast constness away, which is ok, as the items
+  // stored in _retrieved_parameter_derivatives will be used only in this object)
+  _retrieved_parameter_derivatives.emplace(
+      output_name, parameter_name, const_cast<neml2::Tensor *>(&it->second));
+
+  // return reference to derivative tensor view
+  return it->second;
 }
 
 #endif
