@@ -36,6 +36,7 @@
 #include "MaterialPropertyRegistry.h"
 #include "RestartableEquationSystems.h"
 #include "SolutionInvalidity.h"
+#include "PetscSupport.h"
 
 #include "libmesh/enum_quadrature_type.h"
 #include "libmesh/equation_systems.h"
@@ -610,6 +611,13 @@ public:
    * Restore old solutions from the backup vectors and deallocate them.
    */
   virtual void restoreOldSolutions();
+
+  /**
+   * Declare that we need up to old (1) or older (2) solution states for a given type of iteration
+   * @param oldest_needed oldest solution state needed
+   * @param iteration_type the type of iteration for which old/older states are needed
+   */
+  void needSolutionState(unsigned int oldest_needed, Moose::SolutionIterationType iteration_type);
 
   /**
    * Output the current step.
@@ -2481,6 +2489,9 @@ protected:
   /// Map connecting solver system names with their respective systems
   std::map<SolverSystemName, unsigned int> _solver_sys_name_to_num;
 
+  /// The union of nonlinear and linear system names
+  std::vector<std::string> _solver_sys_names;
+
   /// The auxiliary system
   std::shared_ptr<AuxiliarySystem> _aux;
 
@@ -2588,7 +2599,10 @@ protected:
   void meshChangedHelper(bool intermediate_change = false);
 
   /// Helper to check for duplicate variable names across systems or within a single system
-  bool duplicateVariableCheck(const std::string & var_name, const FEType & type, bool is_aux);
+  bool duplicateVariableCheck(const std::string & var_name,
+                              const FEType & type,
+                              bool is_aux,
+                              const std::set<SubdomainID> * const active_subdomains);
 
   void computeUserObjectsInternal(const ExecFlagType & type,
                                   const Moose::AuxGroup & group,
@@ -2677,6 +2691,9 @@ protected:
 
   /// Indicates that we need to compute variable values for previous Newton iteration
   bool _needs_old_newton_iter;
+
+  /// Indicates we need to save the previous NL iteration variable values
+  bool _previous_nl_solution_required;
 
   /// Indicates if nonlocal coupling is required/exists
   bool _has_nonlocal_coupling;
@@ -2901,6 +2918,10 @@ private:
   /// If we catch an exception during residual/Jacobian evaluaton for which we don't have specific
   /// handling, immediately error instead of allowing the time step to be cut
   const bool _regard_general_exceptions_as_errors;
+
+  friend void Moose::PetscSupport::setSinglePetscOption(const std::string & name,
+                                                        const std::string & value,
+                                                        FEProblemBase * const problem);
 };
 
 using FVProblemBase = FEProblemBase;

@@ -312,11 +312,14 @@ $(foreach srcsubdir,$(unity_srcsubdirs),$(eval $(call unity_file_rule,$(call uni
 
 app_unity_srcfiles := $(foreach srcsubdir,$(unity_srcsubdirs),$(call unity_unique_name,$(unity_src_dir),$(FRAMEWORK_DIR),$(srcsubdir)))
 
-#$(info $(app_unity_srcfiles))
-
 unity_srcfiles += $(app_unity_srcfiles)
 
-moose_srcfiles    := $(app_unity_srcfiles) $(shell find $(non_unity_srcsubdirs) -maxdepth 1 -regex "[^\#~]*\.C") $(shell find $(filter-out %/src,$(moose_SRC_DIRS)) -regex "[^\#~]*\.C")
+ifneq ($(non_unity_srcsubdirs),)
+	app_nonunity_srcfiles = $(shell find $(non_unity_srcsubdirs) -maxdepth 1 -regex "[^\#~]*\.C") $(shell find $(filter-out %/src,$(moose_SRC_DIRS)) -regex "[^\#~]*\.C")
+else
+  app_nonunity_srcfiles = $(shell find . -maxdepth 1 -regex "[^\#~]*\.C") $(shell find $(filter-out %/src,$(moose_SRC_DIRS)) -regex "[^\#~]*\.C")
+endif
+moose_srcfiles    := $(app_unity_srcfiles) $(app_nonunity_srcfiles)
 
 else # Non-Unity
 moose_srcfiles    := $(shell find $(moose_SRC_DIRS) -regex "[^\#~]*\.C")
@@ -481,7 +484,7 @@ moose_share_dir = $(share_dir)/moose
 python_install_dir = $(moose_share_dir)/python
 bin_install_dir = $(PREFIX)/bin
 
-install: all install_libs install_bin install_harness install_exodiff install_adreal_monolith install_hit install_data
+install: all install_all_libs install_bin install_harness install_exodiff install_adreal_monolith install_hit install_data
 
 install_data::
 	@mkdir -p $(moose_share_dir)
@@ -523,16 +526,20 @@ lib_install_dir = $(PREFIX)/$(lib_install_suffix)
 
 ifneq (,$(findstring darwin,$(libmesh_HOST)))
   patch_relink = install_name_tool -change $(2) @rpath/$(3) $(1)
-  patch_rpath = install_name_tool -add_rpath @executable_path/$(2) $(1)
+	patch_rpath = install_name_tool -add_rpath $(2) $(1)
+	patch_remove = :
 else
   patch_relink = :
-  patch_rpath = patchelf --set-rpath '$$ORIGIN'/$(2):$$(patchelf --print-rpath $(1)) $(1)
+	patch_rpath = patchelf --set-rpath $(2):$$(patchelf --print-rpath $(1)) $(1)
+	patch_remove = patchelf --remove-needed $(2) $(1)
 endif
 patch_la = $(FRAMEWORK_DIR)/scripts/patch_la.py $(1) $(2)
+# Gets the associated library from a library archive (first argument)
+lib_from_archive = `grep "dlname='.*'" $(1) 2>/dev/null | sed -E "s/dlname='(.*)'/\1/g"`
 
-libname_framework = $(shell grep "dlname='.*'" $(MOOSE_DIR)/framework/libmoose-$(METHOD).la 2>/dev/null | sed -E "s/dlname='(.*)'/\1/g")
+libname_framework = $(call lib_from_archive,$(MOOSE_DIR)/framework/libmoose-$(METHOD).la)
 libpath_framework = $(MOOSE_DIR)/framework/$(libname_framework)
-libname_pcre = $(shell grep "dlname='.*'" $(MOOSE_DIR)/framework/contrib/pcre/libpcre-$(METHOD).la 2>/dev/null | sed -E "s/dlname='(.*)'/\1/g")
+libname_pcre = $(call lib_from_archive,$(MOOSE_DIR)/framework/contrib/pcre/libpcre-$(METHOD).la)
 libpath_pcre = $(MOOSE_DIR)/framework/contrib/pcre/$(libname_pcre)
 
 #

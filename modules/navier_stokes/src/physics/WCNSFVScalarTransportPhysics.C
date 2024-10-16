@@ -71,7 +71,7 @@ WCNSFVScalarTransportPhysics::validParams()
 
 WCNSFVScalarTransportPhysics::WCNSFVScalarTransportPhysics(const InputParameters & parameters)
   : NavierStokesPhysicsBase(parameters),
-    WCNSFVCoupledAdvectionPhysicsHelper(parameters, this),
+    WCNSFVCoupledAdvectionPhysicsHelper(this),
     _passive_scalar_names(getParam<std::vector<NonlinearVariableName>>("passive_scalar_names")),
     _has_scalar_equation(isParamValid("add_scalar_equation") ? getParam<bool>("add_scalar_equation")
                                                              : !usingNavierStokesFVSyntax()),
@@ -85,7 +85,7 @@ WCNSFVScalarTransportPhysics::WCNSFVScalarTransportPhysics(const InputParameters
         getParam<std::vector<std::vector<Real>>>("passive_scalar_coupled_source_coeff"))
 {
   for (const auto & scalar_name : _passive_scalar_names)
-    saveNonlinearVariableName(scalar_name);
+    saveSolverVariableName(scalar_name);
 
   // For compatibility with Modules/NavierStokesFV syntax
   if (!_has_scalar_equation)
@@ -134,7 +134,7 @@ WCNSFVScalarTransportPhysics::addNonlinearVariables()
   for (const auto name_i : index_range(_passive_scalar_names))
   {
     // Dont add if the user already defined the variable
-    if (nonlinearVariableExists(_passive_scalar_names[name_i], /*error_if_aux=*/true))
+    if (variableExists(_passive_scalar_names[name_i], /*error_if_aux=*/true))
     {
       checkBlockRestrictionIdentical(
           _passive_scalar_names[name_i],
