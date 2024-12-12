@@ -14,6 +14,7 @@
 #include "MooseUtils.h"
 
 #include "libmesh/elem.h"
+#include "libmesh/enum_to_string.h"
 #include "libmesh/int_range.h"
 #include "libmesh/mesh_modification.h"
 #include "libmesh/mesh_serializer.h"
@@ -21,6 +22,7 @@
 #include "libmesh/parsed_function.h"
 #include "libmesh/poly2tri_triangulator.h"
 #include "libmesh/unstructured_mesh.h"
+#include "DelimitedFileReader.h"
 
 registerMooseObject("MooseApp", XYDelaunayGenerator);
 
@@ -112,12 +114,19 @@ XYDelaunayGenerator::validParams()
       "tri_element_type", tri_elem_type, "Type of the triangular elements to be generated.");
   params.addParam<bool>(
       "verbose_stitching", false, "Whether mesh stitching should have verbose output.");
-
+  params.addParam<std::vector<Point>>("interior_points",
+                                      {},
+                                      "Interior node locations, if no smoothing is used. Any point "
+                                      "outside the surface will not be meshed.");
+  params.addParam<std::vector<FileName>>(
+      "interior_point_files", {}, "Text file(s) with the interior points, one per line");
   params.addClassDescription("Triangulates meshes within boundaries defined by input meshes.");
 
   params.addParamNamesToGroup(
       "use_auto_area_func auto_area_func_default_size auto_area_func_default_size_dist",
       "Automatic triangle meshing area control");
+  params.addParamNamesToGroup("interior_points interior_point_files",
+                              "Mandatory mesh interior nodes");
 
   return params;
 }
@@ -142,7 +151,8 @@ XYDelaunayGenerator::XYDelaunayGenerator(const InputParameters & parameters)
     _auto_area_function_power(getParam<Real>("auto_area_function_power")),
     _algorithm(parameters.get<MooseEnum>("algorithm")),
     _tri_elem_type(parameters.get<MooseEnum>("tri_element_type")),
-    _verbose_stitching(parameters.get<bool>("verbose_stitching"))
+    _verbose_stitching(parameters.get<bool>("verbose_stitching")),
+    _interior_points(getParam<std::vector<Point>>("interior_points"))
 {
   if ((_desired_area > 0.0 && !_desired_area_func.empty()) ||
       (_desired_area > 0.0 && _use_auto_area_func) ||
@@ -174,6 +184,26 @@ XYDelaunayGenerator::XYDelaunayGenerator(const InputParameters & parameters)
     if (hole_boundaries.size() != _hole_ptrs.size())
       paramError("hole_boundaries", "Need one hole_boundaries entry per hole, if specified.");
   }
+  // Copied from MultiApp.C
+  const auto & positions_files = getParam<std::vector<FileName>>("interior_point_files");
+  for (const auto p_file_it : index_range(positions_files))
+  {
+    const std::string positions_file = positions_files[p_file_it];
+    MooseUtils::DelimitedFileReader file(positions_file, &_communicator);
+    file.setFormatFlag(MooseUtils::DelimitedFileReader::FormatFlag::ROWS);
+    file.read();
+
+    const std::vector<Point> & data = file.getDataAsPoints();
+    for (const auto & d : data)
+      _interior_points.push_back(d);
+  }
+  bool has_duplicates =
+      std::any_of(_interior_points.begin(),
+                  _interior_points.end(),
+                  [&](const Point & p)
+                  { return std::count(_interior_points.begin(), _interior_points.end(), p) > 1; });
+  if (has_duplicates)
+    paramError("interior_points", "Duplicate points were found in the provided interior points.");
 }
 
 std::unique_ptr<MeshBase>
@@ -184,8 +214,8 @@ XYDelaunayGenerator::generate()
       dynamic_pointer_cast<UnstructuredMesh>(std::move(_bdy_ptr));
 
   // Get ready to triangulate the line segments we extract from it
-  Poly2TriTriangulator poly2tri(*mesh);
-  poly2tri.triangulation_type() = TriangulatorInterface::PSLG;
+  libMesh::Poly2TriTriangulator poly2tri(*mesh);
+  poly2tri.triangulation_type() = libMesh::TriangulatorInterface::PSLG;
 
   // If we're using a user-requested subset of boundaries on that
   // mesh, get their ids.
@@ -240,8 +270,8 @@ XYDelaunayGenerator::generate()
   poly2tri.minimum_angle() = 0; // Not yet supported
   poly2tri.smooth_after_generating() = _smooth_tri;
 
-  std::vector<TriangulatorInterface::MeshedHole> meshed_holes;
-  std::vector<TriangulatorInterface::Hole *> triangulator_hole_ptrs(_hole_ptrs.size());
+  std::vector<libMesh::TriangulatorInterface::MeshedHole> meshed_holes;
+  std::vector<libMesh::TriangulatorInterface::Hole *> triangulator_hole_ptrs(_hole_ptrs.size());
   std::vector<std::unique_ptr<MeshBase>> hole_ptrs(_hole_ptrs.size());
   // This tells us the element orders of the hole meshes
   // For the boundary meshes, it can be access through poly2tri.segment_midpoints.
@@ -274,7 +304,7 @@ XYDelaunayGenerator::generate()
   if (_desired_area_func != "")
   {
     // poly2tri will clone this so it's fine going out of scope
-    ParsedFunction<Real> area_func{_desired_area_func};
+    libMesh::ParsedFunction<Real> area_func{_desired_area_func};
     poly2tri.set_desired_area_function(&area_func);
   }
   else if (_use_auto_area_func)
@@ -291,6 +321,10 @@ XYDelaunayGenerator::generate()
     poly2tri.elem_type() = libMesh::ElemType::TRI6;
   else if (_tri_elem_type == "TRI7")
     poly2tri.elem_type() = libMesh::ElemType::TRI7;
+  // Add interior points before triangulating. Only points inside the boundaries
+  // will be meshed.
+  for (auto & point : _interior_points)
+    mesh->add_point(point);
 
   poly2tri.triangulate();
 
@@ -327,7 +361,7 @@ XYDelaunayGenerator::generate()
     {
       mooseAssert(elem->type() ==
                       (_tri_elem_type == "TRI6" ? TRI6 : (_tri_elem_type == "TRI7" ? TRI7 : TRI3)),
-                  "Unexpected element type " << Utility::enum_to_string(elem->type())
+                  "Unexpected element type " << libMesh::Utility::enum_to_string(elem->type())
                                              << " found in triangulation");
 
       elem->subdomain_id() = _output_subdomain_id;
@@ -440,7 +474,7 @@ XYDelaunayGenerator::generate()
 
   // libMesh mesh stitching still requires a serialized mesh, and it's
   // cheaper to do that once than to do it once-per-hole
-  MeshSerializer serial(*mesh, doing_stitching);
+  libMesh::MeshSerializer serial(*mesh, doing_stitching);
 
   // Define a reference map variable for subdomain map
   auto & main_subdomain_map = mesh->set_subdomain_name_map();
@@ -463,14 +497,14 @@ XYDelaunayGenerator::generate()
       // redundant serialization and deserialization (libMesh
       // MeshedHole and stitch_meshes still also require
       // serialization) we'll do the serialization up front.
-      MeshSerializer serial_hole(hole_mesh);
+      libMesh::MeshSerializer serial_hole(hole_mesh);
 
       // It would have been nicer for MeshedHole to add the BCID
       // itself, but we want MeshedHole to work with a const mesh.
       // We'll still use MeshedHole, for its code distinguishing
       // outer boundaries from inner boundaries on a
       // hole-with-holes.
-      TriangulatorInterface::MeshedHole mh{hole_mesh};
+      libMesh::TriangulatorInterface::MeshedHole mh{hole_mesh};
 
       // We have to translate from MeshedHole points to mesh
       // sides.

@@ -154,7 +154,7 @@ PNSFVSolidHeatTransferPhysics::PNSFVSolidHeatTransferPhysics(const InputParamete
 }
 
 void
-PNSFVSolidHeatTransferPhysics::addNonlinearVariables()
+PNSFVSolidHeatTransferPhysics::addSolverVariables()
 {
   // Dont add if the user already defined the variable
   if (variableExists(_solid_temperature_name,
@@ -165,6 +165,7 @@ PNSFVSolidHeatTransferPhysics::addNonlinearVariables()
   {
     auto params = getFactory().getValidParams("INSFVEnergyVariable");
     assignBlocks(params, _blocks);
+    params.set<SolverSystemName>("solver_sys") = getSolverSystem(_solid_temperature_name);
     params.set<std::vector<Real>>("scaling") = {getParam<Real>("temperature_scaling")};
     params.set<MooseEnum>("face_interp_method") =
         getParam<MooseEnum>("solid_temperature_face_interpolation");

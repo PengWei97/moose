@@ -80,12 +80,27 @@ std::string outputOutputInformation(MooseApp & app);
  * @param system The libMesh system to output
  * @see outputAuxiliarySystemInformation outputNonlinearSystemInformation
  */
-std::string outputSystemInformationHelper(System & system);
+std::string outputSystemInformationHelper(libMesh::System & system);
+
+/**
+ * Output the information about pre-SMO residual evaluation
+ */
+std::string outputPreSMOResidualInformation();
 
 /**
  * Output the legacy flag information
  */
 std::string outputLegacyInformation(MooseApp & app);
+
+/**
+ * Output the registered data paths for searching
+ */
+std::string outputDataFilePaths();
+
+/**
+ * Output the (param path = value) pairs for each DataFileName parameter
+ */
+std::string outputDataFileParams(MooseApp & app);
 
 /**
  * Helper function function for stringstream formatting

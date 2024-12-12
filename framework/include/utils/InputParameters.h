@@ -16,6 +16,7 @@
 #include "MultiMooseEnum.h"
 #include "ExecFlagEnum.h"
 #include "Conversion.h"
+#include "DataFileUtils.h"
 
 #include "libmesh/parameters.h"
 
@@ -60,7 +61,7 @@ class Builder;
  * The main MOOSE class responsible for handling user-defined
  * parameters in almost every MOOSE system.
  */
-class InputParameters : public Parameters
+class InputParameters : public libMesh::Parameters
 {
 public:
   InputParameters(const InputParameters & rhs);
@@ -708,9 +709,11 @@ public:
   void finalize(const std::string & parsing_syntax);
 
   /**
-   * @return A file base to associate with the parameter with name \p param_name.
+   * @return A file base to associate with these parameters.
    *
-   * We have the following cases:
+   * Optionally, an input parameter can be provided via \p param_name.
+   *
+   * If the parameter is provided, we have the following options:
    * - The parameter itself has a hit node set (context for that parameter)
    * - The InputParameters object has a hit node set (context for all parameters)
    * - Neither of the above and we die
@@ -718,7 +721,8 @@ public:
    * In the event that a the parameter is set via command line, this will
    * attempt to look at the parameter's parents to find a suitable context.
    */
-  std::filesystem::path getParamFileBase(const std::string & param_name) const;
+  std::filesystem::path
+  getFileBase(const std::optional<std::string> & param_name = std::optional<std::string>()) const;
 
   /**
    * Methods returning iterators to the coupled variables names stored in this
@@ -806,7 +810,7 @@ public:
    *
    * In order to apply common parameter 4 statements must be satisfied
    *   (1) A local parameter must exist with the same name as common parameter
-   *   (2) Common parameter must valid
+   *   (2) Common parameter must be valid
    *   (3) Local parameter must be invalid OR not have been set from its default
    *   (4) Both cannot be private (unless \p allow_private = true)
    *
@@ -1109,6 +1113,11 @@ public:
    */
   bool isFinalized() const { return _finalized; }
 
+  /**
+   * @return The DataFileName path for the parameter \p name (if any).
+   */
+  std::optional<Moose::DataFileUtils::Path> queryDataFileNamePath(const std::string & name) const;
+
 private:
   // Private constructor so that InputParameters can only be created in certain places.
   InputParameters();
@@ -1149,6 +1158,8 @@ private:
     std::string _custom_type;
     /// The data pertaining to a command line parameter (empty if not a command line param)
     std::optional<CommandLineMetadata> _cl_data;
+    /// The searched path information pertaining to a DataFileName parameter
+    std::optional<Moose::DataFileUtils::Path> _data_file_name_path;
     /// The names of the parameters organized into groups
     std::string _group;
     /// The map of functions used for range checked parameters
@@ -1750,7 +1761,7 @@ InputParameters::checkConsistentType(const std::string & name_in) const
     mooseError("Attempting to set parameter \"",
                name,
                "\" with type (",
-               demangle(typeid(T).name()),
+               libMesh::demangle(typeid(T).name()),
                ")\nbut the parameter already exists as type (",
                it->second->type(),
                ")");
@@ -2099,7 +2110,7 @@ InputParameters::transferParam(const InputParameters & source_params,
       else
       {
         std::vector<Real> coupled_values;
-        for (const auto i : make_range(source_params.numberDefaultCoupledValues(name)))
+        for (const auto i : libMesh::make_range(source_params.numberDefaultCoupledValues(name)))
           coupled_values.push_back(source_params.defaultCoupledValue(name, i));
         addCoupledVar(p_name, coupled_values, description);
       }

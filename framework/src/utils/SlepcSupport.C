@@ -26,6 +26,8 @@
 #include "petscsnes.h"
 #include "slepceps.h"
 
+using namespace libMesh;
+
 namespace Moose
 {
 namespace SlepcSupport
@@ -119,6 +121,7 @@ getSlepcEigenProblemValidParams()
       "eigen_problem_type which_eigen_pairs n_eigen_pairs n_basis_vectors eigen_tol eigen_max_its "
       "free_power_iterations extra_power_iterations",
       "Eigen Solver");
+  params.addParamNamesToGroup("l_abs_tol", "Linear solver");
 
   return params;
 }
@@ -950,6 +953,13 @@ mooseSlepcEigenFormFunctionB(SNES snes, Vec x, Vec r, void * ctx)
 
     ierr = MatMult(B, x, r);
     CHKERRQ(ierr);
+
+    if (eigen_problem->bxNormProvided())
+    {
+      // User has provided a postprocessor. We need it updated
+      updateCurrentLocalSolution(eigen_nl.sys(), x);
+      eigen_problem->execute(EXEC_LINEAR);
+    }
   }
   else
     moosePetscSNESFormFunction(snes, x, r, ctx, eigen_nl.eigenVectorTag());
@@ -1003,6 +1013,13 @@ mooseSlepcEigenFormFunctionAB(SNES /*snes*/, Vec x, Vec Ax, Vec Bx, void * ctx)
     {
       ierr = VecScale(Bx, -1.);
       CHKERRQ(ierr);
+    }
+
+    if (eigen_problem->bxNormProvided())
+    {
+      // User has provided a postprocessor. We need it updated
+      updateCurrentLocalSolution(sys, x);
+      eigen_problem->execute(EXEC_LINEAR);
     }
 
     PetscFunctionReturn(PETSC_SUCCESS);

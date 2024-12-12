@@ -14,6 +14,8 @@
 #include "PetscSupport.h"
 #include "LStableDirk4.h"
 
+using namespace libMesh;
+
 registerMooseObject("MooseApp", AStableDirk4);
 
 InputParameters
@@ -92,7 +94,7 @@ AStableDirk4::computeTimeDerivatives()
   u_dot = *_solution;
   computeTimeDerivativeHelper(u_dot, _solution_old);
   u_dot.close();
-  _du_dot_du = 1. / _dt;
+  computeDuDotDu();
 }
 
 void

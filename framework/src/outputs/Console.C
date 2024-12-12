@@ -24,6 +24,8 @@
 // libMesh includes
 #include "libmesh/enum_norm_type.h"
 
+using namespace libMesh;
+
 registerMooseObject("MooseApp", Console);
 
 InputParameters
@@ -736,8 +738,22 @@ Console::outputSystemInformation()
   if (_system_info_flags.isValueSet("execution"))
     _console << ConsoleUtils::outputExecutionInformation(_app, *_problem_ptr);
 
+  if (_app.getParam<bool>("show_data_paths"))
+    _console << ConsoleUtils::outputDataFilePaths();
+
+  if (_app.getParam<bool>("show_data_params"))
+    _console << ConsoleUtils::outputDataFileParams(_app);
+
   if (_system_info_flags.isValueSet("output"))
     _console << ConsoleUtils::outputOutputInformation(_app);
+
+  if (!_app.getParam<bool>("use_legacy_initial_residual_evaluation_behavior"))
+    for (const auto i : make_range(_problem_ptr->numNonlinearSystems()))
+      if (_problem_ptr->getNonlinearSystemBase(i).usePreSMOResidual())
+      {
+        _console << ConsoleUtils::outputPreSMOResidualInformation();
+        break;
+      }
 
   // Output the legacy flags, these cannot be turned off so they become annoying to people.
   _console << ConsoleUtils::outputLegacyInformation(_app);

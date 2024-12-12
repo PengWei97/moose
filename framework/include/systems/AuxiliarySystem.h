@@ -55,16 +55,6 @@ public:
   virtual void addVariable(const std::string & var_type,
                            const std::string & name,
                            InputParameters & parameters) override;
-  /**
-   * Add a time integrator
-   * @param type Type of the integrator
-   * @param name The name of the integrator
-   * @param parameters Integrator params
-   */
-  void addTimeIntegrator(const std::string & type,
-                         const std::string & name,
-                         InputParameters & parameters) override;
-  using SystemBase::addTimeIntegrator;
 
   /**
    * Adds an auxiliary kernel
@@ -97,7 +87,7 @@ public:
   virtual void serializeSolution();
 
   // This is an empty function since the Aux system doesn't have a matrix!
-  virtual void augmentSparsity(SparsityPattern::Graph & /*sparsity*/,
+  virtual void augmentSparsity(libMesh::SparsityPattern::Graph & /*sparsity*/,
                                std::vector<dof_id_type> & /*n_nz*/,
                                std::vector<dof_id_type> & /*n_oz*/) override;
 
@@ -118,7 +108,7 @@ public:
   /**
    * Get the minimum quadrature order for evaluating elemental auxiliary variables
    */
-  virtual Order getMinQuadratureOrder() override;
+  virtual libMesh::Order getMinQuadratureOrder() override;
 
   /**
    * Indicated whether this system needs material properties on boundaries.
@@ -126,10 +116,10 @@ public:
    */
   bool needMaterialOnSide(BoundaryID bnd_id);
 
-  virtual System & sys() { return _sys; }
+  virtual libMesh::System & sys() { return _sys; }
 
-  virtual System & system() override { return _sys; }
-  virtual const System & system() const override { return _sys; }
+  virtual libMesh::System & system() override { return _sys; }
+  virtual const libMesh::System & system() const override { return _sys; }
 
   /// Copies the current solution into the previous nonlinear iteration solution
   virtual void copyCurrentIntoPreviousNL();
@@ -166,7 +156,7 @@ protected:
   template <typename AuxKernelType>
   void computeNodalVarsHelper(const MooseObjectWarehouse<AuxKernelType> & warehouse);
 
-  System & _sys;
+  libMesh::System & _sys;
 
   /// solution vector from nonlinear solver
   const NumericVector<Number> * _current_solution;

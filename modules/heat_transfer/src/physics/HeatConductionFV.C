@@ -209,7 +209,7 @@ HeatConductionFV::addFVBCs()
 }
 
 void
-HeatConductionFV::addNonlinearVariables()
+HeatConductionFV::addSolverVariables()
 {
   if (variableExists(_temperature_name, /*error_if_aux=*/true))
     return;
@@ -217,6 +217,7 @@ HeatConductionFV::addNonlinearVariables()
   const std::string variable_type = "MooseVariableFVReal";
   InputParameters params = getFactory().getValidParams(variable_type);
   params.set<std::vector<Real>>("scaling") = {getParam<Real>("temperature_scaling")};
+  params.set<SolverSystemName>("solver_sys") = getSolverSystem(_temperature_name);
 
   getProblem().addVariable(variable_type, _temperature_name, params);
 }

@@ -22,6 +22,8 @@
 #include "libmesh/type_n_tensor.h"
 #include "libmesh/fe_interface.h"
 
+using namespace libMesh;
+
 template <typename OutputType>
 MooseVariableData<OutputType>::MooseVariableData(const MooseVariableField<OutputType> & var,
                                                  SystemBase & sys,
@@ -77,7 +79,7 @@ MooseVariableData<OutputType>::MooseVariableData(const MooseVariableField<Output
 
   _is_nodal = (_continuity == C_ZERO || _continuity == C_ONE);
 
-  _time_integrator = _sys.getTimeIntegrator();
+  _time_integrator = _sys.queryTimeIntegrator(_var_num);
 
   switch (_element_type)
   {
@@ -1022,7 +1024,7 @@ MooseVariableData<OutputType>::computeMonomialValues()
   Real u_dotdot = 0;
   Real u_dot_old = 0;
   Real u_dotdot_old = 0;
-  const Real & du_dot_du = _sys.duDotDu();
+  const Real & du_dot_du = _sys.duDotDu(_var_num);
   const Real & du_dotdot_du = _sys.duDotDotDu();
 
   if (is_transient)
@@ -1149,7 +1151,7 @@ template <>
 void
 MooseVariableData<RealEigenVector>::computeMonomialValues()
 {
-  // Fixeme: will think of optimization later
+  // FIXME: will think of optimization later
   computeValues();
 }
 
@@ -1271,12 +1273,16 @@ MooseVariableData<OutputType>::computeAD(const unsigned int num_dofs, const unsi
   }
 
   if (_need_ad_u_dot && !_time_integrator)
+  {
     for (MooseIndex(nqp) qp = 0; qp < nqp; ++qp)
     {
       _ad_u_dot[qp] = _u_dot[qp];
       if (_need_ad_u_dotdot)
         _ad_u_dotdot[qp] = _u_dotdot[qp];
     }
+    for (unsigned int i = 0; i < num_dofs; i++)
+      _ad_dofs_dot[i] = _dof_values_dot[i];
+  }
 
   if (_need_ad_grad_u_dot && !_time_integrator)
     for (MooseIndex(nqp) qp = 0; qp < nqp; ++qp)
@@ -1771,7 +1777,7 @@ MooseVariableData<OutputType>::computeNodalValues()
     assignNodalValue();
 
     if (_need_ad)
-      fetchADDoFValues();
+      fetchADNodalValues();
   }
   else
     zeroSizeDofValues();
@@ -1779,11 +1785,16 @@ MooseVariableData<OutputType>::computeNodalValues()
 
 template <typename OutputType>
 void
-MooseVariableData<OutputType>::fetchADDoFValues()
+MooseVariableData<OutputType>::fetchADNodalValues()
 {
   auto n = _dof_indices.size();
   libmesh_assert(n);
   _ad_dof_values.resize(n);
+
+  if (_need_ad_u_dot)
+    _ad_dofs_dot.resize(n);
+  if (_need_ad_u_dotdot)
+    _ad_dofs_dotdot.resize(n);
 
   const bool do_derivatives =
       ADReal::do_derivatives && _sys.number() == _subproblem.currentNlSysNum();
@@ -1794,12 +1805,30 @@ MooseVariableData<OutputType>::fetchADDoFValues()
     if (do_derivatives)
       Moose::derivInsert(_ad_dof_values[i].derivatives(), _dof_indices[i], 1.);
     assignADNodalValue(_ad_dof_values[i], i);
+
+    if (_need_ad_u_dot)
+    {
+      if (_time_integrator && _time_integrator->dt())
+      {
+        _ad_dofs_dot[i] = _ad_dof_values[i];
+        _time_integrator->computeADTimeDerivatives(_ad_dofs_dot[i],
+                                                   _dof_indices[i],
+                                                   _need_ad_u_dotdot ? _ad_dofs_dotdot[i]
+                                                                     : _ad_real_dummy);
+      }
+      // Executing something with a time derivative at initial should not put a NaN
+      else if (_time_integrator && !_time_integrator->dt())
+        _ad_dofs_dot[i] = 0;
+      else
+        mooseError("AD nodal time derivatives not implemented for variables without a time "
+                   "integrator (auxiliary variables)");
+    }
   }
 }
 
 template <>
 void
-MooseVariableData<RealEigenVector>::fetchADDoFValues()
+MooseVariableData<RealEigenVector>::fetchADNodalValues()
 {
   mooseError("I do not know how to support AD with array variables");
 }

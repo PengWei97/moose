@@ -165,7 +165,7 @@ def run_executable(app_path, *args, mpi=None, suppress_output=False):
     A function for running an application.
     """
     import subprocess
-    if mpi and isinstance(mpi, int):
+    if mpi and isinstance(mpi, int) and mpi > 1:
         cmd = ['mpiexec', '-n', str(mpi), app_path]
     else:
         cmd = [app_path]
@@ -234,7 +234,7 @@ def check_configuration(packages, message=True):
         if re_operators.findall(_package):
             try:
                 _op = re_operators.findall(_package)[0]
-                (_package, _operator, _version) = re.findall(f'([.\w_-]+)([{_op}]+)(.*)',
+                (_package, _operator, _version) = re.findall(fr'([.\w_-]+)([{_op}]+)(.*)',
                                                              _package)[0]
             # Try and capture possible regex issues
             except IndexError:

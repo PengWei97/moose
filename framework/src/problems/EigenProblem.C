@@ -19,11 +19,15 @@
 #include "OutputWarehouse.h"
 #include "Function.h"
 #include "MooseVariableScalar.h"
+#include "UserObject.h"
 
 // libMesh includes
 #include "libmesh/system.h"
 #include "libmesh/eigen_solver.h"
 #include "libmesh/enum_eigen_solver_type.h"
+
+// Needed for LIBMESH_CHECK_ERR
+using libMesh::PetscSolverException;
 
 registerMooseObject("MooseApp", EigenProblem);
 
@@ -43,6 +47,9 @@ EigenProblem::validParams()
       0,
       "Which eigenvector is used to compute residual and also associated to nonlinear variable");
   params.addParam<PostprocessorName>("bx_norm", "A postprocessor describing the norm of Bx");
+
+  params.addParamNamesToGroup("negative_sign_eigen_kernel active_eigen_index bx_norm",
+                              "Eigenvalue solve");
 
   return params;
 }
@@ -292,8 +299,8 @@ EigenProblem::computeResidualTag(const NumericVector<Number> & soln,
   // specific system tags that we need for this instance
   _nl_eigen->disassociateDefaultVectorTags();
 
-  // Clear FE tags and first add the specific tag associated with the residual
-  _fe_vector_tags.clear();
+  // add the specific tag associated with the residual
+  mooseAssert(_fe_vector_tags.empty(), "This should be empty indicating a clean starting state");
   _fe_vector_tags.insert(tag);
 
   // Add any other user-added vector residual tags if they have associated vectors
@@ -308,6 +315,7 @@ EigenProblem::computeResidualTag(const NumericVector<Number> & soln,
 
   setCurrentNonlinearSystem(_nl_eigen->number());
   computeResidualTags(_fe_vector_tags);
+  _fe_vector_tags.clear();
 
   _nl_eigen->disassociateVectorFromTag(residual, tag);
 }
@@ -325,8 +333,8 @@ EigenProblem::computeResidualAB(const NumericVector<Number> & soln,
   // specific system tags that we need for this instance
   _nl_eigen->disassociateDefaultVectorTags();
 
-  // Clear FE tags and first add the specific tags associated with the residual
-  _fe_vector_tags.clear();
+  // add the specific tags associated with the residual
+  mooseAssert(_fe_vector_tags.empty(), "This should be empty indicating a clean starting state");
   _fe_vector_tags.insert(tagA);
   _fe_vector_tags.insert(tagB);
 
@@ -342,6 +350,7 @@ EigenProblem::computeResidualAB(const NumericVector<Number> & soln,
   _nl_eigen->setSolution(soln);
 
   computeResidualTags(_fe_vector_tags);
+  _fe_vector_tags.clear();
 
   _nl_eigen->disassociateVectorFromTag(residualA, tagA);
   _nl_eigen->disassociateVectorFromTag(residualB, tagB);
@@ -490,6 +499,16 @@ EigenProblem::checkProblemIntegrity()
 {
   FEProblemBase::checkProblemIntegrity();
   _nl_eigen->checkIntegrity();
+  if (_bx_norm_name)
+  {
+    if (!isNonlinearEigenvalueSolver())
+      paramWarning("bx_norm", "This parameter is only used for nonlinear solve types");
+    else if (auto & pp = getUserObjectBase(_bx_norm_name.value());
+             !pp.getExecuteOnEnum().contains(EXEC_LINEAR))
+      pp.paramError("execute_on",
+                    "If providing the Bx norm, this postprocessor must execute on linear e.g. "
+                    "during residual evaluations");
+  }
 }
 
 void
@@ -643,7 +662,7 @@ EigenProblem::init()
 }
 
 bool
-EigenProblem::nlConverged(unsigned int)
+EigenProblem::solverSystemConverged(unsigned int)
 {
   if (_solve)
     return _nl_eigen->converged();

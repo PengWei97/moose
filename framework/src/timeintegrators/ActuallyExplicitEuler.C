@@ -15,6 +15,8 @@
 // libMesh includes
 #include "libmesh/nonlinear_solver.h"
 
+using namespace libMesh;
+
 registerMooseObject("MooseApp", ActuallyExplicitEuler);
 
 InputParameters
@@ -49,8 +51,7 @@ ActuallyExplicitEuler::computeTimeDerivatives()
   u_dot = *_solution;
   computeTimeDerivativeHelper(u_dot, _solution_old);
   u_dot.close();
-
-  _du_dot_du = 1.0 / _dt;
+  computeDuDotDu();
 }
 
 void

@@ -12,6 +12,8 @@
 #include "FEProblem.h"
 #include "PetscSupport.h"
 
+using namespace libMesh;
+
 InputParameters
 ExplicitRK2::validParams()
 {
@@ -53,9 +55,7 @@ ExplicitRK2::computeTimeDerivatives()
   NumericVector<Number> & u_dot = *_sys.solutionUDot();
   u_dot = *_solution;
   computeTimeDerivativeHelper(u_dot, _solution_old, _solution_older);
-
-  _du_dot_du = 1. / _dt;
-  u_dot.close();
+  computeDuDotDu();
 }
 
 void

@@ -26,7 +26,7 @@ ExplicitTVDRK2::validParams()
 ExplicitTVDRK2::ExplicitTVDRK2(const InputParameters & parameters)
   : TimeIntegrator(parameters),
     _stage(1),
-    _residual_old(_nl.addVector("residual_old", false, GHOSTED)),
+    _residual_old(_nl.addVector("residual_old", false, libMesh::GHOSTED)),
     _solution_older(_sys.solutionState(2))
 {
   mooseInfo("ExplicitTVDRK2 and other multistage TimeIntegrators are known not to work with "
@@ -56,7 +56,7 @@ ExplicitTVDRK2::computeTimeDerivatives()
   u_dot = *_solution;
   computeTimeDerivativeHelper(u_dot, _solution_old, _solution_older);
 
-  _du_dot_du = 1. / _dt;
+  computeDuDotDu();
   u_dot.close();
 }
 

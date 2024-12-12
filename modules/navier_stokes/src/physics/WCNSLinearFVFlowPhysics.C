@@ -32,6 +32,10 @@ WCNSLinearFVFlowPhysics::validParams()
       "orthogonality_correction", false, "Whether to use orthogonality correction");
   params.set<unsigned short>("ghost_layers") = 1;
 
+  // This will be adapted based on the dimension
+  params.set<std::vector<SolverSystemName>>("system_names") = {
+      "u_system", "v_system", "w_system", "pressure_system"};
+
   // Not supported
   params.suppressParameter<bool>("add_flow_equations");
   params.set<bool>("porous_medium_treatment") = false;
@@ -67,15 +71,23 @@ WCNSLinearFVFlowPhysics::initializePhysicsAdditional()
   // - checking that the right systems are being created
   getProblem().needSolutionState(2, Moose::SolutionIterationType::Nonlinear);
   // TODO Ban all other nonlinear Physics for now
+
+  // Fix the default system names if using a different dimension
+  if (!isParamSetByUser("system_name"))
+  {
+    if (dimension() == 1)
+      _system_names = {"u_system", "pressure_system"};
+    else if (dimension() == 2)
+      _system_names = {"u_system", "v_system", "pressure_system"};
+  }
 }
 
 void
-WCNSLinearFVFlowPhysics::addNonlinearVariables()
+WCNSLinearFVFlowPhysics::addSolverVariables()
 {
   if (!_has_flow_equations)
     return;
 
-  // TODO Rename to system variable
   for (const auto d : make_range(dimension()))
     saveSolverVariableName(_velocity_names[d]);
   saveSolverVariableName(_pressure_name);
@@ -102,8 +114,8 @@ WCNSLinearFVFlowPhysics::addNonlinearVariables()
 
       auto params = getFactory().getValidParams(variable_type);
       assignBlocks(params, _blocks); // TODO: check wrt components
+      params.set<SolverSystemName>("solver_sys") = getSolverSystem(_velocity_names[d]);
 
-      params.set<SolverSystemName>("solver_sys") = v_short[d] + "_system";
       getProblem().addVariable(variable_type, _velocity_names[d], params);
     }
     else
@@ -122,8 +134,8 @@ WCNSLinearFVFlowPhysics::addNonlinearVariables()
 
     auto params = getFactory().getValidParams(pressure_type);
     assignBlocks(params, _blocks);
+    params.set<SolverSystemName>("solver_sys") = getSolverSystem(_pressure_name);
 
-    params.set<SolverSystemName>("solver_sys") = "pressure_system";
     getProblem().addVariable(pressure_type, _pressure_name, params);
   }
   else
@@ -236,7 +248,7 @@ WCNSLinearFVFlowPhysics::addINSMomentumPressureKernels()
 void
 WCNSLinearFVFlowPhysics::addINSMomentumGravityKernels()
 {
-  if (parameters().isParamValid("gravity"))
+  if (parameters().isParamValid("gravity") && !_solve_for_dynamic_pressure)
   {
     std::string kernel_type = "LinearFVSource";
     std::string kernel_name = prefix() + "ins_momentum_gravity_";
@@ -267,8 +279,8 @@ WCNSLinearFVFlowPhysics::addINSInletBC()
 {
   // Check the size of the BC parameters
   unsigned int num_velocity_functor_inlets = 0;
-  for (const auto & [bdy, momentum_outlet_type] : _momentum_inlet_types)
-    if (momentum_outlet_type == "fixed-velocity" || momentum_outlet_type == "fixed-pressure")
+  for (const auto & [bdy, momentum_inlet_type] : _momentum_inlet_types)
+    if (momentum_inlet_type == "fixed-velocity" || momentum_inlet_type == "fixed-pressure")
       num_velocity_functor_inlets++;
 
   if (num_velocity_functor_inlets != _momentum_inlet_functors.size())

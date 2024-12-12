@@ -44,11 +44,15 @@ public:
   static InputParameters validParams();
   RhieChowMassFlux(const InputParameters & params);
 
-  /// Get the face velocity (used in advection terms)
+  /// Get the face velocity times density (used in advection terms)
   Real getMassFlux(const FaceInfo & fi) const;
+  /// Get the volumetric face flux (used in advection terms)
+  Real getVolumetricFaceFlux(const FaceInfo & fi) const;
 
   /// Initialize the container for face velocities
   void initFaceMassFlux();
+  /// Initialize the coupling fields (HbyA and Ainv)
+  void initCouplingField();
   /// Update the values of the face velocities in the containers
   void computeFaceMassFlux();
   /// Update the cell values of the velocity variables
@@ -157,7 +161,7 @@ protected:
   std::vector<unsigned int> _global_momentum_system_numbers;
 
   /// Pointers to the momentum equation implicit system(s) from libmesh
-  std::vector<LinearImplicitSystem *> _momentum_implicit_systems;
+  std::vector<libMesh::LinearImplicitSystem *> _momentum_implicit_systems;
 
   /// Pointer to the pressure system
   const LinearSystem * _pressure_system;

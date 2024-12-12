@@ -20,12 +20,12 @@ class TestHarnessTester(TestHarnessTestCase):
         """
 
         with self.assertRaises(subprocess.CalledProcessError) as cm:
-            self.runTests('-i', 'csv_validation_tester', '--no-color').decode('utf-8')
+            self.runTests('-i', 'csv_validation_tester', '--no-color')
 
         e = cm.exception
-        output = e.output.decode('utf-8')
-        self.assertRegexpMatches(output, r'test_harness\.csv_validation_tester_01.*?OK')
-        self.assertRegexpMatches(output, r'test_harness\.csv_validation_tester_02.*?FAILED \(DIFF\)')
+        output = e.output
+        self.assertRegex(output, r'test_harness\.csv_validation_tester_01.*?OK')
+        self.assertRegex(output, r'test_harness\.csv_validation_tester_02.*?FAILED \(DIFF\)')
 
     @unittest.skipIf(sys.platform == 'linux' and sys.version_info[0] == 3 and sys.version_info[1] < 7, "Python 3.6 print doesn't handle \xb1 on linux")
     def testCSVValidationTesterVerbose(self):
@@ -34,9 +34,9 @@ class TestHarnessTester(TestHarnessTestCase):
         """
 
         with self.assertRaises(subprocess.CalledProcessError) as cm:
-            self.runTests('-i', 'csv_validation_tester', '--verbose', '--no-color').decode('utf-8')
+            self.runTests('-i', 'csv_validation_tester', '--verbose', '--no-color')
 
         e = cm.exception
-        output = e.output.decode('utf-8')
-        self.assertRegexpMatches(output, 'csv_validation_tester_01.csv                        | 0.00 \xb1 0.01          | 0.01 \xb1 0.01')
-        self.assertRegexpMatches(output, 'csv_validation_tester_02.csv                        | 0.00 \xb1 0.01          | 0.01 \xb1 0.00')
+        output = e.output
+        self.assertRegex(output, 'csv_validation_tester_01.csv                        | 0.00 \xb1 0.01          | 0.01 \xb1 0.01')
+        self.assertRegex(output, 'csv_validation_tester_02.csv                        | 0.00 \xb1 0.01          | 0.01 \xb1 0.00')

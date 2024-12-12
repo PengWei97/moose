@@ -25,7 +25,7 @@ ImplicitMidpoint::validParams()
 ImplicitMidpoint::ImplicitMidpoint(const InputParameters & parameters)
   : TimeIntegrator(parameters),
     _stage(1),
-    _residual_stage1(_nl.addVector("residual_stage1", false, GHOSTED))
+    _residual_stage1(_nl.addVector("residual_stage1", false, libMesh::GHOSTED))
 {
   mooseInfo("ImplicitMidpoint and other multistage TimeIntegrators are known not to work with "
             "Materials/AuxKernels that accumulate 'state' and should be used with caution.");
@@ -45,7 +45,7 @@ ImplicitMidpoint::computeTimeDerivatives()
   u_dot = *_solution;
   computeTimeDerivativeHelper(u_dot, _solution_old);
   u_dot.close();
-  _du_dot_du = 1. / _dt;
+  computeDuDotDu();
 }
 
 void

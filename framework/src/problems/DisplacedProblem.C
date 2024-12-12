@@ -24,6 +24,8 @@
 #include "libmesh/fe_interface.h"
 #include "libmesh/mesh_base.h"
 
+using namespace libMesh;
+
 registerMooseObject("MooseApp", DisplacedProblem);
 
 InputParameters
@@ -194,9 +196,9 @@ void
 DisplacedProblem::addTimeIntegrator()
 {
   for (const auto nl_sys_num : make_range(_mproblem.numNonlinearSystems()))
-    _displaced_solver_systems[nl_sys_num]->addTimeIntegrator(
-        _mproblem.getNonlinearSystemBase(nl_sys_num).getSharedTimeIntegrator());
-  _displaced_aux->addTimeIntegrator(_mproblem.getAuxiliarySystem().getSharedTimeIntegrator());
+    _displaced_solver_systems[nl_sys_num]->copyTimeIntegrators(
+        _mproblem.getNonlinearSystemBase(nl_sys_num));
+  _displaced_aux->copyTimeIntegrators(_mproblem.getAuxiliarySystem());
 }
 
 void
@@ -875,7 +877,7 @@ DisplacedProblem::reinitElemNeighborAndLowerD(const Elem * elem,
   reinitNeighbor(elem, side, tid);
 
   const Elem * lower_d_elem = _mesh.getLowerDElem(elem, side);
-  if (lower_d_elem && lower_d_elem->subdomain_id() == Moose::INTERNAL_SIDE_LOWERD_ID)
+  if (lower_d_elem && _mesh.interiorLowerDBlocks().count(lower_d_elem->subdomain_id()) > 0)
     reinitLowerDElem(lower_d_elem, tid);
   else
   {
@@ -884,7 +886,7 @@ DisplacedProblem::reinitElemNeighborAndLowerD(const Elem * elem,
     auto & neighbor_side = _assembly[tid][currentNlSysNum()]->neighborSide();
     const Elem * lower_d_elem_neighbor = _mesh.getLowerDElem(neighbor, neighbor_side);
     if (lower_d_elem_neighbor &&
-        lower_d_elem_neighbor->subdomain_id() == Moose::INTERNAL_SIDE_LOWERD_ID)
+        _mesh.interiorLowerDBlocks().count(lower_d_elem_neighbor->subdomain_id()) > 0)
     {
       auto qps = _assembly[tid][currentNlSysNum()]->qPointsFaceNeighbor().stdVector();
       std::vector<Point> reference_points;
@@ -1143,9 +1145,9 @@ DisplacedProblem::refMesh()
 }
 
 bool
-DisplacedProblem::nlConverged(const unsigned int nl_sys_num)
+DisplacedProblem::solverSystemConverged(const unsigned int sys_num)
 {
-  return _mproblem.converged(nl_sys_num);
+  return _mproblem.converged(sys_num);
 }
 
 bool

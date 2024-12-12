@@ -23,7 +23,7 @@ public:
 
   static InputParameters validParams();
 
-  ADReal boundaryValue(const FaceInfo & fi) const override;
+  ADReal boundaryValue(const FaceInfo & fi, const Moose::StateArg & state) const override;
 
 private:
   /// the dimension of the domain
@@ -53,7 +53,7 @@ private:
   NS::WallTreatmentEnum _wall_treatment;
 
   /// For Newton solves we want to add extra zero-valued terms regardless of y-plus to avoid sparsity pattern changes as y-plus changes near the walls
-  const bool _newton_solve;
+  const bool _preserve_sparsity_pattern;
 
   // Mu_t evaluated at y+=30 for blending purposes
   const Real _mut_30 =

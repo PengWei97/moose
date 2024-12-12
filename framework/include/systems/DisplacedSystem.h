@@ -21,6 +21,8 @@ class TransientSystem;
 typedef TransientSystem<ExplicitSystem> TransientExplicitSystem;
 }
 
+using libMesh::TransientExplicitSystem;
+
 class DisplacedSystem : public SystemBase
 {
 public:
@@ -83,12 +85,12 @@ public:
     _undisplaced_system.disassociateDefaultVectorTags();
   }
 
-  virtual void associateMatrixToTag(SparseMatrix<Number> & matrix, TagID tag) override
+  virtual void associateMatrixToTag(libMesh::SparseMatrix<Number> & matrix, TagID tag) override
   {
     _undisplaced_system.associateMatrixToTag(matrix, tag);
   }
 
-  virtual void disassociateMatrixFromTag(SparseMatrix<Number> & matrix, TagID tag) override
+  virtual void disassociateMatrixFromTag(libMesh::SparseMatrix<Number> & matrix, TagID tag) override
   {
     _undisplaced_system.disassociateMatrixFromTag(matrix, tag);
   }
@@ -149,9 +151,9 @@ public:
     return _undisplaced_system.solutionUDotDotOld();
   }
 
-  virtual Number & duDotDu() override { return _undisplaced_system.duDotDu(); }
+  virtual std::vector<Number> & duDotDus() override { return _undisplaced_system.duDotDus(); }
   virtual Number & duDotDotDu() override { return _undisplaced_system.duDotDotDu(); }
-  virtual const Number & duDotDu() const override { return _undisplaced_system.duDotDu(); }
+  virtual const Number & duDotDu(unsigned int var_num = 0) const override;
   virtual const Number & duDotDotDu() const override { return _undisplaced_system.duDotDotDu(); }
 
   virtual void addDotVectors() override { _undisplaced_system.addDotVectors(); }
@@ -178,7 +180,7 @@ public:
    * This is an empty function since the displaced system doesn't have a matrix!
    * All sparsity pattern modification will be taken care of by the undisplaced system directly
    */
-  virtual void augmentSparsity(SparsityPattern::Graph & /*sparsity*/,
+  virtual void augmentSparsity(libMesh::SparsityPattern::Graph & /*sparsity*/,
                                std::vector<dof_id_type> & /*n_nz*/,
                                std::vector<dof_id_type> & /*n_oz*/) override
   {
@@ -235,11 +237,11 @@ public:
                                 Moose::SolutionIterationType iteration_type =
                                     Moose::SolutionIterationType::Time) const override;
 
-  virtual SparseMatrix<Number> & getMatrix(TagID tag) override
+  virtual libMesh::SparseMatrix<Number> & getMatrix(TagID tag) override
   {
     return _undisplaced_system.getMatrix(tag);
   }
-  virtual const SparseMatrix<Number> & getMatrix(TagID tag) const override
+  virtual const libMesh::SparseMatrix<Number> & getMatrix(TagID tag) const override
   {
     return _undisplaced_system.getMatrix(tag);
   }
@@ -248,9 +250,6 @@ public:
 
   virtual System & system() override;
   virtual const System & system() const override;
-
-  using SystemBase::addTimeIntegrator;
-  void addTimeIntegrator(std::shared_ptr<TimeIntegrator> ti) override;
 
   virtual void compute(ExecFlagType) override {}
 
@@ -296,4 +295,10 @@ DisplacedSystem::hasSolutionState(const unsigned int state,
                                   const Moose::SolutionIterationType iteration_type) const
 {
   return _undisplaced_system.hasSolutionState(state, iteration_type);
+}
+
+inline const Number &
+DisplacedSystem::duDotDu(const unsigned int var_num) const
+{
+  return _undisplaced_system.duDotDu(var_num);
 }

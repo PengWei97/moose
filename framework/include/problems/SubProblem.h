@@ -68,6 +68,9 @@ class NumericVector;
 class System;
 } // namespace libMesh
 
+using libMesh::CouplingMatrix;
+using libMesh::EquationSystems;
+
 /**
  * Generic class for solving transient nonlinear problems
  *
@@ -80,7 +83,7 @@ public:
   SubProblem(const InputParameters & parameters);
   virtual ~SubProblem();
 
-  virtual EquationSystems & es() = 0;
+  virtual libMesh::EquationSystems & es() = 0;
   virtual MooseMesh & mesh() = 0;
   virtual const MooseMesh & mesh() const = 0;
   virtual const MooseMesh & mesh(bool use_displaced) const = 0;
@@ -88,17 +91,22 @@ public:
   virtual bool checkNonlocalCouplingRequirement() { return _requires_nonlocal_coupling; }
 
   /**
-   * @return whether the given \p nl_sys_num is converged
+   * @return whether the given solver system \p sys_num is converged
    */
-  virtual bool nlConverged(const unsigned int nl_sys_num) { return converged(nl_sys_num); }
+  virtual bool solverSystemConverged(const unsigned int sys_num) { return converged(sys_num); }
 
   /**
-   * Eventually we want to convert this virtual over to taking a nonlinear system number argument.
-   * We will have to first convert apps to use nlConverged, and then once that is done, we can
-   * change this signature. Then we can go through the apps again and convert back to this changed
-   * API
+   * @return whether the given nonlinear system \p nl_sys_num is converged.
    */
-  virtual bool converged(const unsigned int nl_sys_num) { return nlConverged(nl_sys_num); }
+  virtual bool nlConverged(const unsigned int nl_sys_num);
+
+  /**
+   * Eventually we want to convert this virtual over to taking a solver system number argument.
+   * We will have to first convert apps to use solverSystemConverged, and then once that is done, we
+   * can change this signature. Then we can go through the apps again and convert back to this
+   * changed API
+   */
+  virtual bool converged(const unsigned int sys_num) { return solverSystemConverged(sys_num); }
 
   /**
    * @return the nonlinear system number corresponding to the provided \p nl_sys_name
@@ -143,6 +151,22 @@ public:
    */
   virtual TagID addVectorTag(const TagName & tag_name,
                              const Moose::VectorTagType type = Moose::VECTOR_TAG_RESIDUAL);
+
+  /**
+   * Adds a vector tag to the list of vectors that will not be zeroed
+   * when other tagged vectors are
+   * @param tag the TagID of the vector that will be manually managed
+   */
+  void addNotZeroedVectorTag(const TagID tag);
+
+  /**
+   * Checks if a vector tag is in the list of vectors that will not be zeroed
+   * when other tagged vectors are
+   * @param tag the TagID of the vector that is currently being checked
+   * @returns false if the tag is not within the set of vectors that are
+   *          intended to not be zero or if the set is empty. returns true otherwise
+   */
+  bool vectorTagNotZeroed(const TagID tag) const;
 
   /**
    * Get a VectorTag from a TagID.
@@ -281,7 +305,7 @@ public:
                                                   const std::string & var_name) = 0;
 
   /// Returns the equation system containing the variable provided
-  virtual System & getSystem(const std::string & var_name) = 0;
+  virtual libMesh::System & getSystem(const std::string & var_name) = 0;
 
   /**
    * Set the MOOSE variables to be reinited on each element.
@@ -360,17 +384,19 @@ public:
   virtual void cacheResidualNeighbor(const THREAD_ID tid);
   virtual void addCachedResidual(const THREAD_ID tid);
 
-  virtual void setResidual(NumericVector<Number> & residual, const THREAD_ID tid) = 0;
-  virtual void setResidualNeighbor(NumericVector<Number> & residual, const THREAD_ID tid) = 0;
+  virtual void setResidual(libMesh::NumericVector<libMesh::Number> & residual,
+                           const THREAD_ID tid) = 0;
+  virtual void setResidualNeighbor(libMesh::NumericVector<libMesh::Number> & residual,
+                                   const THREAD_ID tid) = 0;
 
   virtual void addJacobian(const THREAD_ID tid) = 0;
   virtual void addJacobianNeighbor(const THREAD_ID tid) = 0;
   virtual void addJacobianNeighborLowerD(const THREAD_ID tid) = 0;
   virtual void addJacobianLowerD(const THREAD_ID tid) = 0;
-  virtual void addJacobianNeighbor(SparseMatrix<Number> & jacobian,
+  virtual void addJacobianNeighbor(libMesh::SparseMatrix<libMesh::Number> & jacobian,
                                    unsigned int ivar,
                                    unsigned int jvar,
-                                   const DofMap & dof_map,
+                                   const libMesh::DofMap & dof_map,
                                    std::vector<dof_id_type> & dof_indices,
                                    std::vector<dof_id_type> & neighbor_dof_indices,
                                    const std::set<TagID> & tags,
@@ -643,7 +669,10 @@ public:
   /**
    * @return the nonlocal coupling matrix for the i'th nonlinear system
    */
-  const CouplingMatrix & nonlocalCouplingMatrix(const unsigned i) const { return _nonlocal_cm[i]; }
+  const libMesh::CouplingMatrix & nonlocalCouplingMatrix(const unsigned i) const
+  {
+    return _nonlocal_cm[i];
+  }
 
   /**
    * Returns true if the problem is in the process of computing the Jacobian
@@ -742,7 +771,7 @@ public:
   /**
    * The coupling matrix defining what blocks exist in the preconditioning matrix
    */
-  virtual const CouplingMatrix * couplingMatrix(const unsigned int nl_sys_num) const = 0;
+  virtual const libMesh::CouplingMatrix * couplingMatrix(const unsigned int nl_sys_num) const = 0;
 
 private:
   /**
@@ -754,7 +783,7 @@ private:
    * MeshBase (the underlying MeshBase will be the same for every system held by this object's
    * EquationSystems object)
    */
-  void cloneAlgebraicGhostingFunctor(GhostingFunctor & algebraic_gf, bool to_mesh = true);
+  void cloneAlgebraicGhostingFunctor(libMesh::GhostingFunctor & algebraic_gf, bool to_mesh = true);
 
   /**
    * Creates (n_sys - 1) clones of the provided coupling ghosting functor (corresponding to the
@@ -765,28 +794,28 @@ private:
    * MeshBase (the underlying MeshBase will be the same for every system held by this object's
    * EquationSystems object)
    */
-  void cloneCouplingGhostingFunctor(GhostingFunctor & coupling_gf, bool to_mesh = true);
+  void cloneCouplingGhostingFunctor(libMesh::GhostingFunctor & coupling_gf, bool to_mesh = true);
 
 public:
   /**
    * Add an algebraic ghosting functor to this problem's DofMaps
    */
-  void addAlgebraicGhostingFunctor(GhostingFunctor & algebraic_gf, bool to_mesh = true);
+  void addAlgebraicGhostingFunctor(libMesh::GhostingFunctor & algebraic_gf, bool to_mesh = true);
 
   /**
    * Add a coupling functor to this problem's DofMaps
    */
-  void addCouplingGhostingFunctor(GhostingFunctor & coupling_gf, bool to_mesh = true);
+  void addCouplingGhostingFunctor(libMesh::GhostingFunctor & coupling_gf, bool to_mesh = true);
 
   /**
    * Remove an algebraic ghosting functor from this problem's DofMaps
    */
-  void removeAlgebraicGhostingFunctor(GhostingFunctor & algebraic_gf);
+  void removeAlgebraicGhostingFunctor(libMesh::GhostingFunctor & algebraic_gf);
 
   /**
    * Remove a coupling ghosting functor from this problem's DofMaps
    */
-  void removeCouplingGhostingFunctor(GhostingFunctor & coupling_gf);
+  void removeCouplingGhostingFunctor(libMesh::GhostingFunctor & coupling_gf);
 
   /**
    * Automatic scaling setter
@@ -1008,7 +1037,7 @@ protected:
   /// The Factory for building objects
   Factory & _factory;
 
-  std::vector<CouplingMatrix> _nonlocal_cm; /// nonlocal coupling matrix;
+  std::vector<libMesh::CouplingMatrix> _nonlocal_cm; /// nonlocal coupling matrix;
 
   DiracKernelInfo _dirac_kernel_info;
 
@@ -1079,6 +1108,9 @@ protected:
 
   /// AD flag indicating whether **any** AD objects have been added
   bool _have_ad_objects;
+
+  /// the list of vector tags that will not be zeroed when all other tags are
+  std::unordered_set<TagID> _not_zeroed_tagged_vectors;
 
 private:
   /**
@@ -1151,13 +1183,15 @@ private:
   /// A map from a root algebraic ghosting functor, e.g. the ghosting functor passed into \p
   /// removeAlgebraicGhostingFunctor, to its clones in other systems, e.g. systems other than system
   /// 0
-  std::unordered_map<GhostingFunctor *, std::vector<std::shared_ptr<GhostingFunctor>>>
+  std::unordered_map<libMesh::GhostingFunctor *,
+                     std::vector<std::shared_ptr<libMesh::GhostingFunctor>>>
       _root_alg_gf_to_sys_clones;
 
   /// A map from a root coupling ghosting functor, e.g. the ghosting functor passed into \p
   /// removeCouplingGhostingFunctor, to its clones in other systems, e.g. systems other than system
   /// 0
-  std::unordered_map<GhostingFunctor *, std::vector<std::shared_ptr<GhostingFunctor>>>
+  std::unordered_map<libMesh::GhostingFunctor *,
+                     std::vector<std::shared_ptr<libMesh::GhostingFunctor>>>
       _root_coupling_gf_to_sys_clones;
 
   /// Whether p-refinement has been requested at any point during the simulation
@@ -1453,5 +1487,5 @@ SubProblem::setCurrentlyComputingResidualAndJacobian(
 
 namespace Moose
 {
-void initial_condition(EquationSystems & es, const std::string & system_name);
+void initial_condition(libMesh::EquationSystems & es, const std::string & system_name);
 } // namespace Moose

@@ -57,20 +57,24 @@ NSFVBase::commonMomentumEquationParams()
       "dynamic_viscosity", NS::mu, "The name of the dynamic viscosity");
   params.addParam<MooseFunctorName>("density", NS::density, "The name of the density");
 
+  // Dynamic pressure parameter
+  // TODO: make default
+  params.addParam<bool>("solve_for_dynamic_pressure",
+                        false,
+                        "Whether to solve for the dynamic pressure instead of the total pressure");
+
+  // Pressure pin parameters
   params.addParam<bool>(
       "pin_pressure", false, "Switch to enable pressure shifting for incompressible simulations.");
-
   MooseEnum s_type("average point-value average-uo point-value-uo", "average-uo");
   params.addParam<MooseEnum>(
       "pinned_pressure_type",
       s_type,
       "Types for shifting (pinning) the pressure in case of incompressible simulations.");
-
   params.addParam<Point>(
       "pinned_pressure_point",
       Point(),
       "The XYZ coordinates where pressure needs to be pinned for incompressible simulations.");
-
   params.addParam<PostprocessorName>(
       "pinned_pressure_value",
       "1e5",
@@ -328,10 +332,11 @@ NSFVBase::commonTurbulenceParams()
                                     1,
                                     "turbulent_prandtl > 0",
                                     "Turbulent Prandtl number for energy turbulent diffusion");
-  params.addParam<std::vector<Real>>("passive_scalar_schmidt_number",
-                                     std::vector<Real>(),
-                                     "Schmidt numbers used for the passive scalar fields.");
-
+  params.addParam<std::vector<Real>>(
+      "passive_scalar_schmidt_number",
+      std::vector<Real>(),
+      "Turbulent Schmidt numbers used for the passive scalar fields.");
+  params.deprecateParam("passive_scalar_schmidt_number", "Sc_t", "01/01/2025");
   params.addParamNamesToGroup("mixing_length_walls mixing_length_aux_execute_on von_karman_const "
                               "von_karman_const_0 mixing_length_delta",
                               "Mixing length model");

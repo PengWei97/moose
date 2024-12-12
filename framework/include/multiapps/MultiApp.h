@@ -226,9 +226,10 @@ public:
    * @param displaced_mesh True if the bounding box is retrieved for the displaced mesh, other false
    * @param coord_transform An optional coordinate transformation object
    */
-  virtual BoundingBox getBoundingBox(unsigned int app,
-                                     bool displaced_mesh,
-                                     const MultiAppCoordTransform * coord_transform = nullptr);
+  virtual libMesh::BoundingBox
+  getBoundingBox(unsigned int app,
+                 bool displaced_mesh,
+                 const MultiAppCoordTransform * coord_transform = nullptr);
 
   /**
    * Get the FEProblemBase this MultiApp is part of.
@@ -268,7 +269,8 @@ public:
    * @param var_name The name of the variable you are going to be transferring to.
    * @return The vector to fill.
    */
-  virtual NumericVector<Number> & appTransferVector(unsigned int app, std::string var_name);
+  virtual libMesh::NumericVector<libMesh::Number> & appTransferVector(unsigned int app,
+                                                                      std::string var_name);
 
   /**
    * @return Number of Global Apps in this MultiApp
@@ -375,7 +377,8 @@ public:
    * Transform a bounding box according to the transformations in the provided coordinate
    * transformation object
    */
-  static void transformBoundingBox(BoundingBox & box, const MultiAppCoordTransform & transform);
+  static void transformBoundingBox(libMesh::BoundingBox & box,
+                                   const MultiAppCoordTransform & transform);
 
   /**
    * Sets all the app's output file bases. @see MooseApp::setOutputFileBase for usage
@@ -451,8 +454,8 @@ protected:
   void createApps();
 
   /**
-   * Reserve the solution from the previous simulation,
-   *  and it is used as an initial guess for the next run
+   * Preserve the solution from the previous simulation,
+   * and it is used as an initial guess for the next run
    */
   void keepSolutionDuringRestore(bool keep_solution_during_restore);
 
@@ -541,7 +544,7 @@ protected:
   std::vector<bool> _has_bounding_box;
 
   /// This multi-app's bounding box
-  std::vector<BoundingBox> _bounding_box;
+  std::vector<libMesh::BoundingBox> _bounding_box;
 
   /// Relative bounding box inflation
   Real _inflation;
@@ -594,11 +597,17 @@ protected:
   /// Flag indicates if or not restart from the latest solution
   bool _keep_solution_during_restore;
 
+  /// Flag indicates if or not restart the auxiliary system from the latest auxiliary solution
+  bool _keep_aux_solution_during_restore;
+
   /// Whether or not to skip restoring completely
   const bool _no_restore;
 
   /// The solution from the end of the previous solve, this is cloned from the Nonlinear solution during restore
-  std::vector<std::unique_ptr<NumericVector<Real>>> _end_solutions;
+  std::vector<std::unique_ptr<libMesh::NumericVector<Real>>> _end_solutions;
+
+  /// The auxiliary solution from the end of the previous solve, this is cloned from the auxiliary solution during restore
+  std::vector<std::unique_ptr<NumericVector<Real>>> _end_aux_solutions;
 
   /// The app configuration resulting from calling init
   LocalRankConfig _rank_config;

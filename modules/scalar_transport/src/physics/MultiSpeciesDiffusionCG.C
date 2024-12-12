@@ -228,7 +228,7 @@ MultiSpeciesDiffusionCG::addFEBCs()
 }
 
 void
-MultiSpeciesDiffusionCG::addNonlinearVariables()
+MultiSpeciesDiffusionCG::addSolverVariables()
 {
   for (const auto & var_name : _species_names)
   {
@@ -247,6 +247,7 @@ MultiSpeciesDiffusionCG::addNonlinearVariables()
     InputParameters params = getFactory().getValidParams(variable_type);
     params.set<MooseEnum>("order") = getParam<MooseEnum>("variable_order");
     assignBlocks(params, _blocks);
+    params.set<SolverSystemName>("solver_sys") = getSolverSystem(var_name);
 
     getProblem().addVariable(variable_type, var_name, params);
   }

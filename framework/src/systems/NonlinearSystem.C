@@ -22,6 +22,7 @@
 #include "HDGPrimalSolutionUpdateThread.h"
 #include "HDGKernel.h"
 #include "AuxiliarySystem.h"
+#include "Console.h"
 
 #include "libmesh/nonlinear_solver.h"
 #include "libmesh/petsc_nonlinear_solver.h"
@@ -30,6 +31,8 @@
 #include "libmesh/diagonal_matrix.h"
 #include "libmesh/default_coupling.h"
 #include "libmesh/petsc_solver_exception.h"
+
+using namespace libMesh;
 
 namespace Moose
 {
@@ -163,7 +166,7 @@ NonlinearSystem::solve()
     _nl_implicit_sys.nonlinear_solver->postcheck = Moose::compute_postcheck;
 
   // reset solution invalid counter for the time step
-  if (_time_integrator)
+  if (!_time_integrators.empty())
     _app.solutionInvalidity().resetSolutionInvalidTimeStep();
 
   if (shouldEvaluatePreSMOResidual())
@@ -175,7 +178,10 @@ NonlinearSystem::solve()
     _computing_pre_smo_residual = false;
     _nl_implicit_sys.rhs->close();
     _pre_smo_residual = _nl_implicit_sys.rhs->l2_norm();
-    _console << "Pre-SMO residual: " << _pre_smo_residual << std::endl;
+    _console << " * Nonlinear |R| = "
+             << Console::outputNorm(std::numeric_limits<Real>::max(), _pre_smo_residual)
+             << " (Before preset BCs, predictors, correctors, and constraints)\n";
+    _console << std::flush;
   }
 
   const bool presolve_succeeded = preSolve();
@@ -184,16 +190,32 @@ NonlinearSystem::solve()
 
   potentiallySetupFiniteDifferencing();
 
-  if (_time_integrator)
+  const bool time_integrator_solve = std::any_of(_time_integrators.begin(),
+                                                 _time_integrators.end(),
+                                                 [](auto & ti) { return ti->overridesSolve(); });
+  if (time_integrator_solve)
+    mooseAssert(_time_integrators.size() == 1,
+                "If solve is overridden, then there must be only one time integrator");
+
+  if (time_integrator_solve)
+    _time_integrators.front()->solve();
+  else
+    system().solve();
+
+  for (auto & ti : _time_integrators)
   {
-    _time_integrator->solve();
-    _time_integrator->postSolve();
-    _n_iters = _time_integrator->getNumNonlinearIterations();
-    _n_linear_iters = _time_integrator->getNumLinearIterations();
+    if (!ti->overridesSolve())
+      ti->setNumIterationsLastSolve();
+    ti->postSolve();
+  }
+
+  if (!_time_integrators.empty())
+  {
+    _n_iters = _time_integrators.front()->getNumNonlinearIterations();
+    _n_linear_iters = _time_integrators.front()->getNumLinearIterations();
   }
   else
   {
-    system().solve();
     _n_iters = _nl_implicit_sys.n_nonlinear_iterations();
     _n_linear_iters = _nl_implicit_sys.nonlinear_solver->get_total_linear_iterations();
   }
@@ -215,29 +237,22 @@ NonlinearSystem::solve()
 }
 
 void
-NonlinearSystem::stopSolve(const ExecFlagType & exec_flag)
+NonlinearSystem::stopSolve(const ExecFlagType & exec_flag,
+                           const std::set<TagID> & vector_tags_to_close)
 {
   PetscNonlinearSolver<Real> & solver =
       static_cast<PetscNonlinearSolver<Real> &>(*sys().nonlinear_solver);
 
   if (exec_flag == EXEC_LINEAR || exec_flag == EXEC_POSTCHECK)
   {
-    auto ierr = SNESSetFunctionDomainError(solver.snes());
-    LIBMESH_CHKERR(ierr);
+    LibmeshPetscCall(SNESSetFunctionDomainError(solver.snes()));
 
     // Clean up by getting vectors into a valid state for a
-    // (possible) subsequent solve.  There may be more than just
-    // these...
-    _nl_implicit_sys.rhs->close();
-    if (_Re_time)
-      _Re_time->close();
-    _Re_non_time->close();
+    // (possible) subsequent solve.
+    closeTaggedVectors(vector_tags_to_close);
   }
   else if (exec_flag == EXEC_NONLINEAR)
-  {
-    auto ierr = SNESSetJacobianDomainError(solver.snes());
-    LIBMESH_CHKERR(ierr);
-  }
+    LibmeshPetscCall(SNESSetJacobianDomainError(solver.snes()));
   else
     mooseError("Unsupported execute flag: ", Moose::stringify(exec_flag));
 }

@@ -25,6 +25,8 @@
 #include <iostream>
 #include <fstream>
 
+using namespace libMesh;
+
 registerMooseObject("MooseApp", AB2PredictorCorrector);
 
 InputParameters
@@ -166,8 +168,10 @@ Real
 AB2PredictorCorrector::estimateTimeError(NumericVector<Number> & solution)
 {
   _pred1 = _fe_problem.getNonlinearSystemBase(/*nl_sys=*/0).getPredictor()->solutionPredictor();
-  TimeIntegrator * ti = _fe_problem.getNonlinearSystemBase(/*nl_sys=*/0).getTimeIntegrator();
-  auto scheme = Moose::stringToEnum<Moose::TimeIntegratorType>(ti->type());
+  const auto & ti =
+      _fe_problem.getNonlinearSystemBase(/*nl_sys=*/0).getTimeIntegrator(/*var_num=*/0);
+
+  auto scheme = Moose::stringToEnum<Moose::TimeIntegratorType>(ti.type());
   Real dt_old = _my_dt_old;
   if (dt_old == 0)
     dt_old = _dt;

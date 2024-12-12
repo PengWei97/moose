@@ -31,8 +31,6 @@ INSFVTurbulentViscosityWallFunction::validParams()
   MooseEnum wall_treatment("eq_newton eq_incremental eq_linearized neq", "neq");
   params.addParam<MooseEnum>(
       "wall_treatment", wall_treatment, "The method used for computing the wall functions");
-  params.addParam<bool>("newton_solve", false, "Whether a Newton nonlinear solve is being used");
-  params.addParamNamesToGroup("newton_solve", "Advanced");
   return params;
 }
 
@@ -49,12 +47,13 @@ INSFVTurbulentViscosityWallFunction::INSFVTurbulentViscosityWallFunction(
     _k(getFunctor<ADReal>(NS::TKE)),
     _C_mu(getParam<Real>("C_mu")),
     _wall_treatment(getParam<MooseEnum>("wall_treatment").getEnum<NS::WallTreatmentEnum>()),
-    _newton_solve(getParam<bool>("newton_solve"))
+    _preserve_sparsity_pattern(_fv_problem.preserveMatrixSparsityPattern())
 {
 }
 
 ADReal
-INSFVTurbulentViscosityWallFunction::boundaryValue(const FaceInfo & fi) const
+INSFVTurbulentViscosityWallFunction::boundaryValue(const FaceInfo & fi,
+                                                   const Moose::StateArg & /* state */) const
 {
   const Real wall_dist = std::abs((fi.elemCentroid() - fi.faceCentroid()) * fi.normal());
   const Elem & _current_elem = fi.elem();
@@ -123,8 +122,8 @@ INSFVTurbulentViscosityWallFunction::boundaryValue(const FaceInfo & fi) const
                 "For `INSFVTurbulentViscosityWallFunction` , wall treatment should not reach here");
 
   ADReal residual = 0;
-  // To keep the same sparsity pattern
-  if (_newton_solve)
+  // To keep the same sparsity pattern for all y_plus
+  if (_preserve_sparsity_pattern)
     residual = 0 * mut_log * y_plus;
 
   if (y_plus <= 5.0)

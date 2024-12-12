@@ -216,7 +216,7 @@ RhieChowMassFlux::initFaceMassFlux()
           hasBlocks(fi->elemPtr()->subdomain_id()) ? fi->elemPtr() : fi->neighborPtr();
 
       const Moose::FaceArg boundary_face{
-          fi, Moose::FV::LimiterType::CentralDifference, true, false, boundary_elem};
+          fi, Moose::FV::LimiterType::CentralDifference, true, false, boundary_elem, nullptr};
 
       const Real face_rho = _rho(boundary_face, time_arg);
       for (const auto dim_i : index_range(_vel))
@@ -232,6 +232,19 @@ Real
 RhieChowMassFlux::getMassFlux(const FaceInfo & fi) const
 {
   return _face_mass_flux.evaluate(&fi);
+}
+
+Real
+RhieChowMassFlux::getVolumetricFaceFlux(const FaceInfo & fi) const
+{
+  const Moose::FaceArg face_arg{&fi,
+                                /*limiter_type=*/Moose::FV::LimiterType::CentralDifference,
+                                /*elem_is_upwind=*/true,
+                                /*correct_skewness=*/false,
+                                &fi.elem(),
+                                /*state_limiter*/ nullptr};
+  const Real face_rho = _rho(face_arg, Moose::currentState());
+  return libmesh_map_find(_face_mass_flux, fi.id()) / face_rho;
 }
 
 void
@@ -293,7 +306,7 @@ RhieChowMassFlux::computeFaceMassFlux()
       const auto rhs_contribution =
           _p_diffusion_kernel->computeBoundaryRHSContribution(*bc_pointer);
 
-      // On the boundary, only the element side has a constibution
+      // On the boundary, only the element side has a contribution
       p_grad_flux = (p_elem_value * matrix_contribution - rhs_contribution);
     }
     // Compute the new face flux
@@ -318,6 +331,19 @@ RhieChowMassFlux::computeCellVelocity()
     _momentum_implicit_systems[system_i]->update();
     _momentum_systems[system_i]->setSolution(
         *_momentum_implicit_systems[system_i]->current_local_solution);
+  }
+}
+
+void
+RhieChowMassFlux::initCouplingField()
+{
+  // We loop through the faces and populate the coupling fields (face H/A and 1/H)
+  // with 0s for now. Pressure corrector solves will always come after the
+  // momentum source so we expect these fields to change before the actual solve.
+  for (auto & fi : _fe_problem.mesh().faceInfo())
+  {
+    _Ainv[fi->id()];
+    _HbyA_flux[fi->id()];
   }
 }
 
@@ -392,7 +418,7 @@ RhieChowMassFlux::populateCouplingFunctors(
       if (_vel[0]->isDirichletBoundaryFace(*fi))
       {
         const Moose::FaceArg boundary_face{
-            fi, Moose::FV::LimiterType::CentralDifference, true, false, elem_info.elem()};
+            fi, Moose::FV::LimiterType::CentralDifference, true, false, elem_info.elem(), nullptr};
         face_rho = _rho(boundary_face, Moose::currentState());
 
         for (const auto dim_i : make_range(_dim))

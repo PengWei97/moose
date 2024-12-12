@@ -109,6 +109,8 @@ EXTERN_C_BEGIN
 extern PetscErrorCode DMCreate_Moose(DM);
 EXTERN_C_END
 
+using namespace libMesh;
+
 NonlinearSystemBase::NonlinearSystemBase(FEProblemBase & fe_problem,
                                          System & sys,
                                          const std::string & name)
@@ -437,17 +439,6 @@ NonlinearSystemBase::setupFieldDecomposition()
 
   std::shared_ptr<Split> top_split = getSplit(_decomposition_split);
   top_split->setup(*this);
-}
-
-void
-NonlinearSystemBase::addTimeIntegrator(const std::string & type,
-                                       const std::string & name,
-                                       InputParameters & parameters)
-{
-  parameters.set<SystemBase *>("_sys") = this;
-
-  std::shared_ptr<TimeIntegrator> ti = _factory.create<TimeIntegrator>(type, name, parameters);
-  _time_integrator = ti;
 }
 
 void
@@ -840,8 +831,11 @@ NonlinearSystemBase::computeResidualTags(const std::set<TagID> & tags)
     if (required_residual)
     {
       auto & residual = getVector(residualVectorTag());
-      if (_time_integrator)
-        _time_integrator->postResidual(residual);
+      if (!_time_integrators.empty())
+      {
+        for (auto & ti : _time_integrators)
+          ti->postResidual(residual);
+      }
       else
         residual += *_Re_non_time;
       residual.close();
@@ -898,8 +892,11 @@ NonlinearSystemBase::computeResidualAndJacobianTags(const std::set<TagID> & vect
     if (required_residual)
     {
       auto & residual = getVector(residualVectorTag());
-      if (_time_integrator)
-        _time_integrator->postResidual(residual);
+      if (!_time_integrators.empty())
+      {
+        for (auto & ti : _time_integrators)
+          ti->postResidual(residual);
+      }
       else
         residual += *_Re_non_time;
       residual.close();
@@ -920,8 +917,8 @@ NonlinearSystemBase::computeResidualAndJacobianTags(const std::set<TagID> & vect
 void
 NonlinearSystemBase::onTimestepBegin()
 {
-  if (_time_integrator)
-    _time_integrator->preSolve();
+  for (auto & ti : _time_integrators)
+    ti->preSolve();
   if (_predictor.get())
     _predictor->timestepSetup();
 }
@@ -3645,8 +3642,10 @@ NonlinearSystemBase::checkKernelCoverage(const std::set<SubdomainID> & mesh_subd
                         std::inserter(difference, difference.end()));
 
     // there supposed to be no kernels on this lower-dimensional subdomain
-    difference.erase(Moose::INTERNAL_SIDE_LOWERD_ID);
-    difference.erase(Moose::BOUNDARY_SIDE_LOWERD_ID);
+    for (const auto & id : _mesh.interiorLowerDBlocks())
+      difference.erase(id);
+    for (const auto & id : _mesh.boundaryLowerDBlocks())
+      difference.erase(id);
 
     if (!difference.empty())
     {
@@ -3686,8 +3685,9 @@ NonlinearSystemBase::checkKernelCoverage(const std::set<SubdomainID> & mesh_subd
   for (auto & var_name : vars)
   {
     auto blks = getSubdomainsForVar(var_name);
-    if (blks.count(Moose::INTERNAL_SIDE_LOWERD_ID) || blks.count(Moose::BOUNDARY_SIDE_LOWERD_ID))
-      difference.erase(var_name);
+    for (const auto & id : blks)
+      if (_mesh.interiorLowerDBlocks().count(id) > 0 || _mesh.boundaryLowerDBlocks().count(id) > 0)
+        difference.erase(var_name);
   }
 
   if (!difference.empty())
@@ -3708,6 +3708,18 @@ NonlinearSystemBase::containsTimeKernel()
   auto & time_kernels = _kernels.getVectorTagObjectWarehouse(timeVectorTag(), 0);
 
   return time_kernels.hasActiveObjects();
+}
+
+std::vector<std::string>
+NonlinearSystemBase::timeKernelVariableNames()
+{
+  std::vector<std::string> variable_names;
+  const auto & time_kernels = _kernels.getVectorTagObjectWarehouse(timeVectorTag(), 0);
+  if (time_kernels.hasActiveObjects())
+    for (const auto & kernel : time_kernels.getObjects())
+      variable_names.push_back(kernel->variable().name());
+
+  return variable_names;
 }
 
 bool
