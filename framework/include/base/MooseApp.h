@@ -1095,6 +1095,7 @@ public:
   const std::vector<T *> & getInterfaceObjects() const;
 
   static void addAppParam(InputParameters & params);
+  static void addInputParam(InputParameters & params);
 
 protected:
   /**
@@ -1130,9 +1131,6 @@ protected:
    * has been fully set up and initialized.
    */
   void errorCheck();
-
-  /// The name of this object
-  const std::string _name;
 
   /// Parameters of this object
   InputParameters _pars;

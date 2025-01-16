@@ -153,7 +153,6 @@ public:
   virtual Real T_from_h_s(Real h, Real s) const;
   virtual Real T_from_p_s(Real p, Real s) const;
   virtual void T_from_p_s(Real p, Real s, Real & T, Real & dT_dp, Real & dT_ds) const;
-  virtual Real T_from_h_p(Real h, Real pressure) const override;
   virtual Real s_from_v_e(Real v, Real e) const override;
   virtual Real s_from_h_p(Real h, Real pressure) const override;
   virtual void
@@ -227,7 +226,15 @@ protected:
   /// - if user-specified, use _v_min/max and _e_min/max
   /// - if reading a (v,e) interpolation, the bounds of that range
   /// - if a _fp exist find the min/max v/e from T_min/max and p_min/max
+  void createVGridVector();
   void createVEGridVectors();
+  /// Create (or reset) the grid vectors for the specific volume and enthalpy interpolation
+  /// The order of priority for determining the range boundaries in v and h:
+  /// - if user-specified, use _v_min/max and _e_min/max
+  /// - if a _fp exist find the min/max v/e from T_min/max and p_min/max
+  /// - if reading a (p,T) tabulation, the bounds of the enthalpy grid
+  /// - if reading a (v,e) tabulation, the bounds of the enthalpy grid
+  void createVHGridVectors();
 
   /// Standardized error message for missing interpolation
   void missingVEInterpolationError(const std::string & function_name) const;
@@ -337,6 +344,8 @@ protected:
   bool _log_space_v;
   /// log-space the internal energy interpolation grid axis instead of linear
   bool _log_space_e;
+  /// log-space the enthalpy interpolation grid axis instead of linear
+  bool _log_space_h;
 
   /// User-selected out-of-bounds behavior
   MooseEnum _OOBBehavior;
@@ -346,6 +355,7 @@ protected:
     Ignore,
     Throw,
     DeclareInvalid,
+    WarnInvalid,
     SetToClosestBound
   };
 
