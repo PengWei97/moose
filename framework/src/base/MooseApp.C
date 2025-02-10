@@ -247,6 +247,12 @@ MooseApp::validParams()
       "Continue the calculation. Without <file base>, the most recent recovery file will be used");
   params.setGlobalCommandLineParam("recover");
 
+  params.addCommandLineParam<bool>("suppress_header",
+                                   "--suppress-header",
+                                   false,
+                                   "Disables the output of the application header.");
+  params.setGlobalCommandLineParam("suppress_header");
+
   params.addCommandLineParam<bool>(
       "test_checkpoint_half_transient",
       "--test-checkpoint-half-transient",
@@ -427,6 +433,7 @@ MooseApp::MooseApp(InputParameters parameters)
     _enable_unused_check(ERROR_UNUSED),
     _factory(*this),
     _error_overridden(false),
+    _early_exit_param(""),
     _ready_to_exit(false),
     _exit_code(0),
     _initial_from_file(false),
@@ -730,13 +737,8 @@ MooseApp::setupOptions()
   TIME_SECTION("setupOptions", 5, "Setting Up Options");
 
   // Print the header, this is as early as possible
-  auto hdr = header();
-  if (hdr.length() != 0)
-  {
-    if (multiAppLevel() > 0)
-      MooseUtils::indentMessage(_name, hdr);
-    Moose::out << hdr << std::endl;
-  }
+  if (header().length() && !getParam<bool>("suppress_header"))
+    _console << header() << std::endl;
 
   if (getParam<bool>("error_unused"))
     setCheckUnusedFlag(true);
@@ -774,13 +776,19 @@ MooseApp::setupOptions()
   {
     // Set from command line
     auto color = getParam<MooseEnum>("color");
-    // Set from environment
-    char * c_color = std::getenv("MOOSE_COLOR");
-    if (c_color)
-      color.assign(std::string(c_color), "While assigning environment variable MOOSE_COLOR");
-    // Set from deprecated --no-color
-    if (getParam<bool>("no_color"))
-      color = "off";
+    if (!isParamSetByUser("color"))
+    {
+      // Set from deprecated --no-color
+      if (getParam<bool>("no_color"))
+        color = "off";
+      // Set from environment
+      else
+      {
+        char * c_color = std::getenv("MOOSE_COLOR");
+        if (c_color)
+          color.assign(std::string(c_color), "While assigning environment variable MOOSE_COLOR");
+      }
+    }
 
     if (color == "auto")
       Moose::setColorConsole(true);
@@ -814,12 +822,14 @@ MooseApp::setupOptions()
   else if (getParam<bool>("display_version"))
   {
     Moose::out << getPrintableVersion() << std::endl;
+    _early_exit_param = "--version";
     _ready_to_exit = true;
     return;
   }
   else if (getParam<bool>("help"))
   {
     _command_line->printUsage();
+    _early_exit_param = "--help";
     _ready_to_exit = true;
   }
   else if (getParam<bool>("dump") || isParamSetByUser("dump_search"))
@@ -843,6 +853,7 @@ MooseApp::setupOptions()
       JsonInputFileFormatter formatter;
       Moose::out << "\n### START DUMP DATA ###\n"
                  << formatter.toString(tree.getRoot()) << "\n### END DUMP DATA ###" << std::endl;
+      _early_exit_param = "--dump";
       _ready_to_exit = true;
     }
     else
@@ -867,7 +878,7 @@ MooseApp::setupOptions()
         Moose::out << entry.first << "\taction\t" << act->_name << "\t" << act->_classname << "\t"
                    << act->_file << "\n";
     }
-
+    _early_exit_param = "--registry";
     _ready_to_exit = true;
   }
   else if (getParam<bool>("registry_hit"))
@@ -913,6 +924,7 @@ MooseApp::setupOptions()
     Moose::out << root.render();
 
     Moose::out << "\n### END REGISTRY DATA ###\n";
+    _early_exit_param = "--registry_hit";
     _ready_to_exit = true;
   }
   else if (getParam<bool>("definition"))
@@ -924,6 +936,7 @@ MooseApp::setupOptions()
     SONDefinitionFormatter formatter;
     Moose::out << "%-START-SON-DEFINITION-%\n"
                << formatter.toString(tree.getRoot()) << "\n%-END-SON-DEFINITION-%\n";
+    _early_exit_param = "--definition";
     _ready_to_exit = true;
   }
   else if (getParam<bool>("yaml") || isParamSetByUser("yaml_search"))
@@ -935,6 +948,7 @@ MooseApp::setupOptions()
     _builder.initSyntaxFormatter(Moose::Builder::YAML, true);
     _builder.buildFullTree(search);
 
+    _early_exit_param = "--yaml";
     _ready_to_exit = true;
   }
   else if (getParam<bool>("json") || isParamSetByUser("json_search"))
@@ -947,6 +961,7 @@ MooseApp::setupOptions()
     _builder.buildJsonSyntaxTree(tree);
 
     Moose::out << "**START JSON DATA**\n" << tree.getRoot().dump(2) << "\n**END JSON DATA**\n";
+    _early_exit_param = "--json";
     _ready_to_exit = true;
   }
   else if (getParam<bool>("syntax"))
@@ -958,6 +973,7 @@ MooseApp::setupOptions()
     for (const auto & it : syntax)
       Moose::out << it.first << "\n";
     Moose::out << "**END SYNTAX DATA**\n" << std::endl;
+    _early_exit_param = "--syntax";
     _ready_to_exit = true;
   }
   else if (getParam<bool>("show_type"))
@@ -965,6 +981,7 @@ MooseApp::setupOptions()
     _perf_graph.disableLivePrint();
 
     Moose::out << "MooseApp Type: " << type() << std::endl;
+    _early_exit_param = "--show-type";
     _ready_to_exit = true;
   }
   else if (getInputFileNames().size())
@@ -1054,12 +1071,14 @@ MooseApp::setupOptions()
 
     moose_server.run();
 
+    _early_exit_param = "--language-server";
     _ready_to_exit = true;
   }
 
   else /* The catch-all case for bad options or missing options, etc. */
   {
     _command_line->printUsage();
+    _early_exit_param = "bad or missing";
     _ready_to_exit = true;
     _exit_code = 1;
   }
@@ -1111,17 +1130,26 @@ MooseApp::runInputFile()
 {
   TIME_SECTION("runInputFile", 3);
 
-  // If ready to exit has been set, then just return
+  // If early exit param has been set, then just return
   if (_ready_to_exit)
     return;
 
   _action_warehouse.executeAllActions();
 
-  if (isParamSetByUser("mesh_only") || isParamSetByUser("split_mesh"))
+  if (isParamSetByUser("mesh_only"))
+  {
+    _early_exit_param = "--mesh-only";
     _ready_to_exit = true;
+  }
+  else if (isParamSetByUser("split_mesh"))
+  {
+    _early_exit_param = "--split-mesh";
+    _ready_to_exit = true;
+  }
   else if (getParam<bool>("list_constructed_objects"))
   {
     // TODO: ask multiapps for their constructed objects
+    _early_exit_param = "--list-constructed-objects";
     _ready_to_exit = true;
     std::vector<std::string> obj_list = _factory.getConstructedObjects();
     Moose::out << "**START OBJECT DATA**\n";
@@ -1138,6 +1166,23 @@ MooseApp::errorCheck()
   bool err = _enable_unused_check == ERROR_UNUSED;
 
   _builder.errorCheck(*_comm, warn, err);
+
+  if (!_executor.get() && !_executioner.get())
+  {
+    if (!_early_exit_param.empty())
+    {
+      mooseAssert(_check_input,
+                  "Something went wrong, we should only get here if _check_input is true.");
+      mooseError(
+          "Incompatible command line arguments provided. --check-input cannot be called with ",
+          _early_exit_param,
+          ".");
+    }
+    // We should never get here
+    mooseError("The Executor is being called without being initialized. This is likely "
+               "caused by "
+               "incompatible command line arguments");
+  }
 
   auto apps = feProblem().getMultiAppWarehouse().getObjects();
   for (auto app : apps)
@@ -1527,12 +1572,14 @@ MooseApp::run()
     }
 
     Moose::out << docmsg << "\n";
+    _early_exit_param = "--docs";
     _ready_to_exit = true;
     return;
   }
 
   if (showInputs() || copyInputs() || runInputs())
   {
+    _early_exit_param = "--show-input, --copy-inputs, or --run";
     _ready_to_exit = true;
     return;
   }
