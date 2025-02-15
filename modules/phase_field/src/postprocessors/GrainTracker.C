@@ -820,7 +820,7 @@ GrainTracker::trackGrains()
         // Must be a nucleating grain (status is still not set)
         if (grain._status == Status::CLEAR)
         {
-          auto new_index = getNextUniqueID(); // TODO - need to check for overflow
+          auto new_index = 10; //getNextUniqueID(); // TODO - need to check for overflow
           grain._id = new_index;          // Set the ID
           grain._status = Status::MARKED; // Mark it
 
