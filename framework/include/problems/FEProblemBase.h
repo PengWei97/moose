@@ -498,7 +498,7 @@ public:
   /**
    * Return solver type as a human readable string
    */
-  virtual std::string solverTypeString() { return Moose::stringify(solverParams()._type); }
+  virtual std::string solverTypeString(unsigned int solver_sys_num = 0);
 
   /**
    * Returns true if we are in or beyond the initialSetup stage
@@ -615,7 +615,7 @@ public:
   virtual Function & getFunction(const std::string & name, const THREAD_ID tid = 0);
 
   /// Add a MeshDivision
-  void
+  virtual void
   addMeshDivision(const std::string & type, const std::string & name, InputParameters & params);
   /// Get a MeshDivision
   MeshDivision & getMeshDivision(const std::string & name, const THREAD_ID tid = 0) const;
@@ -703,6 +703,18 @@ public:
   virtual SystemBase & systemBaseAuxiliary() override;
 
   virtual NonlinearSystem & getNonlinearSystem(const unsigned int sys_num);
+
+  /**
+   * Get constant reference to a system in this problem
+   * @param sys_num The number of the system
+   */
+  virtual const SystemBase & getSystemBase(const unsigned int sys_num) const;
+
+  /**
+   * Get non-constant reference to a system in this problem
+   * @param sys_num The number of the system
+   */
+  virtual SystemBase & getSystemBase(const unsigned int sys_num);
 
   /**
    * Get non-constant reference to a linear system
@@ -1666,12 +1678,12 @@ public:
   /**
    * Get the solver parameters
    */
-  SolverParams & solverParams();
+  SolverParams & solverParams(unsigned int solver_sys_num = 0);
 
   /**
    * const version
    */
-  const SolverParams & solverParams() const;
+  const SolverParams & solverParams(unsigned int solver_sys_num = 0) const;
 
 #ifdef LIBMESH_ENABLE_AMR
   // Adaptivity /////
@@ -2422,6 +2434,11 @@ private:
                                      const std::string & base_name,
                                      bool & reinit_displaced);
 
+  /**
+   * Make basic solver params for linear solves
+   */
+  static SolverParams makeLinearSolverParams();
+
 protected:
   bool _initialized;
 
@@ -2716,7 +2733,7 @@ protected:
   /// Whether there are active material properties on each thread
   std::vector<unsigned char> _has_active_material_properties;
 
-  SolverParams _solver_params;
+  std::vector<SolverParams> _solver_params;
 
   /// Determines whether and which subdomains are to be checked to ensure that they have an active kernel
   CoverageCheckMode _kernel_coverage_check;
