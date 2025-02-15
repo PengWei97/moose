@@ -33,6 +33,7 @@
 #include "UserObject.h"
 #include "SolutionInvalidity.h"
 #include "MooseLinearVariableFV.h"
+#include "LinearFVTimeDerivative.h"
 
 // libMesh
 #include "libmesh/linear_solver.h"
@@ -196,15 +197,12 @@ LinearSystem::computeLinearSystemInternal(const std::set<TagID> & vector_tags,
     // Necessary for speed
     if (auto petsc_matrix = dynamic_cast<PetscMatrix<Number> *>(&matrix))
     {
-      auto ierr = MatSetOption(petsc_matrix->mat(),
-                               MAT_KEEP_NONZERO_PATTERN, // This is changed in 3.1
-                               PETSC_TRUE);
-      LIBMESH_CHKERR(ierr);
+      LibmeshPetscCall(MatSetOption(petsc_matrix->mat(),
+                                    MAT_KEEP_NONZERO_PATTERN, // This is changed in 3.1
+                                    PETSC_TRUE));
       if (!_fe_problem.errorOnJacobianNonzeroReallocation())
-      {
-        ierr = MatSetOption(petsc_matrix->mat(), MAT_NEW_NONZERO_ALLOCATION_ERR, PETSC_FALSE);
-        LIBMESH_CHKERR(ierr);
-      }
+        LibmeshPetscCall(
+            MatSetOption(petsc_matrix->mat(), MAT_NEW_NONZERO_ALLOCATION_ERR, PETSC_FALSE));
     }
   }
 
@@ -302,4 +300,26 @@ LinearSystem::stopSolve(const ExecFlagType & /*exec_flag*/,
   // We close the containers in case the solve restarts from a failed iteration
   closeTaggedVectors(vector_tags_to_close);
   _linear_implicit_system.matrix->close();
+}
+
+bool
+LinearSystem::containsTimeKernel()
+{
+  // Right now, FV kernels are in TheWarehouse so we have to use that.
+  std::vector<LinearFVKernel *> kernels;
+  auto base_query = _fe_problem.theWarehouse()
+                        .query()
+                        .template condition<AttribSysNum>(this->number())
+                        .template condition<AttribSystem>("LinearFVKernel")
+                        .queryInto(kernels);
+
+  bool contains_time_kernel = false;
+  for (const auto kernel : kernels)
+  {
+    contains_time_kernel = dynamic_cast<LinearFVTimeDerivative *>(kernel);
+    if (contains_time_kernel)
+      break;
+  }
+
+  return contains_time_kernel;
 }

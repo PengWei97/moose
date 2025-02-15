@@ -20,8 +20,11 @@ public:
   virtual ~MooseTestApp();
 
   virtual void executeExecutioner() override;
+  virtual void setupOptions() override;
   virtual std::string getInstallableInputs() const override;
 
   static void registerAll(Factory & f, ActionFactory & af, Syntax & s, bool use_test_objs = false);
   static void registerApps();
+
+  virtual std::string header() const override;
 };

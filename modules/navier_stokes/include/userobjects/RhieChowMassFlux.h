@@ -9,9 +9,7 @@
 
 #pragma once
 
-#include "GeneralUserObject.h"
-#include "BlockRestrictable.h"
-#include "FaceArgInterface.h"
+#include "RhieChowFaceFluxProvider.h"
 #include "CellCenteredMapFunctor.h"
 #include "FaceCenteredMapFunctor.h"
 #include "VectorComponentFunctor.h"
@@ -35,10 +33,7 @@ class MeshBase;
  * User object responsible for determining the face fluxes using the Rhie-Chow interpolation in a
  * segregated solver that uses the linear FV formulation.
  */
-class RhieChowMassFlux : public GeneralUserObject,
-                         public BlockRestrictable,
-                         public NonADFunctorInterface,
-                         public FaceArgInterface
+class RhieChowMassFlux : public RhieChowFaceFluxProvider, public NonADFunctorInterface
 {
 public:
   static InputParameters validParams();
@@ -46,8 +41,15 @@ public:
 
   /// Get the face velocity times density (used in advection terms)
   Real getMassFlux(const FaceInfo & fi) const;
+
   /// Get the volumetric face flux (used in advection terms)
   Real getVolumetricFaceFlux(const FaceInfo & fi) const;
+
+  virtual Real getVolumetricFaceFlux(const Moose::FV::InterpMethod m,
+                                     const FaceInfo & fi,
+                                     const Moose::StateArg & time,
+                                     const THREAD_ID tid,
+                                     bool subtract_mesh_velocity) const override;
 
   /// Initialize the container for face velocities
   void initFaceMassFlux();
@@ -79,11 +81,14 @@ public:
    * Computes the inverse of the diagonal (1/A) of the system matrix plus the H/A components for the
    * pressure equation plus Rhie-Chow interpolation.
    */
-  void computeHbyA(bool verbose);
-
-  virtual bool hasFaceSide(const FaceInfo & fi, const bool fi_elem_side) const override;
+  void computeHbyA(const bool with_updated_pressure, const bool verbose);
 
 protected:
+  /// Select the right pressure gradient field and return a reference to the container
+  std::vector<std::unique_ptr<NumericVector<Number>>> &
+  selectPressureGradient(const bool updated_pressure);
+
+  /// Compute the cell volumes on the mesh
   void setupCellVolumes();
 
   /// Populate the face values of the H/A and 1/A fields
@@ -144,7 +149,13 @@ protected:
   /**
    * A map functor from faces to mass fluxes which are used in the advection terms.
    */
-  FaceCenteredMapFunctor<Real, std::unordered_map<dof_id_type, Real>> _face_mass_flux;
+  FaceCenteredMapFunctor<Real, std::unordered_map<dof_id_type, Real>> & _face_mass_flux;
+
+  /**
+   * for a PISO iteration we need to hold on to the original pressure gradient field.
+   * Should not be used in other conditions.
+   */
+  std::vector<std::unique_ptr<NumericVector<Number>>> _grad_p_current;
 
   /**
    * Functor describing the density of the fluid

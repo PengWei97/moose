@@ -1095,6 +1095,7 @@ public:
   const std::vector<T *> & getInterfaceObjects() const;
 
   static void addAppParam(InputParameters & params);
+  static void addInputParam(InputParameters & params);
 
 protected:
   /**
@@ -1130,9 +1131,6 @@ protected:
    * has been fully set up and initialized.
    */
   void errorCheck();
-
-  /// The name of this object
-  const std::string _name;
 
   /// Parameters of this object
   InputParameters _pars;
@@ -1253,6 +1251,8 @@ protected:
 
   /// Indicates whether warnings or errors are displayed when overridden parameters are detected
   bool _error_overridden;
+  /// Indicates if simulation is ready to exit, and keeps track of which param caused it to exit
+  std::string _early_exit_param;
   bool _ready_to_exit;
   /// The exit code
   int _exit_code;

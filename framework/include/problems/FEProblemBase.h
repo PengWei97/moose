@@ -392,8 +392,8 @@ public:
    * @param linear_sys_num The number of the linear system (1,..,num. of lin. systems)
    * @param po The petsc options for the solve, if not supplied, the defaults are used
    */
-  void solveLinearSystem(const unsigned int linear_sys_num,
-                         const Moose::PetscSupport::PetscOptions * po = nullptr);
+  virtual void solveLinearSystem(const unsigned int linear_sys_num,
+                                 const Moose::PetscSupport::PetscOptions * po = nullptr);
 
   ///@{
   /**
@@ -867,6 +867,12 @@ public:
   void projectSolution();
 
   /**
+   *  Retrieves the current initial condition state.
+   * @return  current initial condition state
+   */
+  unsigned short getCurrentICState();
+
+  /**
    * Project initial conditions for custom \p elem_range and \p bnd_node_range
    * This is needed when elements/boundary nodes are added to a specific subdomain
    * at an intermediate step
@@ -885,9 +891,9 @@ public:
   virtual void addInterfaceMaterial(const std::string & material_name,
                                     const std::string & name,
                                     InputParameters & parameters);
-  void addFunctorMaterial(const std::string & functor_material_name,
-                          const std::string & name,
-                          InputParameters & parameters);
+  virtual void addFunctorMaterial(const std::string & functor_material_name,
+                                  const std::string & name,
+                                  InputParameters & parameters);
 
   /**
    * Add the MooseVariables and the material properties that the current materials depend on to the
@@ -2789,6 +2795,9 @@ protected:
   /// Automatic differentiaion (AD) flag which indicates whether any consumer has
   /// requested an AD material property or whether any suppier has declared an AD material property
   bool _using_ad_mat_props;
+
+  // loop state during projection of initial conditions
+  unsigned short _current_ic_state;
 
 private:
   /**
