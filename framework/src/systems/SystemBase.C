@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -1639,6 +1639,12 @@ const Number &
 SystemBase::duDotDu(const unsigned int var_num) const
 {
   return _du_dot_du[var_num];
+}
+
+const std::set<SubdomainID> &
+SystemBase::getSubdomainsForVar(const std::string & var_name) const
+{
+  return getSubdomainsForVar(getVariable(0, var_name).number());
 }
 
 template MooseVariableFE<Real> & SystemBase::getFieldVariable<Real>(THREAD_ID tid,

@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -105,9 +105,7 @@ HDGKernel::assemble()
         const auto & bcs = _hibc_warehouse.getActiveBoundaryObjects(bnd_id, _tid);
         for (const auto & bc : bcs)
         {
-          mooseAssert(bc->shouldApply(),
-                      "I don't think anyone uses the shouldApply feature for integrated boundary "
-                      "conditions");
+          mooseAssert(bc->shouldApply(), "BC says it should not apply on this boundary.");
           bc->onBoundary();
           addBCData(*bc);
         }

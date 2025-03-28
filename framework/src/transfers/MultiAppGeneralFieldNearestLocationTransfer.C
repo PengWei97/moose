@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -531,7 +531,7 @@ MultiAppGeneralFieldNearestLocationTransfer::inBlocks(const std::set<SubdomainID
   for (const auto & i_node : make_range(elem->n_nodes()))
   {
     const auto & node = elem->node_ptr(i_node);
-    const std::set<SubdomainID> & node_blocks = mesh.getNodeBlockIds(*node);
+    const auto & node_blocks = mesh.getNodeBlockIds(*node);
     std::set<SubdomainID> u;
     std::set_intersection(blocks.begin(),
                           blocks.end(),

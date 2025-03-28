@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -839,6 +839,20 @@ MooseLinearVariableFV<OutputType>::adSln() const
 template <typename OutputType>
 const ADTemplateVariableGradient<OutputType> &
 MooseLinearVariableFV<OutputType>::adGradSln() const
+{
+  adError();
+}
+
+template <typename OutputType>
+const ADTemplateVariableCurl<OutputType> &
+MooseLinearVariableFV<OutputType>::adCurlSln() const
+{
+  adError();
+}
+
+template <typename OutputType>
+const ADTemplateVariableCurl<OutputType> &
+MooseLinearVariableFV<OutputType>::adCurlSlnNeighbor() const
 {
   adError();
 }

@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -18,7 +18,7 @@ ElementIntegralVariablePostprocessor::validParams()
   params.addRequiredCoupledVar("variable", "The name of the variable that this object operates on");
   params.addClassDescription("Computes a volume integral of the specified variable");
   params.addParam<bool>(
-      "use_absolute_value", false, "Whether to use abolsute value of the variable or not");
+      "use_absolute_value", false, "Whether to use absolute value of the variable or not");
   return params;
 }
 

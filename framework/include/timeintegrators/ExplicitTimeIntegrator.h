@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -62,6 +62,11 @@ protected:
    */
   bool checkLinearConvergence();
 
+  /**
+   * @returns the mass matrix tag ID
+   */
+  virtual TagID massMatrixTagID() const { return _Ke_time_tag; }
+
   /// Solve type for how mass matrix is handled
   MooseEnum _solve_type;
 
@@ -72,7 +77,7 @@ protected:
   NumericVector<Real> * _solution_update;
 
   /// Diagonal of the lumped mass matrix (and its inversion)
-  NumericVector<Real> * _mass_matrix_diag;
+  NumericVector<Real> * _mass_matrix_diag_inverted;
 
   /// Vector of 1's to help with creating the lumped mass matrix
   NumericVector<Real> * _ones;

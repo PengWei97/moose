@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -208,7 +208,7 @@ public:
    */
   Real unconstrainedDT() { return _unconstrained_dt; }
 
-  void parentOutputPositionChanged() override { _fe_problem.parentOutputPositionChanged(); }
+  void parentOutputPositionChanged() override;
 
   /**
    * The relative L2 norm of the difference between solution and old solution vector.

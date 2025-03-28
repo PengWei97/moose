@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -16,6 +16,7 @@
 #include "NodalConstraint.h"
 #include "NodeFaceConstraint.h"
 #include "NodeElemConstraint.h"
+#include "FEProblemBase.h"
 
 ConstraintWarehouse::ConstraintWarehouse() : MooseObjectWarehouse<Constraint>(/*threaded=*/false) {}
 
@@ -288,7 +289,8 @@ ConstraintWarehouse::hasActiveNodeElemConstraints(SubdomainID secondary_id,
   return (it != end_it && it->second.hasActiveObjects());
 }
 
-void ConstraintWarehouse::updateActive(THREAD_ID /*tid*/)
+void
+ConstraintWarehouse::updateActive(THREAD_ID /*tid*/)
 {
   MooseObjectWarehouse<Constraint>::updateActive();
   _nodal_constraints.updateActive();

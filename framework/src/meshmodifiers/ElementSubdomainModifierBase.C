@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -9,6 +9,7 @@
 
 #include "ElementSubdomainModifierBase.h"
 #include "DisplacedProblem.h"
+#include "MaterialWarehouse.h"
 
 #include "libmesh/parallel_algebra.h"
 #include "libmesh/parallel.h"
@@ -215,12 +216,14 @@ ElementSubdomainModifierBase::modify(
 
   // Initialize solution and stateful material properties
   applyIC(/*displaced=*/false);
-  initElementStatefulProps(/*displaced=*/false);
+  if (_fe_problem.getMaterialWarehouse().hasActiveObjects(0))
+    initElementStatefulProps(/*displaced=*/false);
 
   if (_displaced_mesh)
   {
     applyIC(/*displaced=*/true);
-    initElementStatefulProps(/*displaced=*/true);
+    if (_fe_problem.getMaterialWarehouse().hasActiveObjects(0))
+      initElementStatefulProps(/*displaced=*/true);
   }
 }
 

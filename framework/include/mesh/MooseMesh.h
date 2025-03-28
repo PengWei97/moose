@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -1337,6 +1337,16 @@ public:
   [[nodiscard]] bool doingPRefinement() const { return _doing_p_refinement; }
 
   /**
+   * Returns the maximum p-refinement level of all elements
+   */
+  unsigned int maxPLevel() const { return _max_p_level; }
+
+  /**
+   * Returns the maximum h-refinement level of all elements
+   */
+  unsigned int maxHLevel() const { return _max_h_level; }
+
+  /**
    * Get the map describing for each volumetric quadrature point (qp) on the refined level which qp
    * on the previous coarser level the fine qp is closest to
    */
@@ -1848,6 +1858,10 @@ private:
 
   /// Whether we have p-refinement (as opposed to h-refinement)
   bool _doing_p_refinement;
+  /// Maximum p-refinement level of all elements
+  unsigned int _max_p_level;
+  /// Maximum h-refinement level of all elements
+  unsigned int _max_h_level;
 
   template <typename T>
   struct MeshType;
@@ -2071,7 +2085,13 @@ MooseMesh::buildTypedMesh(unsigned int dim)
   }
 
   if (dim == libMesh::invalid_uint)
-    dim = getParam<MooseEnum>("dim");
+  {
+    if (isParamValid("dim"))
+      dim = getParam<MooseEnum>("dim");
+    else
+      // Legacy selection of the default for the 'dim' parameter
+      dim = 1;
+  }
 
   auto mesh = std::make_unique<T>(_communicator, dim);
 

@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -13,6 +13,7 @@
 #include "Executioner.h"
 #include "MooseMesh.h"
 #include "MooseMain.h"
+#include "FEProblemBase.h"
 
 TEST(MinimalApp, create)
 {

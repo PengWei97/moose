@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -723,6 +723,7 @@ template <typename T>
 typename FunctorBase<T>::ValueType
 FunctorBase<T>::operator()(const NodeArg & node, const StateArg & state) const
 {
+  mooseAssert(node.subdomain_ids, "Subdomain IDs must be supplied to the node argument");
   return evaluate(node, state);
 }
 

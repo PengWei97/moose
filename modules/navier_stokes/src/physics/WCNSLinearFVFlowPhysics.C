@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -43,6 +43,8 @@ WCNSLinearFVFlowPhysics::validParams()
   params.set<MooseFunctorName>("porosity") = "1";
   params.suppressParameter<MooseFunctorName>("porosity");
   params.suppressParameter<MooseEnum>("mu_interp_method");
+  // Not needed
+  params.suppressParameter<bool>("add_flow_equations");
 
   // No other options so far
   params.set<MooseEnum>("velocity_interpolation") = "rc";

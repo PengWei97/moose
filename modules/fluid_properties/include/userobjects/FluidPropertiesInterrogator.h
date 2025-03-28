@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -173,6 +173,8 @@ protected:
   const bool _has_2phase;
   /// flag that user provided 2-phase NCG fluid properties
   const bool _has_2phase_ncg;
+  /// flag that user provided 2-phase NCG partial pressure fluid properties
+  const bool _has_2phase_ncg_partial_pressure;
 
   /// pointer to liquid fluid properties object (if provided 2-phase object)
   const SinglePhaseFluidProperties * const _fp_liquid;

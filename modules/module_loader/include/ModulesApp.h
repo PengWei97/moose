@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -82,6 +82,9 @@
 #endif
 #ifdef STOCHASTIC_TOOLS_ENABLED
 #include "StochasticToolsApp.h"
+#endif
+#ifdef SUBCHANNEL_ENABLED
+#include "SubChannelApp.h"
 #endif
 #ifdef THERMAL_HYDRAULICS_ENABLED
 #include "ThermalHydraulicsApp.h"
@@ -204,6 +207,10 @@ ModulesApp::registerAllObjects(Factory & f, ActionFactory & af, Syntax & s)
 
 #ifdef STOCHASTIC_TOOLS_ENABLED
   StochasticToolsApp::registerAll(f, af, s);
+#endif
+
+#ifdef SUBCHANNEL_ENABLED
+  SubChannelApp::registerAll(f, af, s);
 #endif
 
 #ifdef THERMAL_HYDRAULICS_ENABLED

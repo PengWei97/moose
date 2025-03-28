@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -85,7 +85,7 @@ LibtorchArtificialNeuralNet::constructNeuralNetwork()
 }
 
 torch::Tensor
-LibtorchArtificialNeuralNet::forward(torch::Tensor & x)
+LibtorchArtificialNeuralNet::forward(const torch::Tensor & x)
 {
   torch::Tensor output(x);
   if (_data_type != output.scalar_type())

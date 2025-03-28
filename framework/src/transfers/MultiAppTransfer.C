@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -179,13 +179,14 @@ MultiAppTransfer::checkMultiAppExecuteOn()
 }
 
 void
-MultiAppTransfer::variableIntegrityCheck(const AuxVariableName & var_name) const
+MultiAppTransfer::variableIntegrityCheck(const AuxVariableName & var_name,
+                                         bool is_from_multiapp) const
 {
   bool variable_found = false;
   bool has_an_app = false;
 
   // Check the from_multi_app for the variable
-  if (_from_multi_app)
+  if (is_from_multiapp && _from_multi_app)
     for (unsigned int i = 0; i < _from_multi_app->numGlobalApps(); i++)
       if (_from_multi_app->hasLocalApp(i))
       {
@@ -195,7 +196,7 @@ MultiAppTransfer::variableIntegrityCheck(const AuxVariableName & var_name) const
       }
 
   // Check the to_multi_app for the variable
-  if (_to_multi_app)
+  if (!is_from_multiapp && _to_multi_app)
     for (unsigned int i = 0; i < _to_multi_app->numGlobalApps(); i++)
       if (_to_multi_app->hasLocalApp(i))
       {

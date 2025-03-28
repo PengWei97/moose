@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #* This file is part of the MOOSE framework
-#* https://www.mooseframework.org
+#* https://mooseframework.inl.gov
 #*
 #* All rights reserved, see COPYRIGHT for full restrictions
 #* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -87,6 +87,7 @@ class Clobber(object):
             self.ignore_dir(root, subdirs, "moose")
             self.ignore_dir(root, subdirs, ".git")
             self.ignore_dir(root, subdirs, ".svn")
+            self.ignore_dir(root, subdirs, "contrib")
 
             self.remove_dir(root, subdirs, ".libs")
             self.remove_dir(root, subdirs, ".jitcache")

@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -427,8 +427,12 @@ PenetrationThread::operator()(const NodeIdRange & range)
           } while (i < p_info.size() && best < p_info.size());
           if (best < p_info.size())
           {
-            switchInfo(info, p_info[best]);
-            info_set = true;
+            // Ensure final info is within the tangential tolerance
+            if (p_info[best]->_tangential_distance <= _tangential_tolerance)
+            {
+              switchInfo(info, p_info[best]);
+              info_set = true;
+            }
           }
         }
       }

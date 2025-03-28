@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -100,9 +100,10 @@ HeatConductionPhysicsBase::addInitialConditions()
   if (!_app.isRestarting() || parameters().isParamSetByUser("initial_temperature"))
   {
     InputParameters params = getFactory().getValidParams("FunctionIC");
+    assignBlocks(params, _blocks);
     params.set<VariableName>("variable") = _temperature_name;
     params.set<FunctionName>("function") = getParam<FunctionName>("initial_temperature");
-    getProblem().addInitialCondition("FunctionIC", _temperature_name + "_ic", params);
+    getProblem().addInitialCondition("FunctionIC", prefix() + _temperature_name + "_ic", params);
   }
 }
 

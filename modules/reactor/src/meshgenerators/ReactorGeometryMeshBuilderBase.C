@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -184,8 +184,8 @@ ReactorGeometryMeshBuilderBase::callExtrusionMeshSubgenerators(
     params.set<std::vector<unsigned int>>("num_layers") =
         getReactorParam<std::vector<unsigned int>>(RGMB::axial_mesh_intervals);
     params.set<std::vector<Real>>("heights") = axial_boundaries;
-    params.set<boundary_id_type>("bottom_boundary") = bottom_boundary;
-    params.set<boundary_id_type>("top_boundary") = top_boundary;
+    params.set<BoundaryName>("bottom_boundary") = std::to_string(bottom_boundary);
+    params.set<BoundaryName>("top_boundary") = std::to_string(top_boundary);
     addMeshSubgenerator("AdvancedExtruderGenerator", name() + "_extruded", params);
   }
 

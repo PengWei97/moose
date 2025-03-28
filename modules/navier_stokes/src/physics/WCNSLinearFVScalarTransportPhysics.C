@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -24,6 +24,9 @@ WCNSLinearFVScalarTransportPhysics::validParams()
                         true,
                         "If the nonorthogonal correction should be used when computing the normal "
                         "gradient, notably in the diffusion term.");
+
+  // Not needed
+  params.suppressParameter<bool>("add_scalar_equation");
   return params;
 }
 
@@ -31,6 +34,9 @@ WCNSLinearFVScalarTransportPhysics::WCNSLinearFVScalarTransportPhysics(
     const InputParameters & parameters)
   : WCNSFVScalarTransportPhysicsBase(parameters)
 {
+  if (_porous_medium_treatment)
+    _flow_equations_physics->paramError("porous_medium_treatment",
+                                        "Porous media scalar advection is currently unimplemented");
 }
 
 void

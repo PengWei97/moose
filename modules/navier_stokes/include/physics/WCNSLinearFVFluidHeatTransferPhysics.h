@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -23,12 +23,11 @@ public:
 
   WCNSLinearFVFluidHeatTransferPhysics(const InputParameters & parameters);
 
-protected:
-  /// User-selected option to solve for enthalpy
-  const bool _solve_for_enthalpy;
-
 private:
   virtual void addSolverVariables() override;
+  virtual void addAuxiliaryVariables() override;
+  virtual void addAuxiliaryKernels() override;
+  virtual void addMaterials() override;
 
   /**
    * Functions adding kernels for the incompressible / weakly compressible energy equation

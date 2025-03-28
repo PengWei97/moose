@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -573,7 +573,7 @@ MultiAppUserObjectTransfer::hasBlocks(const Elem * elem) const
 bool
 MultiAppUserObjectTransfer::hasBlocks(const MooseMesh * mesh, const Node * node) const
 {
-  const std::set<SubdomainID> & node_blk_ids = mesh->getNodeBlockIds(*node);
+  const auto & node_blk_ids = mesh->getNodeBlockIds(*node);
   std::set<SubdomainID> u;
   std::set_intersection(_blk_ids.begin(),
                         _blk_ids.end(),

@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -70,6 +70,9 @@ CoreMeshGenerator::validParams()
       "desired_area_func",
       std::string(),
       "Desired (local) triangle area as a function of x,y; omit to skip non-uniform refinement");
+  params.addParam<bool>("assign_control_drum_id",
+                        true,
+                        "Whether control drum id is assigned to the mesh as an extra integer.");
   params.addParamNamesToGroup("periphery_block_name periphery_region_id outer_circle_radius "
                               "mesh_periphery periphery_generator",
                               "Periphery Meshing");
@@ -354,6 +357,7 @@ CoreMeshGenerator::CoreMeshGenerator(const InputParameters & parameters)
         params.set<MooseEnum>("pattern_boundary") = "none";
         params.set<bool>("generate_core_metadata") = !pin_as_assembly;
         params.set<bool>("create_outward_interface_boundaries") = false;
+        params.set<bool>("assign_control_drum_id") = getParam<bool>("assign_control_drum_id");
         if (make_empty)
         {
           params.set<std::vector<MeshGeneratorName>>("exclude_id") =
@@ -364,6 +368,7 @@ CoreMeshGenerator::CoreMeshGenerator(const InputParameters & parameters)
         params.set<boundary_id_type>("external_boundary_id") = radial_boundary;
         params.set<BoundaryName>("external_boundary_name") = RGMB::CORE_BOUNDARY_NAME;
         params.set<double>("rotate_angle") = 0.0;
+        params.set<bool>("allow_unused_inputs") = true;
 
         addMeshSubgenerator(patterned_mg_name, name() + "_pattern", params);
       }

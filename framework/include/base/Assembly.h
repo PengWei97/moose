@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -1923,7 +1923,7 @@ public:
    *   of quadrature points reflects the element p-level)
    * @param disable_p_refinement_for_families Families that we should disable p-refinement for
    */
-  void havePRefinement(const std::vector<FEFamily> & disable_p_refinement_for_families);
+  void havePRefinement(const std::unordered_set<FEFamily> & disable_p_refinement_for_families);
 
   /**
    * Set the current lower dimensional element. This may be null

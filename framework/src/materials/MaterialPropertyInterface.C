@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -11,6 +11,7 @@
 #include "MaterialPropertyInterface.h"
 #include "MooseApp.h"
 #include "MaterialBase.h"
+#include "FEProblemBase.h"
 
 const std::string MaterialPropertyInterface::_interpolated_old = "_interpolated_old";
 const std::string MaterialPropertyInterface::_interpolated_older = "_interpolated_older";
@@ -31,6 +32,9 @@ MaterialPropertyInterface::validParams()
       false,
       "For the old and older state use projected material properties interpolated at the "
       "quadrature points. To set up projection use the ProjectedStatefulMaterialStorageAction.");
+  params.addParamNamesToGroup("use_interpolated_state prop_getter_suffix",
+                              "Material property retrieval");
+
   return params;
 }
 

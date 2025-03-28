@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -172,6 +172,9 @@ public:
   /// Get the name of the final mesh generator
   MeshGeneratorName getFinalMeshGeneratorName() const { return _final_generator_name; }
 
+  /// Set the verbose flag
+  void setVerbose(const bool verbose) { _verbose = verbose; }
+
 private:
   /**
    * Gets the MeshGeneratorNames that are referenced in an object's parameters.
@@ -241,4 +244,7 @@ private:
 
   /// Whether any of the mesh generators are a \p BreakMeshByBlockGenerator
   bool _has_bmbb;
+
+  /// Whether to print the names of the mesh generators being executed or not
+  bool _verbose;
 };

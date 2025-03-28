@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -80,4 +80,7 @@ private:
   std::vector<std::vector<std::string>> _friction_types;
   /// The coefficients used for each item if friction type
   std::vector<std::vector<std::string>> _friction_coeffs;
+
+  /// Name of the user object in charge of computing the Rhie Chow coefficients
+  UserObjectName _rc_uo_name;
 };

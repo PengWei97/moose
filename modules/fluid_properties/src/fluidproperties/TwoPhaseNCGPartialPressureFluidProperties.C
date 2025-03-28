@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -8,7 +8,7 @@
 //* https://www.gnu.org/licenses/lgpl-2.1.html
 
 #include "TwoPhaseNCGPartialPressureFluidProperties.h"
-#include "IdealRealGasMixtureFluidProperties.h"
+#include "IdealGasMixtureFluidProperties.h"
 #include "SinglePhaseFluidProperties.h"
 
 registerMooseObject("FluidPropertiesApp", TwoPhaseNCGPartialPressureFluidProperties);
@@ -38,10 +38,10 @@ TwoPhaseNCGPartialPressureFluidProperties::TwoPhaseNCGPartialPressureFluidProper
   // create vapor mixture fluid properties
   if (_tid == 0)
   {
-    const std::string class_name = "IdealRealGasMixtureFluidProperties";
+    const std::string class_name = "IdealGasMixtureFluidProperties";
     InputParameters params = _app.getFactory().getValidParams(class_name);
-    params.set<UserObjectName>("fp_primary") = getVaporName();
-    params.set<std::vector<UserObjectName>>("fp_secondary") = {getParam<UserObjectName>("fp_ncg")};
+    params.set<std::vector<UserObjectName>>("component_fluid_properties") = {
+        getVaporName(), getParam<UserObjectName>("fp_ncg")};
     _fe_problem.addUserObject(class_name, _vapor_mixture_name, params);
   }
   _fp_vapor_mixture = &_fe_problem.getUserObject<VaporMixtureFluidProperties>(_vapor_mixture_name);

@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -44,6 +44,8 @@ public:
   }
 
 protected:
+  virtual TagID massMatrixTagID() const override;
+
   const bool & _constant_mass;
 
   const TagName & _mass_matrix;

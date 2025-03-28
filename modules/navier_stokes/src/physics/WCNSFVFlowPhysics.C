@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -224,6 +224,7 @@ WCNSFVFlowPhysics::addSolverVariables()
       params.set<bool>("allow_two_term_expansion_on_bernoulli_faces") =
           getParam<bool>("pressure_allow_expansion_on_bernoulli_faces");
     }
+    params.set<SolverSystemName>("solver_sys") = getSolverSystem(_pressure_name);
     getProblem().addVariable(pressure_type, _pressure_name, params);
   }
   else
@@ -240,7 +241,10 @@ WCNSFVFlowPhysics::addSolverVariables()
     lm_params.set<MooseEnum>("order") = "first";
 
     if (type == "point-value" || type == "average")
+    {
+      lm_params.set<SolverSystemName>("solver_sys") = getSolverSystem("lambda");
       getProblem().addVariable("MooseVariableScalar", "lambda", lm_params);
+    }
   }
 }
 
@@ -1072,20 +1076,22 @@ WCNSFVFlowPhysics::addRhieChowUserObjects()
       .condition<AttribSystem>("UserObject")
       .condition<AttribThread>(0)
       .queryInto(objs);
-  unsigned int num_rc_uo = 0;
+  bool have_matching_rc_uo = false;
   for (const auto & obj : objs)
-    if (dynamic_cast<INSFVRhieChowInterpolator *>(obj))
-    {
-      const auto rc_obj = dynamic_cast<INSFVRhieChowInterpolator *>(obj);
-      if (rc_obj->blocks() == _blocks)
-        num_rc_uo++;
-      // one of the RC user object is defined everywhere
-      else if (rc_obj->blocks().size() == 0 || _blocks.size() == 0)
-        num_rc_uo++;
-    }
+    if (const auto * const rc_obj = dynamic_cast<INSFVRhieChowInterpolator *>(obj); rc_obj)
+      // Latter check is for whether one of the RC user object is defined everywhere
+      if (rc_obj->blocks() == _blocks || (rc_obj->blocks().size() == 0 || _blocks.size() == 0))
+      {
+        have_matching_rc_uo = true;
+        _rc_uo_name = rc_obj->name();
+        break;
+      }
 
-  if (num_rc_uo)
+  if (have_matching_rc_uo)
     return;
+
+  _rc_uo_name =
+      _porous_medium_treatment ? +"pins_rhie_chow_interpolator" : "ins_rhie_chow_interpolator";
 
   const std::string u_names[3] = {"u", "v", "w"};
   const auto object_type =
@@ -1116,7 +1122,7 @@ WCNSFVFlowPhysics::addRhieChowUserObjects()
   }
 
   params.applySpecificParameters(parameters(), INSFVRhieChowInterpolator::listOfCommonParams());
-  getProblem().addUserObject(object_type, rhieChowUOName(), params);
+  getProblem().addUserObject(object_type, _rc_uo_name, params);
 }
 
 void
@@ -1133,7 +1139,8 @@ WCNSFVFlowPhysics::checkRhieChowFunctorsDefined() const
 UserObjectName
 WCNSFVFlowPhysics::rhieChowUOName() const
 {
-  return (_porous_medium_treatment ? +"pins_rhie_chow_interpolator" : "ins_rhie_chow_interpolator");
+  mooseAssert(!_rc_uo_name.empty(), "The Rhie-Chow user-object name should be set!");
+  return _rc_uo_name;
 }
 
 MooseFunctorName

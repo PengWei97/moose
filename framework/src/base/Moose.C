@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -497,6 +497,8 @@ associateSyntaxInner(Syntax & syntax, ActionFactory & /*action_factory*/)
   registerSyntax("CreateDisplacedProblemAction", "Mesh");
   registerSyntax("DisplayGhostingAction", "Mesh");
   registerSyntax("AddMeshGeneratorAction", "Mesh/*");
+  registerSyntaxTask("EmptyAction", "Mesh/BatchMeshGeneratorAction", "no_action");
+  registerSyntax("BatchMeshGeneratorAction", "Mesh/BatchMeshGeneratorAction/*");
   registerSyntax("ElementIDOutputAction", "Mesh");
   syntax.registerSyntaxType("Mesh/*", "MeshGeneratorName");
 

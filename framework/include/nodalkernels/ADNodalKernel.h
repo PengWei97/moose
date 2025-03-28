@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -10,11 +10,12 @@
 #pragma once
 
 #include "NodalKernelBase.h"
+#include "ADFunctorInterface.h"
 
 /**
  * Base class for creating nodal kernels with AD-computed Jacobians
  */
-class ADNodalKernel : public NodalKernelBase
+class ADNodalKernel : public NodalKernelBase, public ADFunctorInterface
 {
 public:
   /**

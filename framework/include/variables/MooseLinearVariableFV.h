@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -382,6 +382,9 @@ public:
   adGradSlnNeighborDot() const override;
   [[noreturn]] virtual const ADTemplateVariableValue<OutputType> & adSln() const override;
   [[noreturn]] virtual const ADTemplateVariableGradient<OutputType> & adGradSln() const override;
+  [[noreturn]] virtual const ADTemplateVariableCurl<OutputType> & adCurlSln() const override;
+  [[noreturn]] virtual const ADTemplateVariableCurl<OutputType> &
+  adCurlSlnNeighbor() const override;
 
   virtual const DoFValue & dofValues() const override;
   virtual const DoFValue & dofValuesOld() const override;

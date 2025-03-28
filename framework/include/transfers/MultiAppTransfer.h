@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -38,7 +38,7 @@ public:
   /**
    * Utility to verify that the variable in the destination system exists.
    */
-  void variableIntegrityCheck(const AuxVariableName & var_name) const;
+  void variableIntegrityCheck(const AuxVariableName & var_name, bool is_from_multiapp) const;
 
   void initialSetup() override;
 

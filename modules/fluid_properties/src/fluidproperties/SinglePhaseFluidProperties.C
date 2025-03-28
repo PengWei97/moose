@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -309,13 +309,13 @@ SinglePhaseFluidProperties::criticalTemperature() const
 Real
 SinglePhaseFluidProperties::criticalDensity() const
 {
-  mooseError(__PRETTY_FUNCTION__, " not implemented.");
+  return rho_from_p_T(criticalPressure(), criticalTemperature());
 }
 
 Real
 SinglePhaseFluidProperties::criticalInternalEnergy() const
 {
-  mooseError(__PRETTY_FUNCTION__, " not implemented.");
+  return e_from_p_rho(criticalPressure(), criticalDensity());
 }
 
 Real

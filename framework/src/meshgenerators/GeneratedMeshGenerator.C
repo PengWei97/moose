@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -125,7 +125,7 @@ std::unique_ptr<MeshBase>
 GeneratedMeshGenerator::generate()
 {
   // Have MOOSE construct the correct libMesh::Mesh object using Mesh block and CLI parameters.
-  auto mesh = buildMeshBaseObject();
+  auto mesh = buildMeshBaseObject(_dim);
 
   if (isParamValid("extra_element_integers"))
   {

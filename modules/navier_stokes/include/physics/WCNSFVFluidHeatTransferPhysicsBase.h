@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -33,7 +33,7 @@ public:
   WCNSFVFluidHeatTransferPhysicsBase(const InputParameters & parameters);
 
   /// Get the name of the fluid temperature variable
-  const NonlinearVariableName & getFluidTemperatureName() const { return _fluid_temperature_name; }
+  const VariableName & getFluidTemperatureName() const { return _fluid_temperature_name; }
 
   /// Get the name of the specific heat material property
   const MooseFunctorName & getSpecificHeatName() const { return _specific_heat_name; }
@@ -86,8 +86,12 @@ protected:
 
   /// A boolean to help compatibility with the old Modules/NavierStokesFV syntax
   const bool _has_energy_equation;
+  /// User-selected option to solve for enthalpy
+  const bool _solve_for_enthalpy;
+  /// Name of the fluid specific enthalpy
+  const VariableName _fluid_enthalpy_name;
   /// Fluid temperature name
-  NonlinearVariableName _fluid_temperature_name;
+  VariableName _fluid_temperature_name;
   /// Name of the specific heat material property
   MooseFunctorName _specific_heat_name;
   /// Vector of subdomain groups where we want to have different thermal conduction

@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -219,8 +219,8 @@ NonlinearSystem::solve()
   // store info about the solve
   _final_residual = _nl_implicit_sys.final_nonlinear_residual();
 
-  // Accumulate only the occurence of solution invalid warnings
-  _app.solutionInvalidity().solutionInvalidAccumulationTimeStep();
+  // Accumulate only the occurence of solution invalid warnings for each time step
+  _app.solutionInvalidity().solutionInvalidAccumulationTimeStep(_fe_problem.timeStep());
 
   // determine whether solution invalid occurs in the converged solution
   checkInvalidSolution();

@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -61,7 +61,7 @@ public:
    * this cannot be const since it creates a graph in the background
    * @param x Input tensor for the evaluation
    */
-  virtual torch::Tensor forward(torch::Tensor & x) override;
+  virtual torch::Tensor forward(const torch::Tensor & x) override;
 
   /// Return the name of the neural network
   const std::string & name() const { return _name; }

@@ -75,7 +75,6 @@
                   Mesh/pattern/duct_block_ids=2000
                   Mesh/pattern/duct_block_names="duct_block"
                   Mesh/pattern/uniform_mesh_on_sides=true
-                  Mesh/pattern/create_interface_boundaries=false
                   --mesh-only "patterned_sq_no_interface.e"'
     requirement = 'The system shall stitch square meshes to form a large mesh with square boundary and without interface boundaries defined.'
     recover = false
@@ -106,6 +105,14 @@
     exodiff = 'patterned_pattern.e'
     cli_args = '--mesh-only "patterned_pattern.e"'
     requirement = 'The system shall stitch square patterned meshes to form a large mesh.'
+    recover = false
+  []
+  [patterned_pattern_allow_unused]
+    type = 'Exodiff'
+    input = 'patterned_pattern_unused.i'
+    exodiff = 'patterned_pattern.e'
+    cli_args = 'Mesh/pattern_2/allow_unused_inputs=true --mesh-only "patterned_pattern.e"'
+    requirement ='The system shall allow input structures to be defined in "inputs" without being part of the Cartesian lattice.'
     recover = false
   []
   [patterned_pattern_cd]
@@ -254,7 +261,7 @@
     input = 'patterned_2d.i'
     cli_args = 'Mesh/pattern/pattern="0 0;0 0"
                   --mesh-only "patterned_err.e"'
-    expect_err = 'All the meshes provided in inputs must be used here.'
+    expect_err = 'All the meshes provided in inputs must be used in the lattice pattern.'
     requirement = 'The system shall throw an error if not all the cartesian meshes provided in inputs are used in pattern.'
   []
   [err_no_appropriate_pitch_meta]

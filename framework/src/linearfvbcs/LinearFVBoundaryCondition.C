@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -57,7 +57,7 @@ LinearFVBoundaryCondition::LinearFVBoundaryCondition(const InputParameters & par
     _tid(parameters.get<THREAD_ID>("_tid")),
     _subproblem(*getCheckedPointerParam<SubProblem *>("_subproblem")),
     _mesh(_subproblem.mesh()),
-    _fv_problem(*getCheckedPointerParam<FVProblemBase *>("_fe_problem_base")),
+    _fv_problem(*getCheckedPointerParam<FEProblemBase *>("_fe_problem_base")),
     _var(*mooseLinearVariableFV()),
     _sys(_var.sys()),
     _var_num(_var.number()),

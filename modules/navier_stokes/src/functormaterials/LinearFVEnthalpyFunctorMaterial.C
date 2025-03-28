@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -26,7 +26,7 @@ LinearFVEnthalpyFunctorMaterial::validParams()
   params.addRequiredParam<MooseFunctorName>(NS::specific_enthalpy, "Specific Enthalpy");
 
   // Please choose between providing a fluid properties
-  params.addParam<UserObjectName>(NS::fluid, "Fluid properties functor userobject");
+  params.addParam<UserObjectName>(NS::fluid, "Fluid properties userobject");
   // or the h_from_p_T and T_from_p_h functors.
   params.addParam<MooseFunctorName>("h_from_p_T_functor",
                                     "User specified enthalpy from temperature functor");

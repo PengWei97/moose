@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -780,7 +780,7 @@ InputParameters::hasDefault(const std::string & param_name) const
   else if (isParamSetByAddParam(name))
     return true;
   else if (isParamValid(name))
-    mooseError("No way to know if the parameter", param_name, "has a default");
+    mooseError("No way to know if the parameter '", param_name, "' has a default");
   else
     return false;
 }

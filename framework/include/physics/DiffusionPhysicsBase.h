@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -10,6 +10,7 @@
 #pragma once
 
 #include "PhysicsBase.h"
+#include "PhysicsComponentInterface.h"
 
 class ActionComponent;
 
@@ -23,7 +24,7 @@ class ActionComponent;
  * Base class to host all common parameters and attributes of Physics actions to solve the diffusion
  * equation
  */
-class DiffusionPhysicsBase : public PhysicsBase
+class DiffusionPhysicsBase : virtual public PhysicsBase, virtual public PhysicsComponentInterface
 {
 public:
   static InputParameters validParams();
@@ -42,5 +43,7 @@ private:
   virtual void addPreconditioning() override;
   /// Add postprocessing of the fluxes
   virtual void addPostprocessors() override;
+  // The initial conditions for CG and FV can use the same classes
   virtual void addInitialConditions() override;
+  virtual void addInitialConditionsFromComponents() override;
 };

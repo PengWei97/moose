@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -15,7 +15,6 @@
 #include "MooseTypes.h"
 #include "VariableWarehouse.h"
 #include "InputParameters.h"
-#include "MooseObjectWarehouseBase.h"
 #include "MooseVariableBase.h"
 #include "ConsoleStreamInterface.h"
 
@@ -137,12 +136,12 @@ public:
   /**
    * Gets writeable reference to the dof map
    */
-  virtual DofMap & dofMap();
+  virtual libMesh::DofMap & dofMap();
 
   /**
    * Gets const reference to the dof map
    */
-  virtual const DofMap & dofMap() const;
+  virtual const libMesh::DofMap & dofMap() const;
 
   /**
    * Get the reference to the libMesh system
@@ -771,10 +770,7 @@ public:
    * @param var_name The name of the variable
    * @return the set of subdomain ids where the variable is active (defined)
    */
-  const std::set<SubdomainID> & getSubdomainsForVar(const std::string & var_name) const
-  {
-    return getSubdomainsForVar(getVariable(0, var_name).number());
-  }
+  const std::set<SubdomainID> & getSubdomainsForVar(const std::string & var_name) const;
 
   /**
    * Remove a vector from the system with the given name.

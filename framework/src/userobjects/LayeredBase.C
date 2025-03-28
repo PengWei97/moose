@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -179,7 +179,7 @@ LayeredBase::LayeredBase(const InputParameters & parameters)
 }
 
 Real
-LayeredBase::integralValue(Point p) const
+LayeredBase::integralValue(const Point & p) const
 {
   unsigned int layer = getLayer(p);
 
@@ -345,7 +345,7 @@ LayeredBase::threadJoin(const UserObject & y)
 }
 
 unsigned int
-LayeredBase::getLayer(Point p) const
+LayeredBase::getLayer(const Point & p) const
 {
   Real direction_x = p(_direction);
 

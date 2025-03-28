@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -54,6 +54,7 @@
 #include "RestartableDataWriter.h"
 #include "StringInputStream.h"
 #include "MooseMain.h"
+#include "FEProblemBase.h"
 
 // Regular expression includes
 #include "pcrecpp.h"
@@ -1005,10 +1006,17 @@ MooseApp::setupOptions()
 
     if (isParamSetByUser("mesh_only"))
     {
-      _syntax.registerTaskName("mesh_only", true);
-      _syntax.addDependency("mesh_only", "setup_mesh_complete");
-      _syntax.addDependency("determine_system_type", "mesh_only");
-      _action_warehouse.setFinalTask("mesh_only");
+      // If we are looking to just check the input, there is no need to
+      // call MeshOnlyAction and generate a mesh
+      if (_check_input)
+        _action_warehouse.setFinalTask("setup_mesh_complete");
+      else
+      {
+        _syntax.registerTaskName("mesh_only", true);
+        _syntax.addDependency("mesh_only", "setup_mesh_complete");
+        _syntax.addDependency("determine_system_type", "mesh_only");
+        _action_warehouse.setFinalTask("mesh_only");
+      }
     }
     else if (isParamSetByUser("split_mesh"))
     {
@@ -1166,6 +1174,11 @@ MooseApp::errorCheck()
   bool err = _enable_unused_check == ERROR_UNUSED;
 
   _builder.errorCheck(*_comm, warn, err);
+
+  // Return early for mesh only mode, since we want error checking to run even though
+  // an executor is not created for this case
+  if (isParamSetByUser("mesh_only"))
+    return;
 
   if (!_executor.get() && !_executioner.get())
   {

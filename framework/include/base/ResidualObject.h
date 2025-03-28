@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -11,7 +11,6 @@
 
 #include "MooseObject.h"
 #include "SetupInterface.h"
-#include "CoupleableMooseVariableDependencyIntermediateInterface.h"
 #include "FunctionInterface.h"
 #include "UserObjectInterface.h"
 #include "TransientInterface.h"
@@ -21,7 +20,6 @@
 #include "Restartable.h"
 #include "MeshChangedInterface.h"
 #include "TaggingInterface.h"
-#include "SystemBase.h"
 
 class FEProblemBase;
 class MooseMesh;
@@ -30,6 +28,7 @@ class Assembly;
 class MooseVariableBase;
 class MooseVariableFieldBase;
 class InputParameters;
+class SystemBase;
 
 /**
  * This is the common base class for objects that give residual contributions.

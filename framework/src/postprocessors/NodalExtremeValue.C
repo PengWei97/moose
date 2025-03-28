@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -31,7 +31,6 @@ NodalExtremeValue::NodalExtremeValue(const InputParameters & parameters)
   : ExtremeValueBase<NodalVariablePostprocessor>(parameters),
     _proxy_variable(isParamValid("proxy_variable") ? coupledValue("proxy_variable") : _u)
 {
-  _use_proxy = isParamValid("proxy_variable");
 }
 
 std::pair<Real, Real>

@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -10,7 +10,7 @@
 #ifdef LIBTORCH_ENABLED
 
 #include "LibtorchDRLControl.h"
-#include "LibtorchTorchScriptNeuralNet.h"
+#include "TorchScriptModule.h"
 #include "LibtorchArtificialNeuralNet.h"
 #include "Transient.h"
 

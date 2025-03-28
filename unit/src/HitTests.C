@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -320,6 +320,7 @@ TEST(HitTests, BraceExpressions)
        hit::Field::Kind::String},
       {"trailing space", "foo=bar boo=${foo} ", "boo", "bar", hit::Field::Kind::String},
       {"substute number", "foo=42 boo=${foo}", "boo", "42", hit::Field::Kind::Int},
+      {"substitute override", "foo=42 boo:=${foo}", "boo", "42", hit::Field::Kind::Int},
       {"multiple replacements",
        "foo=42 boo='${foo} ${foo}'",
        "boo",

@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -113,7 +113,7 @@ SolverSystem::checkInvalidSolution()
   auto & solution_invalidity = _app.solutionInvalidity();
 
   // sync all solution invalid counts to rank 0 process
-  solution_invalidity.sync();
+  solution_invalidity.syncIteration();
 
   if (solution_invalidity.hasInvalidSolution())
   {

@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -182,6 +182,9 @@ protected:
 
   /// We will hold a vector of cell volumes to make sure we can do volume corrections rapidly
   std::unique_ptr<NumericVector<Number>> _cell_volumes;
+
+  /// Enumerator for the method used for pressure projection
+  const MooseEnum _pressure_projection_method;
 };
 
 template <typename VarType>

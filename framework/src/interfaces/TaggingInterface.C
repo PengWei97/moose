@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -47,7 +47,7 @@ TaggingInterface::validParams()
 
   params.addParamNamesToGroup(
       "vector_tags matrix_tags extra_vector_tags extra_matrix_tags absolute_value_vector_tags",
-      "Tagging");
+      "Contribution to tagged field data");
 
   return params;
 }

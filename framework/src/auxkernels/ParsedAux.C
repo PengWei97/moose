@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -165,7 +165,8 @@ ParsedAux::computeValue()
   const auto & state = determineState();
   if (isNodal())
   {
-    const Moose::NodeArg node_arg = {_current_node, Moose::INVALID_BLOCK_ID};
+    const Moose::NodeArg node_arg = {_current_node,
+                                     &Moose::NodeArg::undefined_subdomain_connection};
     for (const auto i : index_range(_functors))
       _func_params[_nargs + i] = (*_functors[i])(node_arg, state);
   }

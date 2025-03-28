@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -10,6 +10,9 @@
 #include "SIMPLESolveNonlinearAssembly.h"
 #include "FEProblem.h"
 #include "SegregatedSolverUtils.h"
+#include "NonlinearSystemBase.h"
+
+#include "libmesh/nonlinear_implicit_system.h"
 
 using namespace libMesh;
 

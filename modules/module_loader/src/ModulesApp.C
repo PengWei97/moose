@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -81,6 +81,9 @@
 #endif
 #ifdef STOCHASTIC_TOOLS_ENABLED
 #include "StochasticToolsApp.h"
+#endif
+#ifdef SUBCHANNEL_ENABLED
+#include "SubChannelApp.h"
 #endif
 #ifdef THERMAL_HYDRAULICS_ENABLED
 #include "ThermalHydraulicsApp.h"
@@ -203,6 +206,10 @@ ModulesApp::registerApps()
   StochasticToolsApp::registerApps();
 #endif
 
+#ifdef SUBCHANNEL_ENABLED
+  SubChannelApp::registerApps();
+#endif
+
 #ifdef THERMAL_HYDRAULICS_ENABLED
   ThermalHydraulicsApp::registerApps();
 #endif
@@ -290,6 +297,10 @@ ModulesApp::registerObjects(Factory & factory)
 
 #ifdef STOCHASTIC_TOOLS_ENABLED
   StochasticToolsApp::registerObjects(factory);
+#endif
+
+#ifdef SUBCHANNEL_ENABLED
+  SubChannelApp::registerObjects(factory);
 #endif
 
 #ifdef THERMAL_HYDRAULICS_ENABLED
@@ -383,6 +394,10 @@ ModulesApp::associateSyntax(Syntax & syntax, ActionFactory & action_factory)
   StochasticToolsApp::associateSyntax(syntax, action_factory);
 #endif
 
+#ifdef SUBCHANNEL_ENABLED
+  SubChannelApp::associateSyntax(syntax, action_factory);
+#endif
+
 #ifdef THERMAL_HYDRAULICS_ENABLED
   ThermalHydraulicsApp::associateSyntax(syntax, action_factory);
 #endif
@@ -468,6 +483,10 @@ ModulesApp::registerExecFlags(Factory & factory)
 
 #ifdef STOCHASTIC_TOOLS_ENABLED
   StochasticToolsApp::registerExecFlags(factory);
+#endif
+
+#ifdef SUBCHANNEL_ENABLED
+  SubChannelApp::registerExecFlags(factory);
 #endif
 
 #ifdef THERMAL_HYDRAULICS_ENABLED
@@ -578,6 +597,10 @@ ModulesApp::registerAll(Factory & f, ActionFactory & af, Syntax & s)
 
 #ifdef STOCHASTIC_TOOLS_ENABLED
   StochasticToolsApp::registerAll(f, af, s);
+#endif
+
+#ifdef SUBCHANNEL_ENABLED
+  SubChannelApp::registerAll(f, af, s);
 #endif
 
 #ifdef THERMAL_HYDRAULICS_ENABLED

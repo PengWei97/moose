@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -597,6 +597,14 @@ public:
   }
   MooseObjectTagWarehouse<DiracKernelBase> & getDiracKernelWarehouse() { return _dirac_kernels; }
   MooseObjectTagWarehouse<IntegratedBCBase> & getIntegratedBCWarehouse() { return _integrated_bcs; }
+  const MooseObjectTagWarehouse<ScalarKernelBase> & getScalarKernelWarehouse() const
+  {
+    return _scalar_kernels;
+  }
+  const MooseObjectTagWarehouse<NodalKernelBase> & getNodalKernelWarehouse() const
+  {
+    return _nodal_kernels;
+  }
   const MooseObjectWarehouse<ElementDamper> & getElementDamperWarehouse() const
   {
     return _element_dampers;

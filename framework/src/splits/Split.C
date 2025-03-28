@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -27,11 +27,11 @@ Split::validParams()
   params.addParam<std::vector<SubdomainName>>(
       "blocks", {}, "Mesh blocks Split operates on (omitting this implies \"all blocks\"");
   params.addParam<std::vector<BoundaryName>>(
-      "sides", {}, "Sidesets Split operates on (omitting this implies \"no sidesets\"");
+      "sides", {}, "Sidesets Split operates on (omitting this implies \"all sidesets\")");
   params.addParam<std::vector<BoundaryName>>(
       "unsides",
       {},
-      "Sidesets Split excludes (omitting this implies \"do not exclude any sidesets\"");
+      "Sidesets Split excludes (omitting this implies \"do not exclude any sidesets\")");
   params.addParam<std::vector<std::string>>(
       "splitting", {}, "The names of the splits (subsystems) in the decomposition of this split");
   params.addParam<std::vector<BoundaryName>>(
@@ -40,11 +40,13 @@ Split::validParams()
   params.addParam<std::vector<NonlinearVariableName>>(
       "unside_by_var_var_name",
       "A map from boundary name to unside by variable, e.g. only unside for a given variable.");
+  params.addParamNamesToGroup("sides unsides unside_by_var_boundary_name unside_by_var_var_name",
+                              "Sideset restriction");
 
   MooseEnum SplittingTypeEnum("additive multiplicative symmetric_multiplicative schur", "additive");
   params.addParam<MooseEnum>("splitting_type", SplittingTypeEnum, "Split decomposition type");
 
-  MooseEnum SchurTypeEnum("full upper lower", "full");
+  MooseEnum SchurTypeEnum("diag upper lower full", "full");
   params.addParam<MooseEnum>("schur_type", SchurTypeEnum, "Type of Schur complement");
 
   /**
@@ -150,7 +152,7 @@ Split::setup(NonlinearSystemBase & nl, const std::string & prefix)
       // set Schur Type
       const std::string petsc_schur_type[] = {"diag", "upper", "lower", "full"};
       po.pairs.emplace_back(prefix + "pc_fieldsplit_schur_fact_type",
-                            petsc_schur_type[_splitting_type]);
+                            petsc_schur_type[_schur_type]);
 
       // set Schur Preconditioner
       const std::string petsc_schur_pre[] = {"self", "selfp", "a11"};

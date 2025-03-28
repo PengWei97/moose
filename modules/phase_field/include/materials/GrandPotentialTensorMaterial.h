@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -59,7 +59,4 @@ protected:
   Real _GBMobility;
   Real _GBmob0;
   const Real _Q;
-
-  /// solid phase order parameters
-  std::vector<NonlinearVariableName> _vals_name;
 };

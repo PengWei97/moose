@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -143,7 +143,7 @@ MultiSpeciesDiffusionPhysicsBase::addPostprocessors()
         params.set<MooseFunctorName>("functor_diffusivity") =
             getParam<std::vector<MooseFunctorName>>("diffusivity_functors")[i];
       else
-        params.set<MooseFunctorName>("functor_diffusivity") = "1";
+        mooseError("No diffusivity parameter specified");
       params.set<std::vector<BoundaryName>>("boundary") = {boundary_name};
       // Default to maximum computation
       params.set<ExecFlagEnum>("execute_on") = {

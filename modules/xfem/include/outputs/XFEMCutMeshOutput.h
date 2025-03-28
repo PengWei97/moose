@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -38,7 +38,7 @@ private:
   const MeshCut2DUserObjectBase & _cutter_uo;
 
   /// The EquationSystems
-  std::unique_ptr<EquationSystems> _es;
+  std::unique_ptr<libMesh::EquationSystems> _es;
 
   /// Exodus for outputting points and values
   std::unique_ptr<libMesh::ExodusII_IO> _exodus_io;

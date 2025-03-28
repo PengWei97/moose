@@ -1,5 +1,5 @@
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -425,7 +425,7 @@ MultiAppProjectionTransfer::execute()
 
     for (const auto & elem : to_mesh.active_local_element_ptr_range())
     {
-      qrule.init(elem->type(), elem->p_level());
+      qrule.init(*elem);
 
       bool element_is_evaled = false;
       std::vector<Real> evals(qrule.n_points(), 0.);
