@@ -45,6 +45,9 @@ NSFVBase::commonNavierStokesFlowParams()
       "outlet_boundaries", std::vector<BoundaryName>(), "Names of outlet boundaries");
   params.addParam<std::vector<BoundaryName>>(
       "wall_boundaries", std::vector<BoundaryName>(), "Names of wall boundaries");
+  params.addParam<std::vector<BoundaryName>>("hydraulic_separator_sidesets",
+                                             std::vector<BoundaryName>(),
+                                             "Sidesets which serve as hydraulic separators.");
   return params;
 }
 
@@ -407,6 +410,12 @@ NSFVBase::validParams()
   params.addParam<MooseEnum>("porosity_interface_pressure_treatment",
                              porosity_interface_pressure_treatment,
                              "How to treat pressure at a porosity interface");
+  params.addParam<std::vector<BoundaryName>>(
+      "pressure_drop_sidesets", {}, "Sidesets over which form loss coefficients are to be applied");
+  params.addParam<std::vector<Real>>(
+      "pressure_drop_form_factors",
+      {},
+      "User-supplied form loss coefficients to be applied over the sidesets listed above");
 
   params.addParam<bool>("use_friction_correction",
                         false,
@@ -417,7 +426,8 @@ NSFVBase::validParams()
       "Scaling parameter for the friction correction in the momentum equation (if requested).");
 
   params.addParamNamesToGroup("porosity porosity_smoothing_layers use_friction_correction "
-                              "consistent_scaling porosity_interface_pressure_treatment",
+                              "consistent_scaling porosity_interface_pressure_treatment "
+                              "pressure_drop_sidesets pressure_drop_form_factors",
                               "Porous medium treatment");
 
   /**

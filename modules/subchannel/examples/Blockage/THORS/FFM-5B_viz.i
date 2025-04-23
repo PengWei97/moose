@@ -1,6 +1,6 @@
 ################################################################################
 ## THORS bundle 5B partial edge blockage benchmark                            ##
-## Pronghorn Subchannel simulation                                            ##
+## SCM simulation                                                             ##
 ## POC : Vasileios Kyriakopoulos, vasileios.kyriakopoulos@inl.gov             ##
 ################################################################################
 # Details on the experimental facility modeled can be found at:

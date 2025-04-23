@@ -47,6 +47,9 @@ WCNSFVFlowPhysics::validParams()
 
   // Techniques to limit or remove oscillations at porosity jump interfaces
   params.transferParam<MooseEnum>(NSFVBase::validParams(), "porosity_interface_pressure_treatment");
+  params.transferParam<std::vector<BoundaryName>>(NSFVBase::validParams(),
+                                                  "pressure_drop_sidesets");
+  params.transferParam<std::vector<Real>>(NSFVBase::validParams(), "pressure_drop_form_factors");
 
   // Friction correction, a technique to limit oscillations at friction interfaces
   params.transferParam<bool>(NSFVBase::validParams(), "use_friction_correction");
@@ -72,7 +75,8 @@ WCNSFVFlowPhysics::validParams()
   params.addParamNamesToGroup("coupled_turbulence_physics", "Coupled Physics");
   params.addParamNamesToGroup(
       "porosity_interface_pressure_treatment pressure_allow_expansion_on_bernoulli_faces "
-      "porosity_smoothing_layers use_friction_correction consistent_scaling",
+      "porosity_smoothing_layers use_friction_correction consistent_scaling "
+      "pressure_drop_sidesets pressure_drop_form_factors",
       "Flow medium discontinuity treatment");
   params.addParamNamesToGroup("pressure_face_interpolation momentum_face_interpolation "
                               "mass_advection_interpolation momentum_advection_interpolation "
@@ -136,7 +140,9 @@ WCNSFVFlowPhysics::WCNSFVFlowPhysics(const InputParameters & parameters)
   if (getParam<MooseEnum>("porosity_interface_pressure_treatment") != "bernoulli")
     errorDependentParameter("porosity_interface_pressure_treatment",
                             "bernoulli",
-                            {"pressure_allow_expansion_on_bernoulli_faces"});
+                            {"pressure_allow_expansion_on_bernoulli_faces",
+                             "pressure_drop_sidesets",
+                             "pressure_drop_form_factors"});
 
   // Porous media parameters
   checkSecondParamSetOnlyIfFirstOneTrue("porous_medium_treatment", "porosity_smoothing_layers");
@@ -223,6 +229,10 @@ WCNSFVFlowPhysics::addSolverVariables()
       params.set<MooseFunctorName>(NS::density) = _density_name;
       params.set<bool>("allow_two_term_expansion_on_bernoulli_faces") =
           getParam<bool>("pressure_allow_expansion_on_bernoulli_faces");
+      params.set<std::vector<BoundaryName>>("pressure_drop_sidesets") =
+          getParam<std::vector<BoundaryName>>("pressure_drop_sidesets");
+      params.set<std::vector<Real>>("pressure_drop_form_factors") =
+          getParam<std::vector<Real>>("pressure_drop_form_factors");
     }
     params.set<SolverSystemName>("solver_sys") = getSolverSystem(_pressure_name);
     getProblem().addVariable(pressure_type, _pressure_name, params);
@@ -980,6 +990,31 @@ WCNSFVFlowPhysics::addWallsBC()
         getProblem().addFVBC(bc_type, _pressure_name + "_" + boundary_name, params);
       }
     }
+  }
+}
+
+void
+WCNSFVFlowPhysics::addSeparatorBC()
+{
+  if (_hydraulic_separators.size())
+  {
+    std::string bc_type = "INSFVVelocityHydraulicSeparatorBC";
+    InputParameters params = getFactory().getValidParams(bc_type);
+    params.set<std::vector<BoundaryName>>("boundary") = _hydraulic_separators;
+    params.set<UserObjectName>("rhie_chow_user_object") = rhieChowUOName();
+
+    for (const auto d : make_range(dimension()))
+    {
+      params.set<NonlinearVariableName>("variable") = _velocity_names[d];
+      params.set<MooseEnum>("momentum_component") = NS::directions[d];
+      getProblem().addFVBC(bc_type, prefix() + _velocity_names[d] + "_separators", params);
+    }
+
+    bc_type = "INSFVScalarFieldSeparatorBC";
+    params = getFactory().getValidParams(bc_type);
+    params.set<std::vector<BoundaryName>>("boundary") = _hydraulic_separators;
+    params.set<NonlinearVariableName>("variable") = _pressure_name;
+    getProblem().addFVBC(bc_type, prefix() + _pressure_name + "_separators", params);
   }
 }
 

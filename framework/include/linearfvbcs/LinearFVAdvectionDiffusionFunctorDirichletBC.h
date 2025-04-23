@@ -38,6 +38,8 @@ public:
 
   virtual Real computeBoundaryGradientRHSContribution() const override;
 
+  virtual bool useBoundaryGradientExtrapolation() const override { return true; }
+
 protected:
   /// The functor for this BC (can be variable, function, etc)
   const Moose::Functor<Real> & _functor;
