@@ -1,6 +1,6 @@
 [Mesh]
   type = MFEMMesh
-  file = gold/beam-tet.mesh
+  file = ../mesh/beam-tet.mesh
   dim = 3
   uniform_refine = 2
   displacement = "displacement"
@@ -42,15 +42,15 @@
   []
 []
 
-[Materials]
+[FunctorMaterials]
   [Rigidium]
-    type = MFEMGenericConstantMaterial
+    type = MFEMGenericConstantFunctorMaterial
     prop_names = 'lambda mu'
     prop_values = '50.0 50.0'
     block = 1
   []
   [Bendium]
-    type = MFEMGenericConstantMaterial
+    type = MFEMGenericConstantFunctorMaterial
     prop_names = 'lambda mu'
     prop_values = '1.0 1.0'
     block = 2

@@ -272,6 +272,10 @@ class Job(OutputInterface):
         """ Return the shorthand Test name """
         return self.__tester.getTestNameShort()
 
+    def getTestNameForFile(self):
+        """ return test short name for file creation ('/' to '.')"""
+        return self.__tester.getTestNameForFile()
+
     def getPrereqs(self):
         """ Wrapper method to return the testers prereqs """
         return self.__tester.getPrereqs()
@@ -663,7 +667,7 @@ class Job(OutputInterface):
 
         Should be used for all TestHarness produced files for this job
         """
-        return os.path.join(self.getOutputDirectory(), self.getTestNameShort().replace(os.sep, '.'))
+        return os.path.join(self.getOutputDirectory(), self.getTestNameForFile())
 
     def hasSeperateOutput(self):
         """
@@ -770,18 +774,23 @@ class Job(OutputInterface):
         """ Store the results for this Job into the results storage """
         joint_status = self.getJointStatus()
 
+        status = {'status': joint_status.status,
+                  'status_message': joint_status.message,
+                  'fail': self.isFail(),
+                  'caveats': list(self.getCaveats())}
+
         # Base job data
-        job_data = {'timing'               : self.timer.totalTimes(),
-                    'status'               : joint_status.status,
-                    'status_message'       : joint_status.message,
-                    'fail'                 : self.isFail(),
-                    'color'                : joint_status.color,
-                    'caveats'              : list(self.getCaveats()),
-                    'tester'               : self.getTester().getResults(self.options)}
+        job_data = {'status': status,
+                    'timing': self.timer.totalTimes(),
+                    'tester': self.getTester().getResults(self.options)}
         if self.hasSeperateOutput():
             job_data['output_files'] = self.getCombinedSeparateOutputPaths()
         else:
             job_data['output'] = self.getAllOutput()
+
+        unique_test_id = self.getTester().getUniqueTestID()
+        if unique_test_id is not None:
+            job_data['unique_test_id'] = unique_test_id
 
         # Extend with data from the scheduler, if any
         job_data.update(scheduler.appendResultFileJob(self))

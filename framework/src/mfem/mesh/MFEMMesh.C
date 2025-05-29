@@ -1,7 +1,7 @@
 #ifdef MFEM_ENABLED
 
 //* This file is part of the MOOSE framework
-//* https://www.mooseframework.org
+//* https://mooseframework.inl.gov
 //*
 //* All rights reserved, see COPYRIGHT for full restrictions
 //* https://github.com/idaholab/moose/blob/master/COPYRIGHT
@@ -94,10 +94,10 @@ MFEMMesh::buildDummyMooseMesh()
   Point pt3(1.0, 1.0, 0.0);
   Point pt4(0.0, 1.0, 0.0);
 
-  element->set_node(0) = getMesh().add_point(pt1);
-  element->set_node(1) = getMesh().add_point(pt2);
-  element->set_node(2) = getMesh().add_point(pt3);
-  element->set_node(3) = getMesh().add_point(pt4);
+  element->set_node(0, getMesh().add_point(pt1));
+  element->set_node(1, getMesh().add_point(pt2));
+  element->set_node(2, getMesh().add_point(pt3));
+  element->set_node(3, getMesh().add_point(pt4));
 
   getMesh().prepare_for_use();
 }

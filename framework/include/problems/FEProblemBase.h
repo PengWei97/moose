@@ -66,7 +66,7 @@ class MultiApp;
 class TransientMultiApp;
 class ScalarInitialCondition;
 class Indicator;
-class InternalSideIndicator;
+class InternalSideIndicatorBase;
 class Marker;
 class Material;
 class Transfer;
@@ -1659,7 +1659,7 @@ public:
    */
   ///@{
   const MooseObjectWarehouse<Indicator> & getIndicatorWarehouse() { return _indicators; }
-  const MooseObjectWarehouse<InternalSideIndicator> & getInternalSideIndicatorWarehouse()
+  const MooseObjectWarehouse<InternalSideIndicatorBase> & getInternalSideIndicatorWarehouse()
   {
     return _internal_side_indicators;
   }
@@ -2394,6 +2394,10 @@ public:
    * @returns the linear system names in the problem
    */
   const std::vector<LinearSystemName> & getLinearSystemNames() const { return _linear_sys_names; }
+  /**
+   * @returns the solver system names in the problem
+   */
+  const std::vector<SolverSystemName> & getSolverSystemNames() const { return _solver_sys_names; }
 
 protected:
   /// Create extra tagged vectors and matrices
@@ -2513,7 +2517,7 @@ protected:
   std::map<SolverSystemName, unsigned int> _solver_sys_name_to_num;
 
   /// The union of nonlinear and linear system names
-  std::vector<std::string> _solver_sys_names;
+  std::vector<SolverSystemName> _solver_sys_names;
 
   /// The auxiliary system
   std::shared_ptr<AuxiliarySystem> _aux;
@@ -2570,7 +2574,7 @@ protected:
   ///@{
   // Indicator Warehouses
   MooseObjectWarehouse<Indicator> _indicators;
-  MooseObjectWarehouse<InternalSideIndicator> _internal_side_indicators;
+  MooseObjectWarehouse<InternalSideIndicatorBase> _internal_side_indicators;
   ///@}
 
   // Marker Warehouse
@@ -2777,6 +2781,9 @@ protected:
 
   /// Whether or not to be verbose with multiapps
   bool _verbose_multiapps;
+
+  /// Whether or not to be verbose on solution restoration post a failed time step
+  bool _verbose_restore;
 
   /// The error message to go with an exception
   std::string _exception_message;

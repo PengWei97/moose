@@ -56,9 +56,9 @@ MFEMProblem::addMFEMPreconditioner(const std::string & user_object_name,
                                    InputParameters & parameters)
 {
   FEProblemBase::addUserObject(user_object_name, name, parameters);
-  MFEMSolverBase & mfem_preconditioner = getUserObject<MFEMSolverBase>(name);
+  auto object_ptr = getUserObject<MFEMSolverBase>(name).getSharedPtr();
 
-  getProblemData().jacobian_preconditioner = mfem_preconditioner.getSolver();
+  getProblemData().jacobian_preconditioner = std::dynamic_pointer_cast<MFEMSolverBase>(object_ptr);
 }
 
 void
@@ -67,9 +67,9 @@ MFEMProblem::addMFEMSolver(const std::string & user_object_name,
                            InputParameters & parameters)
 {
   FEProblemBase::addUserObject(user_object_name, name, parameters);
-  MFEMSolverBase & mfem_solver = getUserObject<MFEMSolverBase>(name);
+  auto object_ptr = getUserObject<MFEMSolverBase>(name).getSharedPtr();
 
-  getProblemData().jacobian_solver = mfem_solver.getSolver();
+  getProblemData().jacobian_solver = std::dynamic_pointer_cast<MFEMSolverBase>(object_ptr);
 }
 
 void
@@ -91,26 +91,57 @@ MFEMProblem::addBoundaryCondition(const std::string & bc_name,
                                   InputParameters & parameters)
 {
   FEProblemBase::addUserObject(bc_name, name, parameters);
-
-  auto object_ptr = getUserObject<MFEMBoundaryCondition>(name).getSharedPtr();
-  auto mfem_bc = std::dynamic_pointer_cast<MFEMBoundaryCondition>(object_ptr);
-
-  if (getProblemData().bc_map.Has(name))
+  const UserObject * mfem_bc_uo = &(getUserObjectBase(name));
+  if (dynamic_cast<const MFEMIntegratedBC *>(mfem_bc_uo) != nullptr)
   {
-    const std::string error_message = "A boundary condition with the name " + name +
-                                      " has already been added to the problem boundary conditions.";
-    mfem::mfem_error(error_message.c_str());
+    auto object_ptr = getUserObject<MFEMIntegratedBC>(name).getSharedPtr();
+    auto bc = std::dynamic_pointer_cast<MFEMIntegratedBC>(object_ptr);
+    bc->getBoundaries();
+    if (getProblemData().eqn_system)
+    {
+      getProblemData().eqn_system->AddIntegratedBC(std::move(bc));
+    }
+    else
+    {
+      mooseError("Cannot add integrated BC with name '" + name +
+                 "' because there is no corresponding equation system.");
+    }
   }
-  getProblemData().bc_map.Register(name, std::move(mfem_bc));
+  else if (dynamic_cast<const MFEMEssentialBC *>(mfem_bc_uo) != nullptr)
+  {
+    auto object_ptr = getUserObject<MFEMEssentialBC>(name).getSharedPtr();
+    auto mfem_bc = std::dynamic_pointer_cast<MFEMEssentialBC>(object_ptr);
+    mfem_bc->getBoundaries();
+    if (getProblemData().eqn_system)
+    {
+      getProblemData().eqn_system->AddEssentialBC(std::move(mfem_bc));
+    }
+    else
+    {
+      mooseError("Cannot add boundary condition with name '" + name +
+                 "' because there is no corresponding equation system.");
+    }
+  }
+  else
+  {
+    mooseError("Unsupported bc of type '", bc_name, "' and name '", name, "' detected.");
+  }
 }
 
 void
-MFEMProblem::addMaterial(const std::string & kernel_name,
-                         const std::string & name,
-                         InputParameters & parameters)
+MFEMProblem::addMaterial(const std::string &, const std::string &, InputParameters &)
 {
-  FEProblemBase::addUserObject(kernel_name, name, parameters);
-  getUserObject<MFEMMaterial>(name);
+  mooseError(
+      "MFEM materials must be added through the 'FunctorMaterials' block and not 'Materials'");
+}
+
+void
+MFEMProblem::addFunctorMaterial(const std::string & material_name,
+                                const std::string & name,
+                                InputParameters & parameters)
+{
+  FEProblemBase::addUserObject(material_name, name, parameters);
+  getUserObject<MFEMFunctorMaterial>(name);
 }
 
 void
@@ -164,6 +195,12 @@ MFEMProblem::addGridFunction(const std::string & var_type,
   // Register gridfunction.
   MFEMVariable & mfem_variable = getUserObject<MFEMVariable>(var_name);
   getProblemData().gridfunctions.Register(var_name, mfem_variable.getGridFunction());
+  if (mfem_variable.getFESpace().isScalar())
+    getCoefficients().declareScalar<mfem::GridFunctionCoefficient>(
+        var_name, mfem_variable.getGridFunction().get());
+  else
+    getCoefficients().declareVector<mfem::VectorGridFunctionCoefficient>(
+        var_name, mfem_variable.getGridFunction().get());
 }
 
 void
@@ -189,48 +226,26 @@ MFEMProblem::addKernel(const std::string & kernel_name,
                        InputParameters & parameters)
 {
   FEProblemBase::addUserObject(kernel_name, name, parameters);
-  const UserObject * kernel = &(getUserObjectBase(name));
+  const UserObject * kernel_uo = &(getUserObjectBase(name));
 
-  if (dynamic_cast<const MFEMKernel<mfem::LinearFormIntegrator> *>(kernel) != nullptr)
+  if (dynamic_cast<const MFEMKernel *>(kernel_uo) != nullptr)
   {
-    auto object_ptr = getUserObject<MFEMKernel<mfem::LinearFormIntegrator>>(name).getSharedPtr();
-    auto lf_kernel = std::dynamic_pointer_cast<MFEMKernel<mfem::LinearFormIntegrator>>(object_ptr);
-
-    addKernel(lf_kernel->getTestVariableName(), lf_kernel);
-  }
-  else if (dynamic_cast<const MFEMMixedBilinearFormKernel *>(kernel) != nullptr)
-  {
-    auto object_ptr = getUserObject<MFEMMixedBilinearFormKernel>(name).getSharedPtr();
-    auto mblf_kernel = std::dynamic_pointer_cast<MFEMMixedBilinearFormKernel>(object_ptr);
-    addKernel(mblf_kernel->getTrialVariableName(), mblf_kernel->getTestVariableName(), mblf_kernel);
-  }
-  else if (dynamic_cast<const MFEMKernel<mfem::BilinearFormIntegrator> *>(kernel) != nullptr)
-  {
-    auto object_ptr = getUserObject<MFEMKernel<mfem::BilinearFormIntegrator>>(name).getSharedPtr();
-    auto blf_kernel =
-        std::dynamic_pointer_cast<MFEMKernel<mfem::BilinearFormIntegrator>>(object_ptr);
-    addKernel(blf_kernel->getTestVariableName(), blf_kernel);
+    auto object_ptr = getUserObject<MFEMKernel>(name).getSharedPtr();
+    auto kernel = std::dynamic_pointer_cast<MFEMKernel>(object_ptr);
+    if (getProblemData().eqn_system)
+    {
+      getProblemData().eqn_system->AddKernel(std::move(kernel));
+    }
+    else
+    {
+      mooseError("Cannot add kernel with name '" + name +
+                 "' because there is no corresponding equation system.");
+    }
   }
   else
   {
     mooseError("Unsupported kernel of type '", kernel_name, "' and name '", name, "' detected.");
   }
-}
-
-/**
- * Method for adding mixed bilinear kernels. We can only add kernels using equation system problem
- * builders.
- */
-void
-MFEMProblem::addKernel(std::string trial_var_name,
-                       std::string test_var_name,
-                       std::shared_ptr<MFEMMixedBilinearFormKernel> kernel)
-{
-  if (getProblemData().eqn_system)
-    getProblemData().eqn_system->AddKernel(trial_var_name, test_var_name, std::move(kernel));
-  else
-    mooseError("Cannot add kernel with name '" + test_var_name +
-               "' because there is no equation system.");
 }
 
 libMesh::Point
@@ -319,14 +334,16 @@ MFEMProblem::addFunction(const std::string & type,
   // are only of space or only of time.
   if (std::find(SCALAR_FUNCS.begin(), SCALAR_FUNCS.end(), type) != SCALAR_FUNCS.end())
   {
-    _scalar_functions[name] = makeScalarCoefficient<mfem::FunctionCoefficient>(
+    getCoefficients().declareScalar<mfem::FunctionCoefficient>(
+        name,
         [&func](const mfem::Vector & p, double t) -> mfem::real_t
         { return func.value(t, pointFromMFEMVector(p)); });
   }
   else if (std::find(VECTOR_FUNCS.begin(), VECTOR_FUNCS.end(), type) != VECTOR_FUNCS.end())
   {
     int dim = vectorFunctionDim(type, parameters);
-    _vector_functions[name] = makeVectorCoefficient<mfem::VectorFunctionCoefficient>(
+    getCoefficients().declareVector<mfem::VectorFunctionCoefficient>(
+        name,
         dim,
         [&func, dim](const mfem::Vector & p, double t, mfem::Vector & u)
         {
@@ -343,6 +360,18 @@ MFEMProblem::addFunction(const std::string & type,
                  type,
                  " is scalar or vector; no MFEM coefficient object created.");
   }
+}
+
+void
+MFEMProblem::addPostprocessor(const std::string & type,
+                              const std::string & name,
+                              InputParameters & parameters)
+{
+  // For some reason this isn't getting called
+  ExternalProblem::addPostprocessor(type, name, parameters);
+  const PostprocessorValue & val = getPostprocessorValueByName(name);
+  getCoefficients().declareScalar<mfem::FunctionCoefficient>(
+      name, [&val](const mfem::Vector &, double) -> mfem::real_t { return val; });
 }
 
 InputParameters
@@ -432,32 +461,6 @@ std::vector<VariableName>
 MFEMProblem::getAuxVariableNames()
 {
   return systemBaseAuxiliary().getVariableNames();
-}
-
-std::shared_ptr<mfem::FunctionCoefficient>
-MFEMProblem::getScalarFunctionCoefficient(const std::string & name)
-{
-  try
-  {
-    return this->_scalar_functions.at(name);
-  }
-  catch (const std::out_of_range &)
-  {
-    mooseError("No scalar function with name '" + name + "'.");
-  }
-}
-
-std::shared_ptr<mfem::VectorFunctionCoefficient>
-MFEMProblem::getVectorFunctionCoefficient(const std::string & name)
-{
-  try
-  {
-    return this->_vector_functions.at(name);
-  }
-  catch (const std::out_of_range &)
-  {
-    mooseError("No vector function with name '" + name + "'.");
-  }
 }
 
 MFEMMesh &

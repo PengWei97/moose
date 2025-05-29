@@ -347,7 +347,22 @@ TransientBase::incrementStepOrReject()
       _time_old = _time;
       _t_step++;
 
-      _problem.advanceState();
+      bool advance_problem_state = true;
+      const auto & tis = getTimeIntegrators();
+      for (auto & ti : tis)
+        // We do not want to advance the problem state here if a time integrator is already doing so
+        // itself
+        if (ti->advancesProblemState())
+        {
+          advance_problem_state = false;
+          break;
+        }
+
+      if (advance_problem_state)
+        _problem.advanceState();
+      else if (tis.size() > 1)
+        mooseError("Either there must be a single time integrator which advances state or none of "
+                   "the time integrators should advance state.");
 
       if (_t_step == 1)
         return;
@@ -710,8 +725,28 @@ TransientBase::getTimeIntegratorNames() const
 
   std::vector<std::string> ret;
   for (const auto & ti : tis)
-    ret.push_back(ti->type());
+  {
+    const auto & sys = ti->getCheckedPointerParam<SystemBase *>("_sys")->system();
+    const auto & uvars = ti->getParam<std::vector<VariableName>>("variables");
 
+    std::vector<VariableName> vars;
+    for (const auto & var : uvars)
+      if (sys.has_variable(var))
+        vars.push_back(var);
+
+    if (!uvars.empty() && vars.empty())
+      continue;
+
+    if (tis.size() > 1)
+    {
+      const std::string sys_prefix = _problem.numSolverSystems() > 1 ? sys.name() : "";
+      const std::string var_prefix = MooseUtils::join(vars, ", ");
+      const bool both = !sys_prefix.empty() && !var_prefix.empty();
+      ret.push_back("[" + sys_prefix + (both ? " (" : "") + var_prefix + (both ? ")" : "") + "]:");
+    }
+
+    ret.push_back(ti->type());
+  }
   return ret;
 }
 

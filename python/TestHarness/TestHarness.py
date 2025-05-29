@@ -308,6 +308,11 @@ class TestHarness:
             self.options._capabilities = None
         else:
             assert self.executable
+
+            # Make sure capabilities are available early; this will exit
+            # if we fail
+            import pycapabilities
+
             self.options._capabilities = util.getCapabilities(self.executable)
 
         # Load app json output if we can
@@ -837,7 +842,8 @@ class TestHarness:
                 # Store the results from each job
                 for job_group in all_jobs:
                     for job in job_group:
-                        job.storeResults(self.scheduler)
+                        if not job.isSilent():
+                            job.storeResults(self.scheduler)
 
                 # And write the results, including the stats
                 self.writeResults(complete=True, stats=stats)
@@ -884,52 +890,61 @@ class TestHarness:
         - Setup the header for the storage
         - Write the incomplete storage to file
         """
+        file = self.options.results_file
+
         if self.useExistingStorage():
-            if not os.path.exists(self.options.results_file):
-                print(f'The previous run {self.options.results_file} does not exist')
+            if not os.path.exists(file):
+                print(f'The previous run {file} does not exist')
                 sys.exit(1)
             try:
-                with open(self.options.results_file, 'r') as f:
-                    self.options.results_storage = json.load(f)
+                with open(file, 'r') as f:
+                    results = json.load(f)
             except:
-                print(f'ERROR: Failed to load result {self.options.results_file}')
+                print(f'ERROR: Failed to load result {file}')
                 raise
 
-            if self.options.results_storage['incomplete']:
-                print(f'ERROR: The previous result {self.options.results_file} is incomplete!')
+            testharness = results.get('testharness')
+            if testharness is None:
+                print(f'ERROR: The previous result {file} is not valid!')
+                sys.exit(1)
+
+            if not testharness.get('end_time'):
+                print(f'ERROR: The previous result {file} is incomplete!')
                 sys.exit(1)
 
             # Adhere to previous input file syntax, or set the default
-            self.options.input_file_name = self.options.results_storage.get('input_file_name', self.options.input_file_name)
+            self.options.input_file_name = testharness.get('input_file_name', self.options.input_file_name)
 
             # Done working with existing storage
+            self.options.results_storage = results
             return
 
         # Remove the old one if it exists
-        if os.path.exists(self.options.results_file):
-            os.remove(self.options.results_file)
+        if os.path.exists(file):
+            os.remove(file)
 
         # Not using previous or previous failed, initialize a new one
         self.options.results_storage = {}
         storage = self.options.results_storage
 
-        # Record the input file name that was used
-        storage['input_file_name'] = self.options.input_file_name
+        # Version history:
+        # 1 - Initial tracking of version
+        # 2 - Added 'unique_test_id' (tests/*/tests/*/unique_test_id) to Job output if set
+        # 3 - Added 'json_metadata' (tests/*/tests/*/tester/json_metadata) to Tester output
+        testharness = {'version': 3,
+                       'start_time': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                       'end_time': None,
+                       'args': sys.argv[1:],
+                       'input_file_name': self.options.input_file_name,
+                       'root_dir': self._rootdir,
+                       'sep_files': self.options.sep_files,
+                       'scheduler': self.scheduler.__class__.__name__,
+                       'moose_dir': self.moose_dir}
+        storage['testharness'] = testharness
 
-        # The test root directory
-        storage['root_dir'] = self._rootdir
-        # Record that we are using --sep-files
-        storage['sep_files'] = self.options.sep_files
-
-        # Record the Scheduler Plugin used
-        storage['scheduler'] = self.scheduler.__class__.__name__
-
-        # Record information on the host we can ran on
-        storage['hostname'] = socket.gethostname()
-        storage['user'] = getpass.getuser()
-        storage['testharness_path'] = os.path.abspath(os.path.join(os.path.abspath(__file__), '..'))
-        storage['testharness_args'] = sys.argv[1:]
-        storage['moose_dir'] = self.moose_dir
+        environment = {'hostname': socket.gethostname(),
+                       'user': getpass.getuser()}
+        storage['environment'] = environment
 
         # Record information from apptainer, if any
         apptainer_container = os.environ.get('APPTAINER_CONTAINER')
@@ -943,14 +958,8 @@ class TestHarness:
                     apptainer[f'generator_{suffix.lower()}'] = os.environ.get(f'{var_prefix}_{suffix}')
             storage['apptainer'] = apptainer
 
-        # Record when the run began
-        storage['time'] = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
         # Record any additional data from the scheduler
         storage.update(self.scheduler.appendResultFileHeader())
-
-        # Record whether or not the storage is incomplete
-        storage['incomplete'] = True
 
         # Empty storage for the tests
         storage['tests'] = {}
@@ -967,23 +976,28 @@ class TestHarness:
         if self.useExistingStorage():
             raise Exception('Should not write results')
 
+        storage = self.options.results_storage
+
         # Make it as complete (run is done)
-        self.options.results_storage['incomplete'] = not complete
+        if complete:
+            now = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            storage['testharness']['end_time'] = now
+
         # Store the stats
-        self.options.results_storage['stats'] = stats
+        storage['stats'] = stats
 
         # Store to a temporary file so that we always have a working file
         file = self.options.results_file
         file_in_progress = self.options.results_file + '.inprogress'
         try:
             with open(file_in_progress, 'w') as data_file:
-                json.dump(self.options.results_storage, data_file, indent=2)
+                json.dump(storage, data_file, indent=2)
         except UnicodeDecodeError:
             print(f'\nERROR: Unable to write results {file_in_progress} due to unicode decode/encode error')
 
             # write to a plain file to aid in reproducing error
             with open(file + '.unicode_error' , 'w') as f:
-                f.write(self.options.results_storage)
+                f.write(storage)
 
             raise
         except IOError:
@@ -1004,19 +1018,44 @@ class TestHarness:
         exec_suffix = 'Windows' if platform.system() == 'Windows' else ''
         name = f'{self.app_name}-{self.options.method}{exec_suffix}'
 
+        # Build list of names for other methods in case an executable exists for
+        # a method other than self.options.method
+        all_methods = ['opt', 'oprof', 'dbg', 'devel']
+        all_names = [f'{self.app_name}-{method}{exec_suffix}' for method in all_methods]
+
         # Directories to search in
         dirs = [self._orig_cwd, os.getcwd(), self._rootdir,
                 os.path.join(testharness_dir, '../../../../bin')]
         dirs = list(dict.fromkeys(dirs)) # remove duplicates
-        for dir in dirs:
-            path = os.path.join(dir, name)
-            if os.path.exists(path):
-                return path
-        exe_path = shutil.which(name)
-        if exe_path:
-            return exe_path
+        matches = []
+        matched_names = []
+        for other_name in all_names:
+            for dir in dirs:
+                path = os.path.join(dir, other_name)
+                if os.path.exists(path):
+                    matches.append(path)
+                    matched_names.append(other_name)
+            exe_path = shutil.which(other_name)
+            if exe_path:
+                matches.append(exe_path)
+                matched_names.append(other_name)
 
-        raise FileNotFoundError(f'Failed to find MOOSE executable {name}')
+        if name in matched_names:
+            return matches[matched_names.index(name)]
+        elif len(matched_names):
+            # Eliminate any duplicates
+            matched_names = set(matched_names)
+            available_methods = "'" + "', '".join([matched_name.split('-')[-1] for matched_name in matched_names]) + "'"
+            matched_names = "'" + "', '".join(matched_names) + "'"
+            err_message = (f'\nThe following executable(s) were found, but METHOD '
+                           f'is set to \'{self.options.method}\': {matched_names}'
+                           f'\nTo use one of these executables, set the \'METHOD\' environment '
+                           f'variable to one of the following values: {available_methods}'
+                           )
+        else:
+            err_message = ""
+
+        raise FileNotFoundError(f'Failed to find MOOSE executable \'{name}\'{err_message}')
 
     def initialize(self):
         # Load the scheduler plugins
@@ -1091,6 +1130,7 @@ class TestHarness:
         parser.add_argument('--spec-file', action='store', type=str, dest='spec_file', help='Supply a path to the tests spec file to run the tests found therein. Or supply a path to a directory in which the TestHarness will search for tests. You can further alter which tests spec files are found through the use of -i and --re')
         parser.add_argument('-C', '--test-root', nargs=1, metavar='dir', type=str, dest='spec_file', help='Tell the TestHarness to search for test spec files at this location.')
         parser.add_argument('-d', '--pedantic-checks', action='store_true', dest='pedantic_checks', help="Run pedantic checks of the Testers' file writes looking for race conditions.")
+        parser.add_argument('--capture-perf-graph', action='store_true', help='Capture PerfGraph for MOOSE application runs via Outputs/perf_graph_json_file')
 
         # Options that pass straight through to the executable
         parser.add_argument('--parallel-mesh', action='store_true', dest='parallel_mesh', help='Deprecated, use --distributed-mesh instead')

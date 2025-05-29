@@ -50,7 +50,11 @@
 #include <type_traits>
 #include <functional>
 
+#if !defined(INCLUDE_NLOHMANN_JSON_HPP_) && !defined(MOOSE_NLOHMANN_INCLUDED)
+#undef INCLUDE_NLOHMANN_JSON_FWD_HPP_
 #include "nlohmann/json_fwd.h"
+#define MOOSE_NLOHMANN_INCLUDED
+#endif
 
 // DO NOT USE (Deprecated)
 #define MooseSharedPointer std::shared_ptr
@@ -657,6 +661,8 @@ using GenericRankFourTensor = Moose::GenericType<RankFourTensor, is_ad>;
 template <bool is_ad>
 using GenericVariableValue = Moose::GenericType<VariableValue, is_ad>;
 template <bool is_ad>
+using GenericVectorVariableValue = Moose::GenericType<VectorVariableValue, is_ad>;
+template <bool is_ad>
 using GenericVariableGradient = Moose::GenericType<VariableGradient, is_ad>;
 template <bool is_ad>
 using GenericVariableSecond = Moose::GenericType<VariableSecond, is_ad>;
@@ -1169,6 +1175,16 @@ DerivativeStringClass(SolverSystemName);
 /// Command line argument, specialized to handle quotes in vector arguments
 DerivativeStringClass(CLIArgString);
 
+#ifdef MFEM_ENABLED
+/**
+ * Coefficients used in input for MFEM residual objects
+ */
+///@{
+DerivativeStringClass(MFEMScalarCoefficientName);
+DerivativeStringClass(MFEMVectorCoefficientName);
+DerivativeStringClass(MFEMMatrixCoefficientName);
+///@}
+#endif
 /**
  * additional MOOSE typedefs
  */

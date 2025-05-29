@@ -15,18 +15,18 @@
  * \f]
 */
 // clang-format on
-class MFEMLinearElasticityKernel : public MFEMKernel<mfem::BilinearFormIntegrator>
+class MFEMLinearElasticityKernel : public MFEMKernel
 {
 public:
   static InputParameters validParams();
 
   MFEMLinearElasticityKernel(const InputParameters & parameters);
 
-  virtual mfem::BilinearFormIntegrator * createIntegrator() override;
+  virtual mfem::BilinearFormIntegrator * createBFIntegrator() override;
 
 protected:
-  const std::string _lambda_name;
-  const std::string _mu_name;
+  const MFEMScalarCoefficientName & _lambda_name;
+  const MFEMScalarCoefficientName & _mu_name;
   mfem::Coefficient & _lambda;
   mfem::Coefficient & _mu;
 };

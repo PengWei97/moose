@@ -20,7 +20,7 @@ void
 TimeDomainEquationSystemProblemOperator::Init(mfem::BlockVector & X)
 {
   TimeDomainProblemOperator::Init(X);
-  GetEquationSystem()->BuildEquationSystem(_problem.bc_map);
+  GetEquationSystem()->BuildEquationSystem();
 }
 
 void
@@ -35,22 +35,18 @@ TimeDomainEquationSystemProblemOperator::ImplicitSolve(const double dt,
     _trial_variables.at(ind)->MakeTRef(
         _trial_variables.at(ind)->ParFESpace(), dX_dt, _block_true_offsets[ind]);
   }
-  const double time = GetTime();
-  for (auto & coef : _problem.scalar_manager)
-  {
-    coef->SetTime(time);
-  }
-  for (auto & coef : _problem.vector_manager)
-  {
-    coef->SetTime(time);
-  }
-  for (auto & coef : _problem.matrix_manager)
-  {
-    coef->SetTime(time);
-  }
+  _problem.coefficients.setTime(GetTime());
   BuildEquationSystemOperator(dt);
 
-  _problem.nonlinear_solver->SetSolver(*_problem.jacobian_solver);
+  if ((_problem.jacobian_solver->isLOR() || _problem.jacobian_preconditioner->isLOR()) &&
+      _equation_system->_test_var_names.size() > 1)
+    mooseError("LOR solve is only supported for single-variable systems");
+
+  _problem.jacobian_solver->updateSolver(
+      *_equation_system->_blfs.Get(_equation_system->_test_var_names.at(0)),
+      _equation_system->_ess_tdof_lists.at(0));
+
+  _problem.nonlinear_solver->SetSolver(*_problem.jacobian_solver->getSolver());
   _problem.nonlinear_solver->SetOperator(*GetEquationSystem());
   _problem.nonlinear_solver->Mult(_true_rhs, dX_dt);
   SetTrialVariablesFromTrueVectors();
@@ -60,7 +56,7 @@ void
 TimeDomainEquationSystemProblemOperator::BuildEquationSystemOperator(double dt)
 {
   GetEquationSystem()->SetTimeStep(dt);
-  GetEquationSystem()->UpdateEquationSystem(_problem.bc_map);
+  GetEquationSystem()->UpdateEquationSystem();
   GetEquationSystem()->BuildJacobian(_true_x, _true_rhs);
 }
 

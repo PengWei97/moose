@@ -13,23 +13,23 @@ MFEMCurlCurlKernel::validParams()
       "Adds the domain integrator to an MFEM problem for the bilinear form "
       "$(k\\vec\\nabla \\times \\vec u, \\vec\\nabla \\times \\vec v)_\\Omega$ "
       "arising from the weak form of the curl curl operator "
-      "$-k\\vec\\nabla \\times \\vec\\nabla \\times \\vec u$.");
-  params.addParam<std::string>("coefficient",
-                               "Name of scalar property k to multiply the integrator by.");
+      "$k\\vec\\nabla \\times \\vec\\nabla \\times \\vec u$.");
+  params.addParam<MFEMScalarCoefficientName>(
+      "coefficient", "Name of scalar coefficient k to multiply the integrator by.");
   return params;
 }
 
 MFEMCurlCurlKernel::MFEMCurlCurlKernel(const InputParameters & parameters)
   : MFEMKernel(parameters),
-    _coef_name(getParam<std::string>("coefficient")),
+    _coef_name(getParam<MFEMScalarCoefficientName>("coefficient")),
     // FIXME: The MFEM bilinear form can also handle vector and matrix
     // coefficients, so ideally we'd handle all three too.
-    _coef(getMFEMProblem().getProperties().getScalarProperty(_coef_name))
+    _coef(getScalarCoefficient(_coef_name))
 {
 }
 
 mfem::BilinearFormIntegrator *
-MFEMCurlCurlKernel::createIntegrator()
+MFEMCurlCurlKernel::createBFIntegrator()
 {
   return new mfem::CurlCurlIntegrator(_coef);
 }

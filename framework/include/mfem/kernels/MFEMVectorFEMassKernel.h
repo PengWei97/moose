@@ -8,17 +8,17 @@
  * (\beta u, u')
  * \f]
  */
-class MFEMVectorFEMassKernel : public MFEMKernel<mfem::BilinearFormIntegrator>
+class MFEMVectorFEMassKernel : public MFEMKernel
 {
 public:
   static InputParameters validParams();
 
   MFEMVectorFEMassKernel(const InputParameters & parameters);
 
-  virtual mfem::BilinearFormIntegrator * createIntegrator() override;
+  virtual mfem::BilinearFormIntegrator * createBFIntegrator() override;
 
 protected:
-  const std::string _coef_name;
+  const MFEMScalarCoefficientName & _coef_name;
   mfem::Coefficient & _coef;
 };
 

@@ -75,7 +75,7 @@
 #include "InterfaceUserObject.h"
 #include "GeneralUserObject.h"
 #include "ThreadedGeneralUserObject.h"
-#include "InternalSideIndicator.h"
+#include "InternalSideIndicatorBase.h"
 #include "Transfer.h"
 #include "MultiAppTransfer.h"
 #include "MultiMooseEnum.h"
@@ -275,6 +275,10 @@ FEProblemBase::validParams()
   params.addParam<bool>("verbose_multiapps",
                         false,
                         "Set to True to enable verbose screen printing related to MultiApps");
+  params.addParam<bool>(
+      "verbose_restore",
+      false,
+      "Set to True to enable verbose screen printing related to solution restoration");
 
   params.addParam<FileNameNoExtension>("restart_file_base",
                                        "File base name used for restart (e.g. "
@@ -362,8 +366,8 @@ FEProblemBase::validParams()
                               "Nonlinear system(s)");
   params.addParamNamesToGroup(
       "restart_file_base force_restart allow_initial_conditions_with_restart", "Restart");
-  params.addParamNamesToGroup("verbose_setup verbose_multiapps parallel_barrier_messaging",
-                              "Verbosity");
+  params.addParamNamesToGroup(
+      "verbose_setup verbose_multiapps verbose_restore parallel_barrier_messaging", "Verbosity");
   params.addParamNamesToGroup(
       "null_space_dimension transpose_null_space_dimension near_null_space_dimension",
       "Null space removal");
@@ -466,6 +470,7 @@ FEProblemBase::FEProblemBase(const InputParameters & parameters)
     _parallel_barrier_messaging(getParam<bool>("parallel_barrier_messaging")),
     _verbose_setup(getParam<MooseEnum>("verbose_setup")),
     _verbose_multiapps(getParam<bool>("verbose_multiapps")),
+    _verbose_restore(getParam<bool>("verbose_restore")),
     _current_execute_on_flag(EXEC_NONE),
     _control_warehouse(_app.getExecuteOnEnum(), /*threaded=*/false),
     _is_petsc_options_inserted(false),
@@ -1228,7 +1233,11 @@ FEProblemBase::initialSetup()
   // interfaces. This map will then be used by the AgumentSparsityOnInterface ghosting functor to
   // know which dofs we need ghosted when we call EquationSystems::reinit
   if (_displaced_problem && _mortar_data.hasDisplacedObjects())
+  {
     _displaced_problem->updateMesh();
+    // if displacements were applied to the mesh, the mortar mesh should be updated too
+    updateMortarMesh();
+  }
 
   // Possibly reinit one more time to get ghosting correct
   reinitBecauseOfGhostingOrNewGeomObjects();
@@ -5143,8 +5152,8 @@ FEProblemBase::addIndicator(const std::string & indicator_name,
     std::shared_ptr<Indicator> indicator =
         _factory.create<Indicator>(indicator_name, name, parameters, tid);
     logAdd("Indicator", name, indicator_name, parameters);
-    std::shared_ptr<InternalSideIndicator> isi =
-        std::dynamic_pointer_cast<InternalSideIndicator>(indicator);
+    std::shared_ptr<InternalSideIndicatorBase> isi =
+        std::dynamic_pointer_cast<InternalSideIndicatorBase>(indicator);
     if (isi)
       _internal_side_indicators.addObject(isi, tid);
     else
@@ -6571,8 +6580,19 @@ FEProblemBase::restoreSolutions()
   TIME_SECTION("restoreSolutions", 5, "Restoring Solutions");
 
   for (auto & sys : _solver_systems)
+  {
+    if (_verbose_restore)
+      _console << "Restoring solutions on system " << sys->name() << "..." << std::endl;
     sys->restoreSolutions();
+  }
+
+  if (_verbose_restore)
+    _console << "Restoring solutions on Auxiliary system..." << std::endl;
   _aux->restoreSolutions();
+
+  if (_verbose_restore)
+    _console << "Restoring postprocessor, vector-postprocessor, and reporter data..." << std::endl;
+  _reporter_data.restoreState(_verbose_restore);
 
   if (_displaced_problem)
     _displaced_problem->updateMesh();
@@ -6608,6 +6628,7 @@ FEProblemBase::outputStep(ExecFlagType type)
   for (auto & sys : _solver_systems)
     sys->update();
   _aux->update();
+
   if (_displaced_problem)
     _displaced_problem->syncSolutions();
   _app.getOutputWarehouse().outputStep(type);
@@ -7900,6 +7921,11 @@ FEProblemBase::adaptMesh()
     }
     else
     {
+      // If the mesh didn't change, we still need to update the displaced mesh
+      // to undo the undisplacement performed in Adaptivity::adaptMesh
+      if (_displaced_problem)
+        _displaced_problem->updateMesh();
+
       _console << "Mesh unchanged, skipping remaining steps..." << std::endl;
       break;
     }
@@ -7912,6 +7938,9 @@ FEProblemBase::adaptMesh()
   // for real if necessary.
   if (mesh_changed)
     es().reinit_systems();
+
+  // Execute multi-apps that need to run after adaptivity, but before the next timestep.
+  execMultiApps(EXEC_POST_ADAPTIVITY);
 
   return mesh_changed;
 }
@@ -8268,6 +8297,17 @@ FEProblemBase::checkProblemIntegrity()
 
   // Verify that we don't have any Element type/Coordinate Type conflicts
   checkCoordinateSystems();
+
+  // Coordinate transforms are only intended for use with MultiApps at this time. If you are not
+  // using multiapps but still require these, contact a moose developer
+  if (_mesh.coordTransform().hasScalingOrRotationTransformation() && _app.isUltimateMaster() &&
+      !hasMultiApps())
+    mooseError("Coordinate transformation parameters, listed below, are only to be used in the "
+               "context of application to application field transfers at this time. The mesh is "
+               "not modified by these parameters within an application.\n"
+               "You should likely use a 'TransformGenerator' in the [Mesh] block to achieve the "
+               "desired mesh modification.\n\n",
+               Moose::stringify(MooseAppCoordTransform::validParams()));
 
   // If using displacements, verify that the order of the displacement
   // variables matches the order of the elements in the displaced
@@ -9073,6 +9113,7 @@ FEProblemBase::setVerboseProblem(bool verbose)
 {
   _verbose_setup = verbose ? "true" : "false";
   _verbose_multiapps = verbose;
+  _verbose_restore = verbose;
 }
 
 void
