@@ -10,7 +10,7 @@
 #pragma once
 
 // MOOSE includes
-#include "OversampleOutput.h"
+#include "SampledOutput.h"
 
 // libMesh forward declarations
 namespace libMesh
@@ -21,7 +21,7 @@ class ExodusII_IO;
 /**
  * Class for output data to the ExodusII format
  */
-class Exodus : public OversampleOutput
+class Exodus : public SampledOutput
 {
 public:
   static InputParameters validParams();
@@ -207,7 +207,4 @@ private:
 
   /// Flag to output HDF5 format (when available) in Exodus
   bool _write_hdf5;
-
-  /// whether the mesh is contiguously numbered (exodus output will force that)
-  bool _mesh_contiguous_numbering;
 };

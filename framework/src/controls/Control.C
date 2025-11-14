@@ -44,10 +44,15 @@ Control::Control(const InputParameters & parameters)
     Restartable(this, "Controls"),
     PostprocessorInterface(this),
     VectorPostprocessorInterface(this),
+    ReporterInterface(this),
     _fe_problem(*getCheckedPointerParam<FEProblemBase *>("_fe_problem_base")),
     _depends_on(getParam<std::vector<std::string>>("depends_on")),
     _input_parameter_warehouse(_app.getInputParameterWarehouse())
 {
+  if (getExecuteOnEnum().contains(EXEC_TIMESTEP_END) && _app.testReStep())
+    paramInfo("execute_on",
+              "Controls executed on timestep_end often have undefined behavior when repeating "
+              "timesteps.");
 }
 
 MultiMooseEnum

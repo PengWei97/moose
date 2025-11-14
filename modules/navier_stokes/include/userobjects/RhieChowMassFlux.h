@@ -14,6 +14,7 @@
 #include "FaceCenteredMapFunctor.h"
 #include "VectorComponentFunctor.h"
 #include "LinearFVAnisotropicDiffusion.h"
+#include "LinearFVElementalKernel.h"
 #include <unordered_map>
 #include <set>
 #include <unordered_set>
@@ -102,6 +103,8 @@ protected:
   template <typename VarType>
   void checkBlocks(const VarType & var) const;
 
+  virtual bool supportMeshVelocity() const override { return false; }
+
   /// The \p MooseMesh that this user object operates on
   const MooseMesh & _moose_mesh;
 
@@ -146,10 +149,17 @@ protected:
    */
   std::vector<std::unique_ptr<NumericVector<Number>>> _Ainv_raw;
 
+  std::unique_ptr<NumericVector<Number>> _A_avg;
+
   /**
    * A map functor from faces to mass fluxes which are used in the advection terms.
    */
   FaceCenteredMapFunctor<Real, std::unordered_map<dof_id_type, Real>> & _face_mass_flux;
+
+  /// Pointer to the body force terms
+  std::vector<std::vector<LinearFVElementalKernel *>> _body_force_kernels;
+  /// Vector of body force term names
+  std::vector<std::vector<std::string>> _body_force_kernel_names;
 
   /**
    * for a PISO iteration we need to hold on to the original pressure gradient field.

@@ -29,10 +29,9 @@ SteadyBase::SteadyBase(const InputParameters & parameters)
     _problem(_fe_problem),
     _system_time(getParam<Real>("time")),
     _time_step(_problem.timeStep()),
-    _time(_problem.time()),
+    _time([this]() -> Real & { return this->_problem.time() = this->_system_time; }()),
     _output_iteration_number(0)
 {
-  _time = _system_time;
 }
 
 void
@@ -43,6 +42,7 @@ SteadyBase::execute()
     _console << "\nCannot recover steady-state solves of type: " << this->type()
              << "!\nExiting...\n"
              << std::endl;
+    _last_solve_converged = true;
     return;
   }
 

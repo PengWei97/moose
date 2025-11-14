@@ -17,8 +17,8 @@ class PetscJacobianTester(RunApp):
     @staticmethod
     def validParams():
         params = RunApp.validParams()
-        params.addParam('ratio_tol', 1e-8, "Relative tolerance to compare the ration against.")
-        params.addParam('difference_tol', 1e-6, "Relative tolerance to compare the difference against.")
+        params.addParam('ratio_tol', 1e-7, "Relative tolerance to compare the ration against.")
+        params.addParam('difference_tol', 1e0, "Relative tolerance to compare the difference against.")
         params.addParam('state', 'user', "The state for which we want to compare against the "
                                          "finite-differenced Jacobian ('user', 'const_positive', or "
                                          "'const_negative'.")
@@ -32,15 +32,9 @@ class PetscJacobianTester(RunApp):
         params.valid['valgrind'] = 'NONE'
         params.valid['petsc_version'] = ['>=3.9.4']
         params.valid['method'] = ['OPT']
-
+        params['recover'] = False
+        params['restep'] = False
         return params
-
-    def checkRunnable(self, options):
-        if options.enable_recover:
-            self.addCaveats('PetscJacTester RECOVER')
-            self.setStatus(self.skip)
-            return False
-        return RunApp.checkRunnable(self, options)
 
     def __init__(self, name, params):
         RunApp.__init__(self, name, params)

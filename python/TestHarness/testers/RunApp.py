@@ -9,7 +9,7 @@
 
 import re, os, shutil
 from Tester import Tester
-from TestHarness import util
+from TestHarness import util, TestHarness
 from shlex import quote
 
 class RunApp(Tester):
@@ -49,11 +49,15 @@ class RunApp(Tester):
         params.addParam('no_additional_cli_args', False, "A Boolean indicating that no additional CLI args should be added from the TestHarness. Note: This parameter should be rarely used as it will not pass on additional options such as those related to mpi, threads, distributed mesh, errors, etc.")
 
         params.addParam('capture_perf_graph', True, 'Whether or not to enable the capturing of PerfGraph output via Outputs/perf_graph_json_file and --capture-perf-graph')
+        params.addParam("perf_graph_live", False, "Whether to enable perf graph live printing")
 
         # Valgrind
         params.addParam('valgrind', 'NORMAL', "Set to (NONE, NORMAL, HEAVY) to determine which configurations where valgrind will run.")
 
-        params.addParam('libtorch_devices', ['CPU'], "The devices to use for this libtorch test ('CPU', 'CUDA', 'MPS'); default ('CPU')")
+        device_list_str = "', '".join(d.upper() for d in TestHarness.validComputeDevices())
+        device_param_doc = f"The devices to use for this libtorch or MFEM test ('{device_list_str}'); device availability depends on library support and compilation settings; default ('CPU')"
+        params.addParam('compute_devices', ['CPU'], device_param_doc)
+
         return params
 
     def __init__(self, name, params):
@@ -75,9 +79,9 @@ class RunApp(Tester):
             if params['no_additional_cli_args']:
                 raise Exception('The parameters "command_proxy" and "no_additional_cli_args" cannot be supplied together')
 
-        for value in params['libtorch_devices']:
-            if value.lower() not in ['cpu', 'cuda', 'mps']:
-                raise Exception(f'Unknown libtorch_device "{value}')
+        for value in params['compute_devices']:
+            if value.lower() not in TestHarness.validComputeDevices():
+                raise Exception(f'Unknown device "{value}"')
 
     def getInputFile(self):
         if self.specs.isValid('input'):
@@ -97,9 +101,16 @@ class RunApp(Tester):
         return input_file
 
     def checkRunnable(self, options):
-        if options.enable_recover:
-            if self.specs.isValid('expect_out') or self.specs.isValid('absent_out') or self.specs['should_crash'] == True:
-                self.addCaveats('expect_out RECOVER')
+        if options.enable_recover or options.enable_restep:
+            reason = 'RECOVER' if options.enable_recover else 'RESTEP'
+            caveats = []
+            for param in ['expect_out', 'absent_out']:
+                if self.specs.isValid(param):
+                    caveats.append(param)
+            if self.specs['should_crash'] == True:
+                caveats.append('should_crash')
+            if caveats:
+                self.addCaveats(f'{",".join(caveats)} {reason}')
                 self.setStatus(self.skip)
                 return False
 
@@ -114,12 +125,11 @@ class RunApp(Tester):
                 self.setStatus(self.skip)
                 return False
 
-        if self.specs['libtorch']:
-            devices_lower = [x.lower() for x in self.specs['libtorch_devices']]
-            if options.libtorch_device not in devices_lower:
-                self.addCaveats(f'{options.libtorch_device} not in libtorch_devices')
-                self.setStatus(self.skip)
-                return False
+        devices_lower = [x.lower() for x in self.specs['compute_devices']]
+        if options.compute_device not in devices_lower:
+            self.addCaveats(f'{options.compute_device} not in compute devices')
+            self.setStatus(self.skip)
+            return False
 
         if options.hpc and self.specs.isValid('command_proxy') and os.environ.get('APPTAINER_CONTAINER') is not None:
             self.addCaveats('hpc unsupported')
@@ -233,10 +243,16 @@ class RunApp(Tester):
         if specs['capabilities']:
             cli_args.append('--required-capabilities="' + quote(specs['capabilities'])+'"')
 
-        if (options.parallel_mesh or options.distributed_mesh) and ('--parallel-mesh' not in cli_args or '--distributed-mesh' not in cli_args):
+        if options.distributed_mesh and '--distributed-mesh' not in cli_args:
             # The user has passed the parallel-mesh option to the test harness
             # and it is NOT supplied already in the cli-args option
             cli_args.append('--distributed-mesh')
+
+        if specs['restep'] != False and options.enable_restep:
+            cli_args.append('--test-restep')
+
+        if not specs['perf_graph_live'] and '--disable-perf-graph-live' not in cli_args:
+            cli_args.append('--disable-perf-graph-live')
 
         if '--error' not in cli_args and (not specs["allow_warnings"] or options.error) and not options.allow_warnings:
             cli_args.append('--error')
@@ -274,12 +290,10 @@ class RunApp(Tester):
         if options.scaling and specs['scale_refine'] > 0:
             cli_args.insert(0, ' -r ' + str(specs['scale_refine']))
 
-        if specs['libtorch']:
-            cli_args.append(f'--libtorch-device {options.libtorch_device}')
-
         # Get the number of processors and threads the Tester requires
         ncpus = self.getProcs(options)
         nthreads = self.getThreads(options)
+        cli_args.append(f'--compute-device={options.compute_device}')
 
         if specs['redirect_output'] and ncpus > 1:
             cli_args.append('--keep-cout --redirect-output ' + self.name())
@@ -289,7 +303,7 @@ class RunApp(Tester):
             command += specs['input_switch'] + ' ' + specs['input'] + ' '
         command += ' '.join(cli_args)
         if options.valgrind_mode.upper() == specs['valgrind'].upper() or options.valgrind_mode.upper() == 'HEAVY' and specs['valgrind'].upper() == 'NORMAL':
-            command = 'valgrind --suppressions=' + os.path.join(specs['moose_dir'], 'python', 'TestHarness', 'suppressions', 'errors.supp') + ' --leak-check=full --tool=memcheck --dsymutil=yes --track-origins=yes --demangle=yes -v ' + command
+            command = 'valgrind --suppressions=' + os.path.join(specs['moose_dir'], 'python', 'TestHarness', 'suppressions', 'errors.supp') + ' --leak-check=full --tool=memcheck --dsymutil=yes --track-origins=yes --demangle=yes --enable-debuginfod=no -v ' + command
         elif nthreads > 1:
             command = command + ' --n-threads=' + str(nthreads)
 

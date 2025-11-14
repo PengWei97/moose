@@ -4,10 +4,10 @@ The Convergence system allows users to customize the stopping criteria for the
 iteration in various solves:
 
 - Nonlinear system solves
-- Linear system solves (not yet implemented)
+- Linear system solves (for `solve_type = LINEAR` in the executioner, not for inner linear solves within a nonlinear solve)
 - Steady-state detection in [Transient.md] (not yet implemented)
-- Fixed point solves with [MultiApps](syntax/MultiApps/index.md) (not yet implemented)
-- Fixed point solves with multiple systems (not yet implemented)
+- Fixed point solves with [MultiApps](syntax/MultiApps/index.md)
+- Fixed point solves with multiple systems
 
 Instead of supplying convergence-related parameters directly to the executioner,
 the user creates `Convergence` objects whose names are then supplied to the
@@ -123,3 +123,31 @@ The returned type `MooseConvergenceStatus` is one of the following values:
 - `ITERATING`: The system has neither converged nor diverged and thus will
   continue to iterate.
 
+### Convergence Iteration Type
+
+`Convergence` objects may override the method
+
+```
+void checkIterationType(IterationType)
+```
+
+This method is called a single time by the relevant context of the iteration for which convergence is being checked. Its purpose is to perform any checks related to the compatibility of the `Convergence` object and the iteration type. For example, [DefaultNonlinearConvergence.md] may only be used for nonlinear solves, so it overrides the `checkIterationType` method to check it is not being used with other iteration types:
+
+!listing framework/src/convergence/DefaultNonlinearConvergence.C re=void\s+DefaultNonlinearConvergence::checkIterationType.*?^}
+
+The following iteration types are available for all MOOSE-based applications:
+
+- `ConvergenceIterationTypes::NONLINEAR`: Nonlinear solves
+- `ConvergenceIterationTypes::LINEAR`: Linear solves (`solve_type = LINEAR`, not inner linear solves of nonlinear solves)
+- `ConvergenceIterationTypes::MULTIAPP_FIXED_POINT`: MultiApp fixed point solves
+- `ConvergenceIterationTypes::MULTISYSTEM_FIXED_POINT`: Multi-system fixed point solves
+- `ConvergenceIterationTypes::STEADY_STATE`: Steady-state detection in transient simulations
+
+Apps may register additional iteration types by making the following registration call, somewhere within the global namespace, typically within `MyApp.h`, where `MY_TYPE` is the desired new iteration type:
+
+```
+namespace ConvergenceIterationTypes
+{
+  const auto MY_TYPE = registerType("MY_TYPE");
+}
+```

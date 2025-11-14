@@ -32,6 +32,7 @@ MooseVariableScalar::validParams()
 
 MooseVariableScalar::MooseVariableScalar(const InputParameters & parameters)
   : MooseVariableBase(parameters),
+    Moose::FunctorBase<ADReal>(name()),
     _need_u_dot(false),
     _need_u_dotdot(false),
     _need_u_dot_old(false),
@@ -48,7 +49,11 @@ MooseVariableScalar::MooseVariableScalar(const InputParameters & parameters)
 
   _vector_tag_u.resize(num_vector_tags);
   _need_vector_tag_u.resize(num_vector_tags);
+}
 
+void
+MooseVariableScalar::sizeMatrixTagData()
+{
   auto num_matrix_tags = _sys.subproblem().numMatrixTags();
 
   _matrix_tag_u.resize(num_matrix_tags);
@@ -169,15 +174,10 @@ MooseVariableScalar::reinit(bool reinit_for_derivative_reordering /* = false*/)
           sys.getVector(tag).get(_dof_indices, &_vector_tag_u[tag][0]);
 
     if (safe_access_tagged_matrices)
-    {
       for (auto tag : active_coupleable_matrix_tags)
         if (sys.hasMatrix(tag) && sys.getMatrix(tag).closed() && _need_matrix_tag_u[tag])
           for (std::size_t i = 0; i != n; ++i)
-          {
-            Threads::spin_mutex::scoped_lock lock(Threads::spin_mtx);
             _matrix_tag_u[tag][i] = sys.getMatrix(tag)(_dof_indices[i], _dof_indices[i]);
-          }
-    }
 
     if (_need_u_dot)
       (*u_dot).get(_dof_indices, &_u_dot[0]);
@@ -215,14 +215,9 @@ MooseVariableScalar::reinit(bool reinit_for_derivative_reordering /* = false*/)
         }
 
         if (safe_access_tagged_matrices)
-        {
           for (auto tag : active_coupleable_matrix_tags)
             if (sys.hasMatrix(tag) && sys.getMatrix(tag).closed() && _need_matrix_tag_u[tag])
-            {
-              Threads::spin_mutex::scoped_lock lock(Threads::spin_mtx);
               _matrix_tag_u[tag][i] = sys.getMatrix(tag)(dof_index, dof_index);
-            }
-        }
 
         if (_need_u_dot)
           (*u_dot).get(one_dof_index, &_u_dot[i]);
@@ -504,5 +499,99 @@ MooseVariableScalar::oldestSolutionStateRequested() const
     return 2;
   if (_need_u_old)
     return 1;
+  return 0;
+}
+
+MooseVariableScalar::ValueType
+MooseVariableScalar::evaluate(const ElemArg & /*elem_arg*/, const Moose::StateArg & state) const
+{
+  return evaluate(state);
+}
+
+MooseVariableScalar::ValueType
+MooseVariableScalar::evaluate(const FaceArg & /*face*/, const Moose::StateArg & state) const
+{
+  return evaluate(state);
+}
+
+MooseVariableScalar::ValueType
+MooseVariableScalar::evaluate(const ElemQpArg & /*elem_qp*/, const Moose::StateArg & state) const
+{
+  return evaluate(state);
+}
+
+MooseVariableScalar::ValueType
+MooseVariableScalar::evaluate(const ElemSideQpArg & /*elem_side_qp*/,
+                              const Moose::StateArg & state) const
+{
+  return evaluate(state);
+}
+
+MooseVariableScalar::ValueType
+MooseVariableScalar::evaluate(const ElemPointArg & /*elem_point_arg*/,
+                              const Moose::StateArg & state) const
+{
+  return evaluate(state);
+}
+
+MooseVariableScalar::ValueType
+MooseVariableScalar::evaluate(const NodeArg & /*node_arg*/, const Moose::StateArg & state) const
+{
+  return evaluate(state);
+}
+
+MooseVariableScalar::ValueType
+MooseVariableScalar::evaluate(const Moose::StateArg & state) const
+{
+  mooseAssert(_dof_indices.size() == 1,
+              "MooseVariableScalar::evaluate may only be used for first-order scalar variables");
+
+  const auto & solution = getSolution(state);
+  ADReal value = solution(_dof_indices[0]);
+  if (state.state == 0 && Moose::doDerivatives(_subproblem, _sys))
+    Moose::derivInsert(value.derivatives(), _dof_indices[0], 1.0);
+
+  return value;
+}
+
+MooseVariableScalar::GradientType
+MooseVariableScalar::evaluateGradient(const ElemArg & /*elem_arg*/,
+                                      const Moose::StateArg & /*state*/) const
+{
+  return 0;
+}
+
+MooseVariableScalar::GradientType
+MooseVariableScalar::evaluateGradient(const FaceArg & /*face*/,
+                                      const Moose::StateArg & /*state*/) const
+{
+  return 0;
+}
+
+MooseVariableScalar::GradientType
+MooseVariableScalar::evaluateGradient(const ElemQpArg & /*elem_qp*/,
+                                      const Moose::StateArg & /*state*/) const
+{
+  return 0;
+}
+
+MooseVariableScalar::GradientType
+MooseVariableScalar::evaluateGradient(const ElemSideQpArg & /*elem_side_qp*/,
+                                      const Moose::StateArg & /*state*/) const
+{
+  return 0;
+}
+
+MooseVariableScalar::GradientType
+MooseVariableScalar::evaluateGradient(const ElemPointArg & /*elem_point_arg*/,
+                                      const Moose::StateArg & /*state*/) const
+{
+  return 0;
+}
+
+MooseVariableScalar::GradientType
+MooseVariableScalar::evaluateGradient(const NodeArg & /*node_arg*/,
+                                      const Moose::StateArg & /*state*/) const
+{
   return 0;
 }

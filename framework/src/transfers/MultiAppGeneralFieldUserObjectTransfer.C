@@ -37,6 +37,8 @@ MultiAppGeneralFieldUserObjectTransfer::validParams()
                                           "The UserObject you want to transfer values from. "
                                           "It must implement the SpatialValue() class routine");
 
+  MultiAppTransfer::addUserObjectExecutionCheckParam(params);
+
   // Blanket ban on origin boundary restriction. User objects tend to extend beyond boundaries,
   // and be able to be evaluated within a volume rather than only on a boundary
   // This could be re-enabled for spatial user objects that are only defined on boundaries
@@ -64,6 +66,27 @@ MultiAppGeneralFieldUserObjectTransfer::MultiAppGeneralFieldUserObjectTransfer(
   if (_nearest_positions_obj && isParamValid("to_multi_app") && !isParamValid("from_multi_app"))
     paramError("use_nearest_position",
                "Cannot use nearest-position algorithm when sending from the main application");
+}
+
+void
+MultiAppGeneralFieldUserObjectTransfer::execute()
+{
+  // Execute the user object if it was specified to execute on TRANSFER
+  switch (_current_direction)
+  {
+    case TO_MULTIAPP:
+    {
+      checkParentAppUserObjectExecuteOn(_user_object_name);
+      _fe_problem.computeUserObjectByName(EXEC_TRANSFER, Moose::PRE_AUX, _user_object_name);
+      _fe_problem.computeUserObjectByName(EXEC_TRANSFER, Moose::POST_AUX, _user_object_name);
+      break;
+    }
+    case FROM_MULTIAPP:
+      errorIfObjectExecutesOnTransferInSourceApp(_user_object_name);
+  }
+
+  // Perfom the actual transfer
+  MultiAppGeneralFieldTransfer::execute();
 }
 
 void

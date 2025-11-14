@@ -9,6 +9,10 @@
 
 #pragma once
 
+#ifdef MOOSE_KOKKOS_ENABLED
+#include "KokkosMesh.h"
+#endif
+
 #include "MooseObject.h"
 #include "BndNode.h"
 #include "BndElement.h"
@@ -177,6 +181,11 @@ public:
   virtual unsigned int dimension() const;
 
   /**
+   * Returns MeshBase::spatial_dimension
+   */
+  virtual unsigned int spatialDimension() const { return _mesh->spatial_dimension(); }
+
+  /**
    * Returns the effective spatial dimension determined by the coordinates actually used by the
    * mesh. This means that a 1D mesh that has non-zero z or y coordinates is actually a 2D or 3D
    * mesh, respectively. Likewise a 2D mesh that has non-zero z coordinates is actually 3D mesh.
@@ -269,16 +278,8 @@ public:
   void buildNodeListFromSideList();
 
   /**
-   * Calls BoundaryInfo::build_side_list().
-   * Fills in the three passed vectors with list logical (element, side, id) tuples.
-   * This function will eventually be deprecated in favor of the one below, which
-   * returns a single std::vector of (elem-id, side-id, bc-id) tuples instead.
-   */
-  void buildSideList(std::vector<dof_id_type> & el,
-                     std::vector<unsigned short int> & sl,
-                     std::vector<boundary_id_type> & il);
-  /**
-   * As above, but uses the non-deprecated std::tuple interface.
+   * Calls BoundaryInfo::build_side_list(), returns a std::vector of
+   * (elem-id, side-id, bc-id) tuples.
    */
   std::vector<std::tuple<dof_id_type, unsigned short int, boundary_id_type>> buildSideList();
 
@@ -315,6 +316,14 @@ public:
    */
   virtual dof_id_type nNodes() const;
   virtual dof_id_type nElem() const;
+
+  virtual dof_id_type nLocalNodes() const { return _mesh->n_local_nodes(); }
+  virtual dof_id_type nActiveElem() const { return _mesh->n_active_elem(); }
+  virtual dof_id_type nActiveLocalElem() const { return _mesh->n_active_local_elem(); }
+  virtual SubdomainID nSubdomains() const { return _mesh->n_subdomains(); }
+  virtual unsigned int nPartitions() const { return _mesh->n_partitions(); }
+  virtual bool skipPartitioning() const { return _mesh->skip_partitioning(); }
+  virtual bool skipNoncriticalPartitioning() const;
 
   /**
    * Calls max_node/elem_id() on the underlying libMesh mesh object.
@@ -651,6 +660,13 @@ public:
   const MeshBase * getMeshPtr() const;
 
   /**
+   * Accessor for Kokkos mesh object.
+   */
+#ifdef MOOSE_KOKKOS_ENABLED
+  const Moose::Kokkos::Mesh * getKokkosMesh() const { return _kokkos_mesh.get(); }
+#endif
+
+  /**
    * Calls print_info() on the underlying Mesh.
    */
   void printInfo(std::ostream & os = libMesh::out, const unsigned int verbosity = 0) const;
@@ -710,7 +726,7 @@ public:
   /**
    * Get the associated BoundaryID for the boundary name.
    *
-   * @return param boundary_name The name of the boundary.
+   * @param boundary_name The name of the boundary.
    * @return the boundary id from the passed boundary name.
    */
   BoundaryID getBoundaryID(const BoundaryName & boundary_name) const;
@@ -718,7 +734,7 @@ public:
   /**
    * Get the associated BoundaryID for the boundary names that are passed in.
    *
-   * @return param boundary_name The names of the boundaries.
+   * @param boundary_name The names of the boundaries.
    * @return the boundary ids from the passed boundary names.
    */
   std::vector<BoundaryID> getBoundaryIDs(const std::vector<BoundaryName> & boundary_name,
@@ -735,10 +751,12 @@ public:
   /**
    * Get the associated subdomainIDs for the subdomain names that are passed in.
    *
-   * @param subdomain_name The names of the subdomains
+   * @param subdomain_names The names of the subdomains
    * @return The subdomain ids from the passed subdomain names.
    */
-  std::vector<SubdomainID> getSubdomainIDs(const std::vector<SubdomainName> & subdomain_name) const;
+  std::vector<SubdomainID>
+  getSubdomainIDs(const std::vector<SubdomainName> & subdomain_names) const;
+  std::set<SubdomainID> getSubdomainIDs(const std::set<SubdomainName> & subdomain_names) const;
 
   /**
    * This method sets the name for \p subdomain_id to \p name
@@ -773,7 +791,7 @@ public:
   /**
    * Return the name of the boundary given the id.
    */
-  const std::string & getBoundaryName(BoundaryID boundary_id);
+  const std::string & getBoundaryName(BoundaryID boundary_id) const;
 
   /**
    * This routine builds a multimap of boundary ids to matching boundary ids across all periodic
@@ -983,7 +1001,7 @@ public:
   /**
    * Returns the final Mesh distribution type.
    */
-  bool isDistributedMesh() const { return _use_distributed_mesh; }
+  virtual bool isDistributedMesh() const { return _use_distributed_mesh; }
 
   /**
    * Tell the user if the distribution was overriden for any reason
@@ -1125,6 +1143,21 @@ public:
   std::set<dof_id_type> getElemIDsOnBlocks(unsigned int elem_id_index,
                                            const std::set<SubdomainID> & blks) const;
 
+  /**
+   * Get the maximum number of sides per element
+   */
+  unsigned int getMaxSidesPerElem() const { return _max_sides_per_elem; }
+
+  /**
+   * Get the maximum number of nodes per element
+   */
+  unsigned int getMaxNodesPerElem() const { return _max_nodes_per_elem; }
+
+  /**
+   * Get the maximum number of nodes per side
+   */
+  unsigned int getMaxNodesPerSide() const { return _max_nodes_per_side; }
+
   std::unordered_map<dof_id_type, std::set<dof_id_type>>
   getElemIDMapping(const std::string & from_id_name, const std::string & to_id_name) const;
 
@@ -1188,12 +1221,12 @@ public:
   void computeFiniteVolumeCoords() const;
 
   /**
-   * Set whether this mesh is displaced
+   * Set whether this mesh is a displaced mesh
    */
   void isDisplaced(bool is_displaced) { _is_displaced = is_displaced; }
 
   /**
-   * whether this mesh is displaced
+   * whether this mesh is a displaced mesh
    */
   bool isDisplaced() const { return _is_displaced; }
 
@@ -1390,8 +1423,12 @@ public:
    * @return The set of lower-dimensional blocks for boundary sides
    */
   const std::set<SubdomainID> & boundaryLowerDBlocks() const { return _lower_d_boundary_blocks; }
+
   /// Return construct node list from side list boolean
   bool getConstructNodeListFromSideList() { return _construct_node_list_from_side_list; }
+
+  /// Return displace node list by side list boolean
+  bool getDisplaceNodeListBySideList() { return _displace_node_list_by_side_list; }
 
 protected:
   /// Deprecated (DO NOT USE)
@@ -1416,6 +1453,11 @@ protected:
 
   /// Pointer to underlying libMesh mesh object
   std::unique_ptr<libMesh::MeshBase> _mesh;
+
+  /// Pointer to Kokkos mesh object
+#ifdef MOOSE_KOKKOS_ENABLED
+  std::unique_ptr<Moose::Kokkos::Mesh> _kokkos_mesh;
+#endif
 
   /// The partitioner used on this mesh
   MooseEnum _partitioner_name;
@@ -1806,6 +1848,10 @@ private:
   /// Whether or not to allow generation of nodesets from sidesets
   bool _construct_node_list_from_side_list;
 
+  /// Whether or not to displace unrelated nodesets by nodesets
+  /// constructed from sidesets
+  bool _displace_node_list_by_side_list;
+
   /// Whether we need to delete remote elements after init'ing the EquationSystems
   bool _need_delete;
 
@@ -1829,6 +1875,18 @@ private:
   std::vector<dof_id_type> _min_ids;
   /// Flags to indicate whether or not any two extra element integers are the same
   std::vector<std::vector<bool>> _id_identical_flag;
+
+  /// The maximum number of sides per element
+  unsigned int _max_sides_per_elem;
+
+  /// The maximum number of nodes per element
+  unsigned int _max_nodes_per_elem;
+
+  /// The maximum number of nodes per side
+  unsigned int _max_nodes_per_side;
+
+  /// Compute the maximum numbers per element and side
+  void computeMaxPerElemAndSide();
 
   /// Whether this mesh is displaced
   bool _is_displaced;

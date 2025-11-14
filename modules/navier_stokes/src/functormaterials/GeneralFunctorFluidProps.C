@@ -9,7 +9,7 @@
 
 #include "GeneralFunctorFluidProps.h"
 #include "NS.h" // Variable Term Names
-#include "DimensionlessFlowNumbers.h"
+#include "HeatTransferUtils.h"
 #include "NavierStokesMethods.h"
 #include "SinglePhaseFluidProperties.h"
 
@@ -21,7 +21,7 @@ InputParameters
 GeneralFunctorFluidPropsTempl<is_ad>::validParams()
 {
   auto params = FunctorMaterial::validParams();
-  params.addRequiredParam<UserObjectName>(NS::fluid, "Fluid properties functor userobject");
+  params.addRequiredParam<UserObjectName>(NS::fluid, "Fluid properties object");
   params.addClassDescription("Creates functor fluid properties using a (P, T) formulation");
 
   params.addRequiredParam<MooseFunctorName>(NS::pressure, "Pressure");
@@ -296,7 +296,8 @@ GeneralFunctorFluidPropsTempl<is_ad>::GeneralFunctorFluidPropsTempl(
         {
           static constexpr Real small_number = 1e-8;
 
-          return fp::prandtl(cp(r, t), mu(r, t), std::max(k(r, t), small_number));
+          using std::max;
+          return HeatTransferUtils::prandtl(cp(r, t), mu(r, t), max(k(r, t), small_number));
         });
 
     addFunctorProperty<Real>(
@@ -334,11 +335,11 @@ GeneralFunctorFluidPropsTempl<is_ad>::GeneralFunctorFluidPropsTempl(
         [this, &mu](const auto & r, const auto & t) -> GenericReal<is_ad>
         {
           static constexpr Real small_number = 1e-8;
-          return std::max(fp::reynolds(_rho(r, t),
-                                       _eps(r, t) * _speed(r, t),
-                                       _d(r, t),
-                                       std::max(mu(r, t), small_number)),
-                          small_number);
+          using std::max;
+          return max(
+              HeatTransferUtils::reynolds(
+                  _rho(r, t), _eps(r, t) * _speed(r, t), _d(r, t), max(mu(r, t), small_number)),
+              small_number);
         });
 
     addFunctorProperty<Real>(
@@ -369,7 +370,8 @@ GeneralFunctorFluidPropsTempl<is_ad>::GeneralFunctorFluidPropsTempl(
         [this, &Re](const auto & r, const auto & t) -> GenericReal<is_ad>
         {
           static constexpr Real small_number = 1e-8;
-          return Re(r, t) / std::max(1 - _eps(r, t), small_number);
+          using std::max;
+          return Re(r, t) / max(1 - _eps(r, t), small_number);
         });
 
     // (interstitial) Reynolds number
@@ -620,8 +622,9 @@ GeneralFunctorFluidPropsTempl<is_ad>::GeneralFunctorFluidPropsTempl(
         [&cp, &mu, &k](const auto & r, const auto & t) -> GenericReal<is_ad>
         {
           static constexpr Real small_number = 1e-8;
+          using std::max;
 
-          return fp::prandtl(cp(r, t), mu(r, t), std::max(k(r, t), small_number));
+          return HeatTransferUtils::prandtl(cp(r, t), mu(r, t), max(k(r, t), small_number));
         });
 
     addFunctorProperty<Real>(
@@ -659,11 +662,12 @@ GeneralFunctorFluidPropsTempl<is_ad>::GeneralFunctorFluidPropsTempl(
         [this, &mu](const auto & r, const auto & t) -> GenericReal<is_ad>
         {
           static constexpr Real small_number = 1e-8;
-          return std::max(fp::reynolds(_rho(r, t),
-                                       _eps(r, t) * _speed(r, t),
-                                       _d(r, t),
-                                       std::max(mu(r, t), small_number)),
-                          small_number);
+          using std::max;
+
+          return max(
+              HeatTransferUtils::reynolds(
+                  _rho(r, t), _eps(r, t) * _speed(r, t), _d(r, t), max(mu(r, t), small_number)),
+              small_number);
         });
 
     addFunctorProperty<Real>(
@@ -694,7 +698,8 @@ GeneralFunctorFluidPropsTempl<is_ad>::GeneralFunctorFluidPropsTempl(
         [this, &Re](const auto & r, const auto & t) -> GenericReal<is_ad>
         {
           static constexpr Real small_number = 1e-8;
-          return Re(r, t) / std::max(1 - _eps(r, t), small_number);
+          using std::max;
+          return Re(r, t) / max(1 - _eps(r, t), small_number);
         });
 
     // (interstitial) Reynolds number

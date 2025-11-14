@@ -39,7 +39,7 @@ if [[ "$#" -eq 1 ]] && [[ "$1" == "--help" ]]; then
   echo "  WASP_SRC_DIR    The path to the WASP source directory. Default to <MOOSE_DIR>/framework/contrib/wasp."
   echo "  WASP_DIR        The path to the WASP directory. Default to <WASP_SRC_DIR>/install."
   echo "  LIBTORCH_DIR    The path to the libtorch directory. Default to <MOOSE_DIR>/framework/contrib/libtorch."
-  echo "  NEML2_DIR       The path where to install NEML2. Default to <NEML2_SRC_DIR>/installed."
+  echo "  NEML2_DIR       The path where to install NEML2. Default to <NEML2_SRC_DIR>/installed/moose."
   echo "  NEML2_SRC_DIR   The path to the NEML2 source directory if a custom NEML2 should be used. If set, "
   echo "                  --skip-submodule-update will be assumed."
   echo "  NEML2_JOBS      The number of jobs to use when building NEML2. Default to <MOOSE_JOBS>. "
@@ -94,7 +94,7 @@ if [[ -n "$NEML2_SRC_DIR" ]]; then
 else
   NEML2_SRC_DIR=${MOOSE_DIR}/framework/contrib/neml2
 fi
-NEML2_DIR=${NEML2_DIR:-${NEML2_SRC_DIR}/installed}
+NEML2_DIR=${NEML2_DIR:-${NEML2_SRC_DIR}/installed/moose}
 
 if [[ -z "$NEML2_JOBS" ]]; then
   if [[ -n "$MOOSE_JOBS" ]]; then
@@ -120,7 +120,7 @@ fi
 # opt   <--> Release
 # devel <--> RelWithDebInfo
 # dbg   <--> Debug
-# oprof <--> RelWithDebInfo + NEML2_CPU_PROFILER=ON
+# oprof <--> Profiling
 METHODS=${METHODS:-opt,dbg}
 if [[ -n "$METHOD" ]]; then
   METHODS=$METHOD
@@ -197,7 +197,7 @@ for METHOD in $(echo "$METHODS" | tr ',' ' '); do
   elif [[ ${METHOD} == "dbg" ]]; then
     CMAKE_BUILD_TYPE="Debug"
   elif [[ ${METHOD} == "oprof" ]]; then
-    CMAKE_BUILD_TYPE="RelWithDebInfo"
+    CMAKE_BUILD_TYPE="Profiling"
   else
     echo "Error: Unknown build method ${METHOD}"
     exit 1
@@ -219,7 +219,9 @@ for METHOD in $(echo "$METHODS" | tr ',' ' '); do
     echo
     configure_neml2 "${NEML2_SRC_DIR}" \
                     "${NEML2_BUILD_DIR}" \
-                    -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} \
+                    "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}" \
+                    "-DNEML2_CONTRIB_PARALLEL=${NEML2_JOBS}" \
+                    "-Dtimpi_BUILD_TYPE=${METHOD}" \
                     "${EXTRA_ARGS[@]}"
     if [[ $? -ne 0 ]] ; then
       echo "Error: Failed to configure NEML2"
@@ -257,7 +259,8 @@ if [[ $? -eq 0 ]]; then
   echo "****************************************************************************************************"
   echo "NEML2 has been successfully installed. "
   echo
-  echo "If you have not already done so, you may want to configure MOOSE with"
-  echo "  ./configure --with-libtorch=${LIBTORCH_DIR}"
+  echo "To configure MOOSE with NEML2, run the following commands:"
+  echo "  cd ${MOOSE_DIR}"
+  echo "  ./configure --with-neml2=${NEML2_DIR} --with-libtorch=${LIBTORCH_DIR}"
   echo "****************************************************************************************************"
 fi

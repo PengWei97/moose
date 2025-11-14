@@ -6,7 +6,7 @@
   n_blocks = 1
   pitch = 0.014605
   pin_diameter = 0.012065
-  gap = 0.0015875
+  side_gap = 0.0015875
   heated_length = 1.2192
   spacer_z = '0.0'
   spacer_k = '0.0'
@@ -88,7 +88,6 @@ P_out = 101325 # Pa
   P_out = ${P_out}
   implicit = true
   segregated = false
-  monolithic_thermal = false
 []
 
 [ICs]

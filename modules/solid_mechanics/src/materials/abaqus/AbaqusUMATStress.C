@@ -8,7 +8,7 @@
 //* https://www.gnu.org/licenses/lgpl-2.1.html
 
 #include "AbaqusUMATStress.h"
-#include "StepUserObject.h"
+#include "AnalysisStepUserObject.h"
 #include "Factory.h"
 #include "MooseMesh.h"
 #include "RankTwoTensor.h"
@@ -50,7 +50,8 @@ AbaqusUMATStress::validParams()
       "Whether or not this object should use the "
       "displaced mesh for computing displacements and quantities based on the deformed state.");
   params.addParam<UserObjectName>(
-      "step_user_object", "The StepUserObject that provides times from simulation loading steps.");
+      "analysis_step_user_object",
+      "The AnalysisStepUserObject that provides times from simulation loading steps.");
   params.addParam<RealVectorValue>(
       "orientation",
       "Euler angles that describe the orientation of the local material coordinate system.");
@@ -79,8 +80,11 @@ AbaqusUMATStress::AbaqusUMATStress(const InputParameters & parameters)
     _state_var(declareProperty<std::vector<Real>>(_base_name + "state_var")),
     _state_var_old(getMaterialPropertyOld<std::vector<Real>>(_base_name + "state_var")),
     _elastic_strain_energy(declareProperty<Real>(_base_name + "elastic_strain_energy")),
+    _elastic_strain_energy_old(getMaterialPropertyOld<Real>(_base_name + "elastic_strain_energy")),
     _plastic_dissipation(declareProperty<Real>(_base_name + "plastic_dissipation")),
+    _plastic_dissipation_old(getMaterialPropertyOld<Real>(_base_name + "plastic_dissipation")),
     _creep_dissipation(declareProperty<Real>(_base_name + "creep_dissipation")),
+    _creep_dissipation_old(getMaterialPropertyOld<Real>(_base_name + "creep_dissipation")),
     _material_timestep(declareProperty<Real>(_base_name + "material_timestep_limit")),
     _rotation_increment(
         getOptionalMaterialProperty<RankTwoTensor>(_base_name + "rotation_increment")),
@@ -152,10 +156,10 @@ AbaqusUMATStress::initialSetup()
 
   // Let's automatically detect uos and identify the one we are interested in.
   // If there is more than one, we assume something is off and error out.
-  if (!isParamSetByUser("step_user_object"))
-    getStepUserObject(_fe_problem, _step_user_object, name());
+  if (!isParamSetByUser("analysis_step_user_object"))
+    getAnalysisStepUserObject(_fe_problem, _step_user_object, name());
   else
-    _step_user_object = &getUserObject<StepUserObject>("step_user_object");
+    _step_user_object = &getUserObject<AnalysisStepUserObject>("analysis_step_user_object");
 }
 
 void
@@ -267,6 +271,11 @@ AbaqusUMATStress::computeQpStress()
   // Recover "old" state variables
   for (const auto i : make_range(_aqNSTATV))
     _aqSTATEV[i] = _state_var_old[_qp][i];
+
+  // Recover "old" energy quantities
+  _elastic_strain_energy[_qp] = _elastic_strain_energy_old[_qp];
+  _plastic_dissipation[_qp] = _plastic_dissipation_old[_qp];
+  _creep_dissipation[_qp] = _creep_dissipation_old[_qp];
 
   // Pass through updated stress, total strain, and strain increment arrays
   static const std::array<Real, 6> strain_factor{{1, 1, 1, 2, 2, 2}};

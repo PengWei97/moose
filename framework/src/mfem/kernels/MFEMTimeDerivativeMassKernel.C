@@ -1,6 +1,16 @@
-#ifdef MFEM_ENABLED
+//* This file is part of the MOOSE framework
+//* https://mooseframework.inl.gov
+//*
+//* All rights reserved, see COPYRIGHT for full restrictions
+//* https://github.com/idaholab/moose/blob/master/COPYRIGHT
+//*
+//* Licensed under LGPL 2.1, please see LICENSE for details
+//* https://www.gnu.org/licenses/lgpl-2.1.html
+
+#ifdef MOOSE_MFEM_ENABLED
 
 #include "MFEMTimeDerivativeMassKernel.h"
+#include "MFEMProblem.h"
 
 registerMooseObject("MooseApp", MFEMTimeDerivativeMassKernel);
 
@@ -16,7 +26,9 @@ MFEMTimeDerivativeMassKernel::validParams()
 }
 
 MFEMTimeDerivativeMassKernel::MFEMTimeDerivativeMassKernel(const InputParameters & parameters)
-  : MFEMMassKernel(parameters), _var_dot_name(Moose::MFEM::GetTimeDerivativeName(_test_var_name))
+  : MFEMMassKernel(parameters),
+    _var_dot_name(
+        getMFEMProblem().getProblemData().time_derivative_map.getTimeDerivativeName(_test_var_name))
 {
 }
 

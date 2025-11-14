@@ -10,22 +10,24 @@
 import sys
 import platform
 import os, re, inspect, errno, copy, json
-from . import RaceChecker
 import subprocess
 import shutil
 import socket
 import datetime
 import getpass
-from collections import namedtuple
+import argparse
+import typing
+from collections import defaultdict, namedtuple, OrderedDict
+from typing import Any, Tuple
 
 from socket import gethostname
+
 from FactorySystem.Factory import Factory
 from FactorySystem.Parser import Parser
 from FactorySystem.Warehouse import Warehouse
 from . import util
+from . import RaceChecker
 import pyhit
-
-import argparse
 
 # Directory the test harness is in
 testharness_dir = os.path.dirname(os.path.realpath(__file__))
@@ -39,10 +41,26 @@ def readTestRoot(fname):
     # allow users to control fallthrough for e.g. individual module binaries vs. the
     # combined binary.
     app_name = root.get('app_name') or None
-    return app_name, args, root
+
+    # Append to PYTHONPATH based on argument in file
+    extra_pythonpath_val: str = root.get('extra_pythonpath', None)
+    extra_pythonpath_val = extra_pythonpath_val.split(':') if extra_pythonpath_val else []
+    extra_pythonpath = []
+    for val in extra_pythonpath_val:
+        path = os.path.abspath(os.path.join(os.path.dirname(fname), val))
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                "Test Root Parsing Error: "
+                f"Could not find {path} for PYTHONPATH append. "
+                f"Check 'extra_pythonpath' in {fname} to resolve."
+            )
+        else:
+            extra_pythonpath.append(path)
+
+    return app_name, args, root, extra_pythonpath
 
 # Struct that represents all of the information pertaining to a testroot file
-TestRoot = namedtuple('TestRoot', ['root_dir', 'app_name', 'args', 'hit_node'])
+TestRoot = namedtuple('TestRoot', ['root_dir', 'app_name', 'args', 'hit_node', 'extra_pythonpath'])
 def findTestRoot() -> TestRoot:
     """
     Search for the test root in all folders above this one
@@ -52,8 +70,8 @@ def findTestRoot() -> TestRoot:
     while os.path.dirname(root_dir) != root_dir:
         testroot_file = os.path.join(root_dir, 'testroot')
         if os.path.exists(testroot_file) and os.access(testroot_file, os.R_OK):
-            app_name, args, hit_node = readTestRoot(testroot_file)
-            return TestRoot(root_dir=root_dir, app_name=app_name, args=args, hit_node=hit_node)
+            tuple_args = readTestRoot(testroot_file)
+            return TestRoot(root_dir, *tuple_args)
         root_dir = os.path.dirname(root_dir)
     return None
 
@@ -68,10 +86,15 @@ def findDepApps(dep_names, use_current_only=False):
     apps = []
 
     # First see if we are in a git repo
-    p = subprocess.Popen('git rev-parse --show-cdup', stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
-    p.wait()
+    p = subprocess.run(
+        ['git', 'rev-parse', '--show-cdup'],
+        text=True,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
     if p.returncode == 0:
-        git_dir = p.communicate()[0].decode('utf-8')
+        git_dir = p.stdout
         root_dir = os.path.abspath(os.path.join(os.getcwd(), git_dir)).rstrip()
 
         # Assume that any application we care about is always a peer
@@ -181,13 +204,29 @@ def findDepApps(dep_names, use_current_only=False):
                     dirnames[:] = []
 
     # Now we need to filter out duplicate moose apps
-    moose_dir = os.environ.get('MOOSE_DIR')
     return '\n'.join(dep_dirs)
 
 class TestHarness:
+    # Version history:
+    # 1 - Initial tracking of version
+    # 2 - Added 'unique_test_id' (tests/*/tests/*/unique_test_id) to Job output if set
+    # 3 - Added 'json_metadata' (tests/*/tests/*/tester/json_metadata) to Tester output
+    # 4 - Added 'validation' (tests/*/tests/validation) to Job output if set
+    # 5 - Added validation data types (tests/*/tests/data/type) to Job output if set
+    # 6 - Added 'testharness/validation_version'
+    # 7 - Moved test output files from test/*/tests/*/tester/output_files to
+    #     job output in test/*/tests/*/output_files
+    # 8 - Store tests/*/tests/*/tester/json_metadata values a dict instead of a file path
+    RESULTS_VERSION = 8
+
+    # Validation version history:
+    # 1 - Initial tracking of version
+    # 2 - Added 'abs_zero' key to ValidationNumericData
+    VALIDATION_VERSION = 2
+
     @staticmethod
-    def buildAndRun(argv: list, app_name: str, moose_dir: str, moose_python: str = None,
-                    skip_testroot: bool = False) -> None:
+    def build(argv: list, app_name: str, moose_dir: str, moose_python: str = None,
+              skip_testroot: bool = False) -> None:
         # Cannot skip the testroot if we don't have an application name
         if skip_testroot and not app_name:
             raise ValueError(f'Must provide "app_name" when skip_testroot=True')
@@ -209,6 +248,12 @@ class TestHarness:
         # Search for the test root (if any; required when app_name is not specified)
         test_root = None if skip_testroot else findTestRoot()
 
+        # Append PYTHONPATH paths specified from testroot
+        if test_root:
+            for path in test_root.extra_pythonpath:
+                if path not in sys.path: # Prevents duplication
+                    sys.path.append(path)
+
         # Failed to find a test root
         if test_root is None:
             # app_name was specified so without a testroot, we don't
@@ -218,7 +263,7 @@ class TestHarness:
             # app_name was specified so just run from this directory
             # without any additional parameters
             test_root = TestRoot(root_dir='.', app_name=app_name,
-                                 args=[], hit_node=pyhit.Node())
+                                 args=[], hit_node=pyhit.Node(), extra_pythonpath="")
         # Found a testroot, but without an app_name
         elif test_root.app_name is None:
             # app_name was specified from buildAndRun(), so use it
@@ -228,9 +273,17 @@ class TestHarness:
             elif app_name is not None:
                 raise RuntimeError(f'{test_root.root_dir}/testroot missing app_name')
 
-        harness = TestHarness(argv, moose_dir, moose_python_dir, test_root)
+        return TestHarness(argv, moose_dir, moose_python_dir, test_root)
+
+    @staticmethod
+    def buildAndRun(argv: list, app_name: str, moose_dir: str, *args, **kwargs) -> None:
+        harness = TestHarness.build(argv, app_name, moose_dir, *args, **kwargs)
         harness.findAndRunTests()
         sys.exit(harness.error_code)
+
+    @staticmethod
+    def validComputeDevices():
+        return ['cpu', 'cuda', 'hip', 'mps', 'ceed-cpu', 'ceed-cuda', 'ceed-hip']
 
     def __init__(self, argv: list, moose_dir: str, moose_python: str, test_root: TestRoot):
         self.moose_python_dir = moose_python
@@ -271,7 +324,7 @@ class TestHarness:
         self.factory.loadPlugins(dirs, 'testers', "IS_TESTER")
 
         self.parse_errors = []
-        self.test_table = []
+        self.finished_jobs: list = []
         self.num_passed = 0
         self.num_failed = 0
         self.num_skipped = 0
@@ -288,7 +341,6 @@ class TestHarness:
             self.libmesh_dir = os.environ['LIBMESH_DIR']
         else:
             self.libmesh_dir = os.path.join(self.moose_dir, 'libmesh', 'installed')
-        self.file = None
 
         # Failed Tests file object
         self.writeFailedTest = None
@@ -300,12 +352,21 @@ class TestHarness:
         try:
             self.executable = self.getExecutable() if self.app_name else None
         except FileNotFoundError as e:
-            print(f'ERROR: {e}')
-            sys.exit(1)
+            self.errorExit(f'{e}')
+
+        # If we have an executable and there is python directory next to it,
+        # append that directory to PYTHONPATH
+        if self.executable is not None:
+            exe_python_dir = os.path.join(os.path.dirname(os.path.abspath(self.executable)), 'python')
+            if os.path.isdir(exe_python_dir) and exe_python_dir not in sys.path:
+                sys.path.append(exe_python_dir)
 
         # Load capabilities if they're needed
+        self.options._required_capabilities = []
         if self.options.no_capabilities:
             self.options._capabilities = None
+            if self.options.only_tests_that_require:
+                self.errorExit('Cannot use --only-tests-that-require with --no-capabilities')
         else:
             assert self.executable
 
@@ -313,16 +374,22 @@ class TestHarness:
             # if we fail
             import pycapabilities
 
-            self.options._capabilities = util.getCapabilities(self.executable)
+            with util.ScopedTimer(0.5, 'Parsing application capabilities'):
+                self.options._capabilities = util.getCapabilities(self.executable)
 
-        # Load app json output if we can
-        if self.executable:
-            self.options._app_json = util.parseMOOSEJSON(util.getExeJSON(self.executable),
-                                                         '--json')
-            self.options._app_objects = util.getExeObjects(self.options._app_json)
-        else:
-            self.options._app_json = None
-            self.options._app_objects = None
+            # Setup the required capabilities, if any. From the capabilities
+            # given by the user, we form the value that we should set them to
+            # when temporarily augmenting the capabilities in a Tester
+            # to perform a check to see if the capability check in the tester
+            # changes if we change these value(s)
+            if self.options.only_tests_that_require:
+                required = self.options.only_tests_that_require
+                if isinstance(required, str):
+                    required = [required]
+                self.options._required_capabilities = self.buildRequiredCapabilities(
+                    list(self.options._capabilities.keys()),
+                    required
+                )
 
         checks = {}
         checks['platform'] = util.getPlatforms()
@@ -336,7 +403,7 @@ class TestHarness:
         # want to probe for configuration options
         if self.options.no_capabilities:
             checks['compiler'] = set(['ALL'])
-            for prefix in ['petsc', 'slepc', 'vtk', 'libtorch', 'mfem']:
+            for prefix in ['petsc', 'slepc', 'vtk', 'libtorch', 'mfem', 'kokkos']:
                 checks[f'{prefix}_version'] = 'N/A'
             for var in ['library_mode', 'mesh_mode', 'unique_ids', 'vtk',
                         'tecplot', 'dof_id_bytes', 'petsc_debug', 'curl',
@@ -344,7 +411,7 @@ class TestHarness:
                         'parmetis', 'chaco', 'party', 'ptscotch',
                         'slepc', 'unique_id', 'boost', 'fparser_jit',
                         'libpng', 'libtorch', 'libtorch_version',
-                        'installation_type', 'mfem']:
+                        'installation_type', 'mfem', 'kokkos']:
                 checks[var] = set(['ALL'])
         else:
             def get_option(*args, **kwargs):
@@ -372,7 +439,7 @@ class TestHarness:
             checks['threading'] = set(sorted(['ALL', str(threading).upper()]))
 
             for name in ['superlu', 'mumps', 'strumpack', 'parmetis', 'chaco', 'party',
-                         'ptscotch', 'boost', 'curl', 'mfem']:
+                         'ptscotch', 'boost', 'curl', 'mfem', 'kokkos']:
                 checks[name] = get_option(name, from_type=bool, to_set=True)
 
             checks['libpng'] = get_option('libpng', from_type=bool, to_set=True)
@@ -385,9 +452,8 @@ class TestHarness:
 
         # Override the MESH_MODE option if using the '--distributed-mesh'
         # or (deprecated) '--parallel-mesh' option.
-        if (self.options.parallel_mesh == True or self.options.distributed_mesh == True) or \
-              (self.options.cli_args != None and \
-               (self.options.cli_args.find('--parallel-mesh') != -1 or self.options.cli_args.find('--distributed-mesh') != -1)):
+        if self.options.distributed_mesh or not self.options.cli_args is None and \
+               self.options.cli_args.find('--distributed-mesh') != -1:
 
             option_set = set(['ALL', 'DISTRIBUTED'])
             checks['mesh_mode'] = option_set
@@ -430,73 +496,75 @@ class TestHarness:
 
         try:
             testroot_params = {}
-            for dirpath, dirnames, filenames in os.walk(search_dir, followlinks=True):
-                # Prune submodule paths when searching for tests, allowing exception
-                # for a git submodule contained within the test/tests or tests folder
 
-                dir_name = os.path.basename(dirpath)
-                if (search_dir != dirpath and os.path.exists(os.path.join(dirpath, '.git'))) or dir_name in [".git", ".svn"]:
-                    cdir = os.path.join(search_dir, 'test/tests/')
-                    if (os.path.commonprefix([dirpath, cdir]) == cdir):
-                        continue
+            with util.ScopedTimer(0.5, f'Parsing tests in {search_dir}'):
+                for dirpath, dirnames, filenames in os.walk(search_dir, followlinks=True):
+                    # Prune submodule paths when searching for tests, allowing exception
+                    # for a git submodule contained within the test/tests or tests folder
 
-                    cdir = os.path.join(search_dir, 'tests/')
-                    if (os.path.commonprefix([dirpath, cdir]) == cdir):
-                        continue
+                    dir_name = os.path.basename(dirpath)
+                    if (search_dir != dirpath and os.path.exists(os.path.join(dirpath, '.git'))) or dir_name in [".git", ".svn"]:
+                        cdir = os.path.join(search_dir, 'test/tests/')
+                        if (os.path.commonprefix([dirpath, cdir]) == cdir):
+                            continue
 
-                    dirnames[:] = []
-                    filenames[:] = []
+                        cdir = os.path.join(search_dir, 'tests/')
+                        if (os.path.commonprefix([dirpath, cdir]) == cdir):
+                            continue
 
-                if self.options.use_subdir_exe and testroot_params and not dirpath.startswith(testroot_params["testroot_dir"]):
-                    # Reset the params when we go outside the current testroot base directory
-                    testroot_params = {}
+                        dirnames[:] = []
+                        filenames[:] = []
 
-                # walk into directories that aren't contrib directories
-                if "contrib" not in os.path.relpath(dirpath, os.getcwd()):
-                    for file in filenames:
-                        if self.options.use_subdir_exe and file == "testroot":
-                            # Rely on the fact that os.walk does a depth first traversal.
-                            # Any directories below this one will use the executable specified
-                            # in this testroot file unless it is overridden.
-                            app_name, args, root_params = readTestRoot(os.path.join(dirpath, file))
-                            full_app_name = app_name + "-" + self.options.method
-                            if platform.system() == 'Windows':
-                                full_app_name += '.exe'
+                    if self.options.use_subdir_exe and testroot_params and not dirpath.startswith(testroot_params["testroot_dir"]):
+                        # Reset the params when we go outside the current testroot base directory
+                        testroot_params = {}
 
-                            testroot_params["executable"] = full_app_name
-                            if shutil.which(full_app_name) is None:
-                                testroot_params["executable"] = os.path.join(dirpath, full_app_name)
+                    # walk into directories that aren't contrib directories
+                    if "contrib" not in os.path.relpath(dirpath, os.getcwd()):
+                        for file in filenames:
+                            if self.options.use_subdir_exe and file == "testroot":
+                                # Rely on the fact that os.walk does a depth first traversal.
+                                # Any directories below this one will use the executable specified
+                                # in this testroot file unless it is overridden.
+                                app_name, args, root_params, _ = readTestRoot(os.path.join(dirpath, file))
+                                full_app_name = app_name + "-" + self.options.method
+                                if platform.system() == 'Windows':
+                                    full_app_name += '.exe'
 
-                            testroot_params["testroot_dir"] = dirpath
-                            caveats = [full_app_name]
-                            if args:
-                                caveats.append("Ignoring args %s" % args)
-                            testroot_params["caveats"] = caveats
-                            testroot_params["root_params"] = root_params
+                                testroot_params["executable"] = full_app_name
+                                if shutil.which(full_app_name) is None:
+                                    testroot_params["executable"] = os.path.join(dirpath, full_app_name)
 
-                        # See if there were other arguments (test names) passed on the command line
-                        if file == self.options.input_file_name \
-                               and os.path.abspath(os.path.join(dirpath, file)) not in launched_tests:
+                                testroot_params["testroot_dir"] = dirpath
+                                caveats = [full_app_name]
+                                if args:
+                                    caveats.append("Ignoring args %s" % args)
+                                testroot_params["caveats"] = caveats
+                                testroot_params["root_params"] = root_params
 
-                            if self.notMySpecFile(dirpath, file):
-                                continue
+                            # See if there were other arguments (test names) passed on the command line
+                            if file == self.options.input_file_name \
+                                and os.path.abspath(os.path.join(dirpath, file)) not in launched_tests:
 
-                            saved_cwd = os.getcwd()
-                            sys.path.append(os.path.abspath(dirpath))
-                            os.chdir(dirpath)
+                                if self.notMySpecFile(dirpath, file):
+                                    continue
 
-                            # Create the testers for this test
-                            testers = self.createTesters(dirpath, file, find_only, testroot_params)
+                                saved_cwd = os.getcwd()
+                                sys.path.append(os.path.abspath(dirpath))
+                                os.chdir(dirpath)
 
-                            # Schedule the testers (non blocking)
-                            self.scheduler.schedule(testers)
+                                # Create the testers for this test
+                                testers = self.createTesters(dirpath, file, find_only, testroot_params)
 
-                            # record these launched test to prevent this test from launching again
-                            # due to os.walk following symbolic links
-                            launched_tests.append(os.path.join(dirpath, file))
+                                # Schedule the testers (non blocking)
+                                self.scheduler.schedule(testers)
 
-                            os.chdir(saved_cwd)
-                            sys.path.pop()
+                                # record these launched test to prevent this test from launching again
+                                # due to os.walk following symbolic links
+                                launched_tests.append(os.path.join(dirpath, file))
+
+                                os.chdir(saved_cwd)
+                                sys.path.pop()
 
             # Wait for all the tests to complete (blocking)
             self.scheduler.waitFinish()
@@ -594,8 +662,7 @@ class TestHarness:
 
         if params.isValid('prereq'):
             if type(params['prereq']) != list:
-                print(("Option 'prereq' needs to be of type list in " + params['test_name']))
-                sys.exit(1)
+                self.errorExit("Option 'prereq' needs to be of type list in " + params['test_name'])
 
         # Double the alloted time for tests when running with the valgrind option
         tester.setValgrindMode(self.options.valgrind_mode)
@@ -606,7 +673,7 @@ class TestHarness:
             tester.setStatus(tester.fail, 'Max Fails Exceeded')
         elif self.num_failed > self.options.max_fails:
             tester.setStatus(tester.fail, 'Max Fails Exceeded')
-        elif tester.parameters().isValid('have_errors') and tester.parameters()['have_errors']:
+        elif tester.parameters().isValid('_have_parse_errors') and tester.parameters()['_have_parse_errors']:
             tester.setStatus(tester.fail, 'Parser Error')
 
     # This method splits a lists of tests into two pieces each, the first piece will run the test for
@@ -670,13 +737,10 @@ class TestHarness:
 
                 # Print status with caveats (if caveats not overridden)
                 caveats = True if caveats is None else caveats
-                print(util.formatResult(job, self.options, caveats=caveats), flush=True)
+                print(util.formatJobResult(job, self.options, caveats=caveats), flush=True)
 
-                timing = job.getTiming()
-
-                # Save these results for 'Final Test Result' summary
-                self.test_table.append( (job, joint_status.sort_value, timing) )
-                self.postRun(job.specs, timing)
+                # Store job as finished for printing
+                self.finished_jobs.append(job)
 
                 if job.isSkip():
                     self.num_skipped += 1
@@ -686,20 +750,19 @@ class TestHarness:
                     self.num_failed += 1
                 else:
                     self.num_pending += 1
-
-            # Just print current status without saving results
+            # Just print current status without a status message
             else:
                 caveats = False if caveats is None else caveats
-                print(util.formatResult(job, self.options, result=job.getStatus().status, caveats=caveats), flush=True)
+                print(util.formatJobResult(job, self.options, status_message=False, caveats=caveats), flush=True)
 
     def getStats(self, time_total: float) -> dict:
         """
         Get cumulative stats for all runs
         """
-        num_nonzero_timing = sum(1 if float(tup[0].getTiming()) > 0 else 0 for tup in self.test_table)
+        num_nonzero_timing = sum(1 if job.getTiming() > 0 else 0 for job in self.finished_jobs)
         if num_nonzero_timing > 0:
-            time_max = max(float(tup[0].getTiming()) for tup in self.test_table)
-            time_average = sum(float(tup[0].getTiming()) for tup in self.test_table) / num_nonzero_timing
+            time_max = max(job.getTiming() for job in self.finished_jobs)
+            time_average = sum(job.getTiming() for job in self.finished_jobs) / num_nonzero_timing
         else:
             time_max = 0
             time_average = 0
@@ -714,62 +777,125 @@ class TestHarness:
         stats.update(self.scheduler.appendStats())
         return stats
 
+    def getLongestJobs(self, num: int) -> list:
+        """
+        Get the longest running jobs after running all jobs
+        """
+        jobs = [j for j in self.finished_jobs if (not j.isSkip() and j.getTiming() > 0)]
+        jobs = sorted(jobs, key=lambda job: job.getTiming(), reverse=True)
+        return jobs[0:num]
+
+    def getLongestFolders(self, num: int) -> list[typing.Tuple[str, float]]:
+        """
+        Get the longest running folders after running all jobs
+        """
+        # Build a mapping for each folder -> jobs in that folder for jobs that ran
+        folder_jobs = defaultdict(list)
+        for job in [j for j in self.finished_jobs if not j.isSkip()]:
+            folder_jobs[job.getTestDir()].append(job)
+
+        folder_times = []
+        for folder, jobs in folder_jobs.items():
+            # Find the (start, end) time intervals for each job
+            intervals = []
+            for job in jobs:
+                timer = job.timer
+                if job.timer.hasTotalTime('runner_run'):
+                    time = timer.getTime('runner_run')
+                elif job.timer.hasTotalTime('main'):
+                    time = timer.getTime('main')
+                else:
+                    continue
+                intervals.append((time.start, time.end))
+
+            # We have no timing intervals for this folder
+            if not intervals:
+                continue
+
+            # Find the union of all times spent in this folder;
+            # this gives us the total time we ran tests in this folder,
+            # where multiple tests running at the same time in the same
+            # folder do not count twice
+            intervals.sort(key=lambda x: x[0])
+            merged_intervals = [intervals[0]]
+            for current in intervals:
+                last = merged_intervals[-1]
+                if current[0] <= last[1]:
+                    merged_intervals[-1] = (last[0], max(last[1], current[1]))
+                else:
+                    merged_intervals.append(current)
+
+            total_time = sum(v[1] - v[0] for v in merged_intervals)
+            folder_times.append((os.path.relpath(folder), total_time))
+
+        return sorted(folder_times, key=lambda v: v[1], reverse=True)[0:num]
+
     # Print final results, close open files, and exit with the correct error code
     def cleanup(self):
-        # Print the results table again if a bunch of output was spewed to the screen between
-        # tests as they were running
-        if len(self.parse_errors) > 0:
-            print(('\n\nParser Errors:\n' + ('-' * (self.options.term_cols))))
-            for err in self.parse_errors:
-                print((util.colorText(err, 'RED', html=True, colored=self.options.colored, code=self.options.code)))
+        # Helper for printing a header
+        def header(title: typing.Optional[str] = None) -> str:
+            return (f'\n{title}:\n' if title else '') + '-' * self.options.term_cols
 
+        if not self.finished_jobs:
+            print('No tests ran')
+
+        # If something failed or verbosity is requested, print combined results
         if (self.options.verbose or (self.num_failed != 0 and not self.options.quiet)) and not self.options.dry_run:
-            print(('\n\nFinal Test Results:\n' + ('-' * (self.options.term_cols))))
-            for (job, sort_value, timing) in sorted(self.test_table, key=lambda x: x[1]):
-                print((util.formatResult(job, self.options, caveats=True)))
+            print(header('Final Test Results'))
+            sorted_jobs = sorted(self.finished_jobs, key=lambda job: job.getJointStatus().sort_value)
+            for job in sorted_jobs:
+                print((util.formatJobResult(job, self.options, caveats=True)))
+
+        # Longest jobs and longest folders
+        if not self.options.dry_run and self.options.longest_jobs:
+            longest_jobs = self.getLongestJobs(self.options.longest_jobs)
+            if longest_jobs:
+                print(header(f'{self.options.longest_jobs} Longest Running Jobs'))
+                for job in longest_jobs:
+                    print(util.formatJobResult(job, self.options, caveats=True, timing=True))
+
+            longest_folders = self.getLongestFolders(self.options.longest_jobs)
+            if longest_folders:
+                print(header(f'{self.options.longest_jobs} Longest Running Folders'))
+                for folder, time in longest_folders:
+                    if self.options.colored and self.options.color_first_directory:
+                        first_directory = folder.split('/')[0]
+                        prefix = util.colorText(first_directory, 'CYAN')
+                        suffix = folder.replace(first_directory, '', 1)
+                        folder = prefix + suffix
+                    entry = util.FormatResultEntry(name=folder, timing=time)
+                    print(util.formatResult(entry, self.options, timing=True))
+
+        # Parser errors, near the bottom
+        if self.parse_errors:
+            self.error_code = self.error_code | 0x80
+            print(header('Parser Errors'))
+            for err in self.parse_errors:
+                print(err)
 
         time_total = (datetime.datetime.now() - self.start_time).total_seconds()
         stats = self.getStats(time_total)
 
-        print(('-' * (self.options.term_cols)))
-
-        # Mask off TestHarness error codes to report parser errors
-        fatal_error = ''
-        if len(self.parse_errors) > 0:
-            fatal_error += ', <r>FATAL PARSER ERROR</r>'
-            self.error_code = self.error_code | 0x80
-
-        # Print a different footer when performing a dry run
+        # Final summary for the bottom
+        summary = ''
         if self.options.dry_run:
-            print(f'Processed {self.num_passed + self.num_skipped} tests in {stats["time_total"]:.1f} seconds.')
-            summary = f'<b>{self.num_passed} would run</b>, <b>{self.num_skipped} would be skipped</b>'
-            summary += fatal_error
-            print(util.colorText(summary, "", html=True, colored=self.options.colored, code=self.options.code))
+            summary += f'Processed {self.num_passed + self.num_skipped} tests in {stats["time_total"]:.1f} seconds.\n'
+            summary += f'<b>{self.num_passed} would run</b>, <b>{self.num_skipped} would be skipped</b>'
         else:
-            num_nonzero_timing = sum(1 if float(tup[0].getTiming()) > 0 else 0 for tup in self.test_table)
-            if num_nonzero_timing > 0:
-                timing_max = max(float(tup[0].getTiming()) for tup in self.test_table)
-                timing_avg = sum(float(tup[0].getTiming()) for tup in self.test_table) / num_nonzero_timing
-            else:
-                timing_max = 0
-                timing_avg = 0
-            summary = f'Ran {self.num_passed + self.num_failed} tests in {stats["time_total"]:.1f} seconds.'
-            summary += f' Average test time {timing_avg:.1f} seconds,'
-            summary += f' maximum test time {timing_max:.1f} seconds.'
-            print(summary)
+            summary += f'Ran {self.num_passed + self.num_failed} tests in {stats["time_total"]:.1f} seconds.'
+            summary += f' Average test time {stats["time_average"]:.1f} seconds,'
+            summary += f' maximum test time {stats["time_max"]:.1f} seconds.\n'
 
             # Get additional results from the scheduler
             scheduler_summary = self.scheduler.appendResultFooter(stats)
             if scheduler_summary:
-                print(scheduler_summary)
+                summary += scheduler_summary + '\n'
 
             if self.num_passed:
-                summary = f'<g>{self.num_passed} passed</g>'
+                summary += f'<g>{self.num_passed} passed</g>'
             else:
-                summary = f'<b>{self.num_passed} passed</b>'
+                summary += f'<b>{self.num_passed} passed</b>'
             summary += f', <b>{self.num_skipped} skipped</b>'
-            if self.num_pending:
-                summary += f', <c>{self.num_pending} pending</c>'
             if self.num_failed:
                 summary += f', <r>{self.num_failed} FAILED</r>'
             else:
@@ -777,55 +903,12 @@ class TestHarness:
             if self.scheduler.maxFailures():
                 self.error_code = self.error_code | 0x80
                 summary += '\n<r>MAX FAILURES REACHED</r>'
+        if self.parse_errors:
+            summary += ', <r>FATAL PARSER ERROR</r>'
+        print('\n' + header())
+        print(util.colorText(summary, "", html=True, colored=self.options.colored))
 
-            summary += fatal_error
-
-            print(util.colorText(summary, "", html=True, colored=self.options.colored, code=self.options.code))
-
-            if self.options.longest_jobs:
-                # Sort all jobs by run time
-                sorted_tups = sorted(self.test_table, key=lambda tup: float(tup[0].getTiming()), reverse=True)
-
-                print('\n%d longest running jobs:' % self.options.longest_jobs)
-                print(('-' * (self.options.term_cols)))
-
-                # Copy the current options and force timing to be true so that
-                # we get times when we call formatResult() below
-                options_with_timing = copy.deepcopy(self.options)
-                options_with_timing.timing = True
-
-                for tup in sorted_tups[0:self.options.longest_jobs]:
-                    job = tup[0]
-                    if not job.isSkip() and float(job.getTiming()) > 0:
-                        print(util.formatResult(job, options_with_timing, caveats=True))
-                if len(sorted_tups) == 0 or float(sorted_tups[0][0].getTiming()) == 0:
-                    print('No jobs were completed.')
-
-                # The TestHarness receives individual jobs out of order (can't realistically use self.test_table)
-                tester_dirs = {}
-                dag_table = []
-                for jobs, dag in self.scheduler.retrieveDAGs():
-                    original_dag = dag.getOriginalDAG()
-                    total_time = float(0.0)
-                    tester = None
-                    for tester in dag.topological_sort(original_dag):
-                        if not tester.isSkip():
-                            total_time += tester.getTiming()
-                    if tester is not None:
-                        tester_dirs[tester.getTestDir()] = (tester_dirs.get(tester.getTestDir(), 0) + total_time)
-                for k, v in tester_dirs.items():
-                    rel_spec_path = f'{os.path.sep}'.join(k.split(os.path.sep)[-2:])
-                    dag_table.append([f'{rel_spec_path}{os.path.sep}{self.options.input_file_name}', f'{v:.3f}'])
-
-                sorted_table = sorted(dag_table, key=lambda dag_table: float(dag_table[1]), reverse=True)
-                if sorted_table[0:self.options.longest_jobs]:
-                    print(f'\n{self.options.longest_jobs} longest running folders:')
-                    print(('-' * (self.options.term_cols)))
-                    # We can't use util.formatResults, as we are representing a group of testers
-                    for group in sorted_table[0:self.options.longest_jobs]:
-                        print(str(group[0]).ljust((self.options.term_cols - (len(group[1]) + 4)), ' '), f'[{group[1]}s]')
-                    print('\n')
-
+        if not self.options.dry_run:
             all_jobs = self.scheduler.retrieveJobs()
 
             # Gather and print the jobs with race conditions after the jobs are finished
@@ -835,8 +918,6 @@ class TestHarness:
                 if checker.findRacePartners():
                     # Print the unique racer conditions and adjust our error code.
                     self.error_code = checker.printUniqueRacerSets()
-                else:
-                    print("There are no race conditions.")
 
             if not self.useExistingStorage():
                 # Store the results from each job
@@ -848,30 +929,9 @@ class TestHarness:
                 # And write the results, including the stats
                 self.writeResults(complete=True, stats=stats)
 
-        try:
-            # Write one file, with verbose information (--file)
-            if self.options.file:
-                with open(os.path.join(self.output_dir, self.options.file), 'w') as f:
-                    for job_group in all_jobs:
-                        for job in job_group:
-                            # Do not write information about silent tests
-                            if job.isSilent():
-                                continue
-
-                            formatted_results = util.formatResult( job, self.options, result=job.getOutput(), color=False)
-                            f.write(formatted_results + '\n')
-
-        except IOError:
-            print('Permission error while writing results to disc')
-            sys.exit(1)
-        except:
-            print('Error while writing results to disc')
-            sys.exit(1)
-
     def determineScheduler(self):
         if self.options.hpc_host and not self.options.hpc:
-            print(f'ERROR: --hpc must be set with --hpc-host for an unknown host')
-            sys.exit(1)
+            self.errorExit('--hpc must be set with --hpc-host for an unknown host')
 
         if self.options.hpc == 'pbs':
             return 'RunPBS'
@@ -894,8 +954,7 @@ class TestHarness:
 
         if self.useExistingStorage():
             if not os.path.exists(file):
-                print(f'The previous run {file} does not exist')
-                sys.exit(1)
+                self.errorExit(f'The previous run {file} does not exist')
             try:
                 with open(file, 'r') as f:
                     results = json.load(f)
@@ -905,12 +964,10 @@ class TestHarness:
 
             testharness = results.get('testharness')
             if testharness is None:
-                print(f'ERROR: The previous result {file} is not valid!')
-                sys.exit(1)
+                self.errorExit(f'The previous result {file} is not valid!')
 
             if not testharness.get('end_time'):
-                print(f'ERROR: The previous result {file} is incomplete!')
-                sys.exit(1)
+                self.errorExit(f'The previous result {file} is incomplete!')
 
             # Adhere to previous input file syntax, or set the default
             self.options.input_file_name = testharness.get('input_file_name', self.options.input_file_name)
@@ -927,11 +984,8 @@ class TestHarness:
         self.options.results_storage = {}
         storage = self.options.results_storage
 
-        # Version history:
-        # 1 - Initial tracking of version
-        # 2 - Added 'unique_test_id' (tests/*/tests/*/unique_test_id) to Job output if set
-        # 3 - Added 'json_metadata' (tests/*/tests/*/tester/json_metadata) to Tester output
-        testharness = {'version': 3,
+        testharness = {'version': self.RESULTS_VERSION,
+                       'validation_version': self.VALIDATION_VERSION,
                        'start_time': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                        'end_time': None,
                        'args': sys.argv[1:],
@@ -1091,110 +1145,113 @@ class TestHarness:
 
     ## Parse command line options and assign them to self.options
     def parseCLArgs(self, argv):
-        parser = argparse.ArgumentParser(description='A tool used to test MOOSE based applications')
-        parser.add_argument('--opt', action='store_const', dest='method', const='opt', help='test the app_name-opt binary')
-        parser.add_argument('--dbg', action='store_const', dest='method', const='dbg', help='test the app_name-dbg binary')
-        parser.add_argument('--devel', action='store_const', dest='method', const='devel', help='test the app_name-devel binary')
-        parser.add_argument('--oprof', action='store_const', dest='method', const='oprof', help='test the app_name-oprof binary')
-        parser.add_argument('--pro', action='store_const', dest='method', const='pro', help='test the app_name-pro binary')
-        parser.add_argument('--run', type=str, default='', dest='run', help='only run tests of the specified of tag(s)')
-        parser.add_argument('--ignore', nargs='?', action='store', metavar='caveat', dest='ignored_caveats', const='all', type=str, help='ignore specified caveats when checking if a test should run: (--ignore "method compiler") Using --ignore with out a conditional will ignore all caveats')
-        parser.add_argument('-j', '--jobs', nargs='?', metavar='int', action='store', type=int, dest='jobs', const=1, help='run test binaries in parallel')
-        parser.add_argument('-e', action='store_true', dest='extra_info', help='Display "extra" information including all caveats and deleted tests')
-        parser.add_argument('-c', '--no-color', action='store_false', dest='colored', help='Do not show colored output')
-        parser.add_argument('--color-first-directory', action='store_true', dest='color_first_directory', help='Color first directory')
-        parser.add_argument('--heavy', action='store_true', dest='heavy_tests', help='Run tests marked with HEAVY : True')
-        parser.add_argument('--all-tests', action='store_true', dest='all_tests', help='Run normal tests and tests marked with HEAVY : True')
-        parser.add_argument('-g', '--group', action='store', type=str, dest='group', default='ALL', help='Run only tests in the named group')
-        parser.add_argument('--not_group', action='store', type=str, dest='not_group', help='Run only tests NOT in the named group')
-        parser.add_argument('--dbfile', nargs='?', action='store', dest='dbFile', help='Location to timings data base file. If not set, assumes $HOME/timingDB/timing.sqlite')
-        parser.add_argument('-l', '--load-average', action='store', type=float, dest='load', help='Do not run additional tests if the load average is at least LOAD')
-        parser.add_argument('-t', '--timing', action='store_true', dest='timing', help='Report Timing information for passing tests')
-        parser.add_argument('--longest-jobs', action='store', dest='longest_jobs', type=int, default=0, help='Print the longest running jobs upon completion')
-        parser.add_argument('-s', '--scale', action='store_true', dest='scaling', help='Scale problems that have SCALE_REFINE set')
-        parser.add_argument('-i', nargs=1, action='store', type=str, dest='input_file_name', help='The test specification file to look for (default: tests)')
-        parser.add_argument('--libmesh_dir', nargs=1, action='store', type=str, dest='libmesh_dir', help='Currently only needed for bitten code coverage')
-        parser.add_argument('--no-capabilities', action='store_true', dest='no_capabilities', help='Do not allow capability checks')
-        parser.add_argument('--parallel', '-p', nargs='?', action='store', type=int, dest='parallel', const=1, help='Number of processors to use when running mpiexec')
-        parser.add_argument('--n-threads', nargs=1, action='store', type=int, dest='nthreads', default=1, help='Number of threads to use when running mpiexec')
-        parser.add_argument('--recover', action='store_true', dest='enable_recover', help='Run a test in recover mode')
-        parser.add_argument('--recoversuffix', action='store', type=str, default='cpr', dest='recoversuffix', help='Set the file suffix for recover mode')
-        parser.add_argument('--valgrind', action='store_const', dest='valgrind_mode', const='NORMAL', help='Run normal valgrind tests')
-        parser.add_argument('--valgrind-heavy', action='store_const', dest='valgrind_mode', const='HEAVY', help='Run heavy valgrind tests')
-        parser.add_argument('--valgrind-max-fails', nargs=1, type=int, dest='valgrind_max_fails', default=5, help='The number of valgrind tests allowed to fail before any additional valgrind tests will run')
-        parser.add_argument('--max-fails', nargs=1, type=int, dest='max_fails', default=50, help='The number of tests allowed to fail before any additional tests will run')
-        parser.add_argument('--re', action='store', type=str, dest='reg_exp', help='Run tests that match --re=regular_expression')
-        parser.add_argument('--failed-tests', action='store_true', dest='failed_tests', help='Run tests that previously failed')
-        parser.add_argument('--check-input', action='store_true', dest='check_input', help='Run check_input (syntax) tests only')
-        parser.add_argument('--no-check-input', action='store_true', dest='no_check_input', help='Do not run check_input (syntax) tests')
-        parser.add_argument('--spec-file', action='store', type=str, dest='spec_file', help='Supply a path to the tests spec file to run the tests found therein. Or supply a path to a directory in which the TestHarness will search for tests. You can further alter which tests spec files are found through the use of -i and --re')
-        parser.add_argument('-C', '--test-root', nargs=1, metavar='dir', type=str, dest='spec_file', help='Tell the TestHarness to search for test spec files at this location.')
-        parser.add_argument('-d', '--pedantic-checks', action='store_true', dest='pedantic_checks', help="Run pedantic checks of the Testers' file writes looking for race conditions.")
-        parser.add_argument('--capture-perf-graph', action='store_true', help='Capture PerfGraph for MOOSE application runs via Outputs/perf_graph_json_file')
-
-        # Options that pass straight through to the executable
-        parser.add_argument('--parallel-mesh', action='store_true', dest='parallel_mesh', help='Deprecated, use --distributed-mesh instead')
-        parser.add_argument('--distributed-mesh', action='store_true', dest='distributed_mesh', help='Pass "--distributed-mesh" to executable')
-        parser.add_argument('--libtorch-device', action='store', dest='libtorch_device', type=str, choices=['cpu', 'cuda', 'mps'], default='cpu', help='Run libtorch tests with this device')
-        parser.add_argument('--error', action='store_true', help='Run the tests with warnings as errors (Pass "--error" to executable)')
-        parser.add_argument('--error-unused', action='store_true', help='Run the tests with errors on unused parameters (Pass "--error-unused" to executable)')
-        parser.add_argument('--error-deprecated', action='store_true', help='Run the tests with errors on deprecations')
-        parser.add_argument('--allow-unused',action='store_true', help='Run the tests without errors on unused parameters (Pass "--allow-unused" to executable)')
-        parser.add_argument('--allow-warnings',action='store_true', help='Run the tests with warnings not as errors (Do not pass "--error" to executable)')
-        # Option to use for passing unwrapped options to the executable
-        parser.add_argument('--cli-args', nargs='?', type=str, dest='cli_args', help='Append the following list of arguments to the command line (Encapsulate the command in quotes)')
-        parser.add_argument('--dry-run', action='store_true', dest='dry_run', help="Pass --dry-run to print commands to run, but don't actually run them")
-        parser.add_argument('--use-subdir-exe', action="store_true", help='If there are sub directories that contain a new testroot, use that for running tests under that directory.')
-
-        # Options which manipulate the output in some way
-        outputgroup = parser.add_argument_group('Output Options', 'These options control the output of the test harness. The sep-files options write output to files named test_name.TEST_RESULT.txt. All file output will overwrite old files')
-        outputgroup.add_argument('-v', '--verbose', action='store_true', dest='verbose', help='show the output of every test')
-        outputgroup.add_argument('-q', '--quiet', action='store_true', dest='quiet', help='only show the result of every test, don\'t show test output even if it fails')
-        outputgroup.add_argument('--no-report', action='store_false', dest='report_skipped', help='do not report skipped tests')
-        outputgroup.add_argument('--show-directory', action='store_true', dest='show_directory', help='Print test directory path in out messages')
-        outputgroup.add_argument('-o', '--output-dir', nargs=1, metavar='directory', dest='output_dir', default='', help='Save all output files in the directory, and create it if necessary')
-        outputgroup.add_argument('-f', '--file', nargs=1, action='store', dest='file', help='Write verbose output of each test to FILE and quiet output to terminal')
-        outputgroup.add_argument('-x', '--sep-files', action='store_true', dest='sep_files', help='Write the output of each test to a separate file. Only quiet output to terminal.')
-        outputgroup.add_argument('--include-input-file', action='store_true', dest='include_input', help='Include the contents of the input file when writing the results of a test to a file')
-        outputgroup.add_argument("--testharness-unittest", action="store_true", help="Run the TestHarness unittests that test the TestHarness.")
-        outputgroup.add_argument("--json", action="store_true", dest="json", help="Dump the parameters for the testers in JSON Format")
-        outputgroup.add_argument("--yaml", action="store_true", dest="yaml", help="Dump the parameters for the testers in Yaml Format")
-        outputgroup.add_argument("--dump", action="store_true", dest="dump", help="Dump the parameters for the testers in GetPot Format")
-        outputgroup.add_argument("--no-trimmed-output", action="store_true", dest="no_trimmed_output", help="Do not trim the output")
-        outputgroup.add_argument("--no-trimmed-output-on-error", action="store_true", dest="no_trimmed_output_on_error", help="Do not trim output for tests which cause an error")
-        outputgroup.add_argument("--results-file", nargs=1, default='.previous_test_results.json', help="Save run_tests results to an alternative json file (default: %(default)s)")
-        outputgroup.add_argument("--show-last-run", action="store_true", dest="show_last_run", help="Display previous results without executing tests again")
-
-        # Options for HPC execution
-        hpcgroup = parser.add_argument_group('HPC Options', 'Options controlling HPC execution')
-        hpcgroup.add_argument('--hpc', dest='hpc', action='store', choices=['pbs', 'slurm'], help='Launch tests using a HPC scheduler')
-        hpcgroup.add_argument('--hpc-host', nargs='+', action='store', dest='hpc_host', metavar='', help='The host(s) to use for submitting HPC jobs')
-        hpcgroup.add_argument('--hpc-pre-source', nargs=1, action="store", dest='hpc_pre_source', metavar='', help='Source specified file before launching HPC tests')
-        hpcgroup.add_argument('--hpc-file-timeout', nargs=1, type=int, action='store', dest='hpc_file_timeout', default=300, help='The time in seconds to wait for HPC output')
-        hpcgroup.add_argument('--hpc-scatter-procs', nargs=1, type=int, action='store', dest='hpc_scatter_procs', default=None, help='Set to run HPC jobs with scatter placement when the processor count is this or lower')
-        hpcgroup.add_argument('--hpc-apptainer-bindpath', nargs=1, action='store', type=str, dest='hpc_apptainer_bindpath', help='Sets the apptainer bindpath for HPC jobs')
-        hpcgroup.add_argument('--hpc-apptainer-no-home', action='store_true', dest='hpc_apptainer_no_home', help='Passes --no-home to apptainer for HPC jobs')
-        hpcgroup.add_argument('--hpc-project', nargs=1, action='store', dest='hpc_project', type=str, default='moose', metavar='', help='Identify your job(s) with this project (default:  %(default)s)')
-        hpcgroup.add_argument('--hpc-no-hold', nargs=1, action='store', type=bool, default=False, dest='hpc_no_hold', help='Do not pre-create hpc jobs to be held')
-        hpcgroup.add_argument('--pbs-queue', nargs=1, action='store', dest='hpc_queue', type=str, metavar='', help='Submit jobs to the specified queue')
-
-        # Try to find the terminal size if we can
-        # Try/except here because the terminal size could fail w/o a display
         term_cols = None
         try:
             term_cols = os.get_terminal_size().columns * 7/8
         except:
             term_cols = 110
             pass
-
-        # Optionally load in the environment controlled values
         term_cols = int(os.getenv('MOOSE_TERM_COLS', term_cols))
         term_format = os.getenv('MOOSE_TERM_FORMAT', 'njcst')
 
-        # Terminal options
-        termgroup = parser.add_argument_group('Terminal Options', 'Options for controlling the formatting of terminal output')
-        termgroup.add_argument('--term-cols', dest='term_cols', action='store', type=int, default=term_cols, help='The number columns to use in output')
-        termgroup.add_argument('--term-format', dest='term_format', action='store', type=str, default=term_format, help='The formatting to use when outputting job status')
+        parser = argparse.ArgumentParser(description='A tool used to test MOOSE-based applications')
+
+        parser.add_argument('--failed-tests', action='store_true', help='Run tests that previously failed')
+        parser.add_argument('--show-last-run', action='store_true', help='Display previous results without executing tests again')
+        parser.add_argument('--dry-run', action='store_true', help="Print the commands to run without running them")
+
+        inputgroup = parser.add_argument_group('Test Specifications', 'Specify which test specification files to load')
+        inputgroup.add_argument('-i', nargs=1, action='store', type=str, dest='input_file_name', help='The test specification file to look for (default: tests)')
+        inputgroup.add_argument('-C', '--test-root', nargs=1, metavar='dir', type=str, dest='spec_file', help='Search for test spec files in this location')
+        inputgroup.add_argument('--spec-file', action='store', type=str,
+                                help='Supply a path to the tests spec file to run the tests found therein or supply a path to a directory in which the TestHarness will search for tests')
+
+        parallelgroup = parser.add_argument_group('Parallelization', 'Control the parallel execution')
+        parallelgroup.add_argument('-j', '--jobs', nargs='?', action='store', type=int, dest='jobs', const=1, help='Set the number of parallel jobs for tests')
+        parallelgroup.add_argument('-l', '--load-average', action='store', type=float, dest='load', help='Do not run additional tests if the load average is at least LOAD')
+        parallelgroup.add_argument('-p', '--parallel', nargs='?', action='store', type=int, dest='parallel', const=1, help='Number of MPI processes to use for each job')
+        parallelgroup.add_argument('--n-threads', nargs=1, action='store', type=int, dest='nthreads', default=1, help='Number of threads to use when running mpiexec')
+
+        filtergroup = parser.add_argument_group('Test Filters', 'Filter which tests are ran')
+        filtergroup.add_argument('-g', '--group', action='store', type=str, dest='group', default='ALL', help='Run only tests in the named group')
+        filtergroup.add_argument('-s', '--scale', action='store_true', dest='scaling', help='Run tests that have SCALE_REFINE set')
+        filtergroup.add_argument('--all-tests', action='store_true', help='Run heavy and non-heavy tests')
+        filtergroup.add_argument('--check-input', action='store_true', help='Run check_input (syntax) tests only')
+        filtergroup.add_argument('--heavy', action='store_true', dest='heavy_tests', help='Run tests marked with heavy')
+        filtergroup.add_argument('--ignore', nargs='?', action='store', metavar='caveat', dest='ignored_caveats', const='all', type=str,
+                                 help='Ignore specified caveats when checking if a test should run; using --ignore without a conditional will ignore all caveats')
+        filtergroup.add_argument('--no-check-input', action='store_true', help='Do not run check_input (syntax) tests')
+        filtergroup.add_argument('--not-group', action='store', type=str, help='Run only tests NOT in the named group')
+        filtergroup.add_argument('--re', action='store', type=str, dest='reg_exp', help='Run tests that match the given regular expression')
+        filtergroup.add_argument('--only-tests-that-require', action='extend', nargs=1, type=str, help='Require that a test depend on this capability name; can be negated with "!"')
+        filtergroup.add_argument('--valgrind', action='store_const', dest='valgrind_mode', const='NORMAL', help='Run normal valgrind tests')
+        filtergroup.add_argument('--valgrind-heavy', action='store_const', dest='valgrind_mode', const='HEAVY', help='Run heavy valgrind tests')
+
+        capabilitygroup = parser.add_argument_group('Additional Capabilities', 'Enable or disable additional TestHarness capabilities')
+        capabilitygroup.add_argument('--capture-perf-graph', action='store_true', help='Capture PerfGraph for RunApp tests via Outputs/perf_graph_json_file')
+        capabilitygroup.add_argument('--cli-args', nargs='?', type=str, help='Append the following list of arguments to the command line (encapsulate the command in quotes)')
+        capabilitygroup.add_argument('--no-capabilities', action='store_true', help='Disable Capability checks')
+        capabilitygroup.add_argument('--pedantic-checks', action='store_true', help='Run pedantic checks of the Testers\' file writes looking for race conditions')
+        capabilitygroup.add_argument('--use-subdir-exe', action="store_true", help='If there are sub directories that contain a new testroot, use that for running tests under that directory')
+        capabilitygroup.add_argument('--recover', action='store_true', dest='enable_recover', help='Run tests in recover mode')
+        capabilitygroup.add_argument('--restep', action='store_true', dest='enable_restep', help='Run tests in restep mode')
+
+        appgroup = parser.add_argument_group('Application Options', 'Options that pass arguments directly to the executable')
+        appgroup.add_argument('--allow-unused',action='store_true', help='Run the tests without errors on unused parameters (pass --allow-unused)')
+        appgroup.add_argument('--allow-warnings',action='store_true', help='Run the tests with warnings not as errors (do not pass --error)')
+        appgroup.add_argument('--compute-device', action='store', type=str, choices=TestHarness.validComputeDevices(), default='cpu',
+                              help='Run tests that support this compute device; (passes --compute-device=...)')
+        appgroup.add_argument('--distributed-mesh', action='store_true', help='Run tests that support distributed mesh (pass --distributed-mesh)')
+        appgroup.add_argument('--error', action='store_true', help='Run the tests with warnings as errors (pass --error)')
+        appgroup.add_argument('--error-unused', action='store_true', help='Run the tests with errors on unused parameters (pass --error-unused)')
+        appgroup.add_argument('--error-deprecated', action='store_true', help='Run the tests with errors on deprecations (pass --error-deprecated)')
+        appgroup.add_argument('--recoversuffix', action='store', type=str, default='cpr', help='Set the file suffix for recover mode (pass --recoversuffix)')
+
+        methodgroup = parser.add_argument_group('Application Methods', 'Control which application biunary method is to be ran')
+        methodgroup.add_argument('--opt', action='store_const', dest='method', const='opt', help='Test the <app_name>-opt binary')
+        methodgroup.add_argument('--dbg', action='store_const', dest='method', const='dbg', help='Test the <app_name>-dbg binary')
+        methodgroup.add_argument('--devel', action='store_const', dest='method', const='devel', help='Test the <app_name>-devel binary')
+        methodgroup.add_argument('--oprof', action='store_const', dest='method', const='oprof', help='Test the <app_name>-oprof binary')
+
+        screengroup = parser.add_argument_group('On-screen Output', 'Control the on-screen output')
+        screengroup.add_argument('-c', '--no-color', action='store_false', dest='colored', help='Do not show colored output')
+        screengroup.add_argument('-e', action='store_true', dest='extra_info', help='Display "extra" information including all caveats and deleted tests')
+        screengroup.add_argument('-q', '--quiet', action='store_true', dest='quiet', help='Only show the result of every test (even failed output)')
+        screengroup.add_argument('-t', '--timing', action='store_true', dest='timing', help='Report Timing information for passing tests')
+        screengroup.add_argument('-v', '--verbose', action='store_true', dest='verbose', help='Show the output of every test')
+        screengroup.add_argument('--color-first-directory', action='store_true', help='Color first directory')
+        screengroup.add_argument('--longest-jobs', action='store', type=int, default=0, help='Print the longest running jobs upon completion')
+        screengroup.add_argument('--no-report', action='store_false', dest='report_skipped', help='Do not report skipped tests')
+        screengroup.add_argument("--no-trimmed-output", action="store_true", help="Do not trim the output")
+        screengroup.add_argument("--no-trimmed-output-on-error", action="store_true", help="Do not trim output for tests which cause an error")
+        screengroup.add_argument('--term-cols', action='store', type=int, default=term_cols, help='The number columns to use in output')
+        screengroup.add_argument('--term-format', action='store', type=str, default=term_format, help='The formatting to use when outputting job status')
+
+        outputgroup = parser.add_argument_group('Output', 'Control the file output')
+        outputgroup.add_argument('-o', '--output-dir', nargs=1, metavar='directory', dest='output_dir', default='', help='Save all output files in the directory, and create it if necessary')
+        outputgroup.add_argument('-x', '--sep-files', action='store_true', dest='sep_files', help='Write the output of each test to a separate file. Only quiet output to terminal.')
+        outputgroup.add_argument("--results-file", nargs=1, default='.previous_test_results.json', help="Save run_tests results to an alternative json file (default: %(default)s)")
+
+        failgroup = parser.add_argument_group('Failure Criteria', 'Control the failure criteria')
+        failgroup.add_argument('--max-fails', nargs=1, type=int, default=50, help='The number of tests allowed to fail before any additional tests will run')
+        failgroup.add_argument('--valgrind-max-fails', nargs=1, type=int, default=5, help='The number of valgrind tests allowed to fail before any additional valgrind tests will run')
+
+        hpcgroup = parser.add_argument_group('HPC', 'Enable and control HPC execution')
+        hpcgroup.add_argument('--hpc', dest='hpc', action='store', choices=['pbs', 'slurm'], help='Launch tests using a HPC scheduler')
+        hpcgroup.add_argument('--hpc-apptainer-bindpath', nargs=1, action='store', type=str, help='Sets the apptainer bindpath for HPC jobs')
+        hpcgroup.add_argument('--hpc-apptainer-no-home', action='store_true',  help='Passes --no-home to apptainer for HPC jobs')
+        hpcgroup.add_argument('--hpc-file-timeout', nargs=1, type=int, action='store', default=300, help='The time in seconds to wait for HPC output')
+        hpcgroup.add_argument('--hpc-host', nargs='+', action='store', metavar='', help='The host(s) to use for submitting HPC jobs')
+        hpcgroup.add_argument('--hpc-no-hold', nargs=1, action='store', type=bool, default=False, help='Do not pre-create hpc jobs to be held')
+        hpcgroup.add_argument('--hpc-pre-source', nargs=1, action="store", metavar='', help='Source specified file before launching HPC tests')
+        hpcgroup.add_argument('--hpc-project', nargs=1, action='store',  type=str, default='moose', metavar='', help='Identify your job(s) with this project (default:  %(default)s)')
+        hpcgroup.add_argument('--hpc-scatter-procs', nargs=1, type=int, action='store', dest='hpc_scatter_procs', default=None, help='Set to run HPC jobs with scatter placement when the processor count is this or lower')
+        hpcgroup.add_argument('--pbs-queue', nargs=1, action='store', dest='hpc_queue', type=str, metavar='', help='Submit jobs to the specified queue')
+
+        dumpgroup = parser.add_argument_group('Syntax Dumping', 'Dump the Tester parameters')
+        dumpgroup.add_argument('--json', action='store_true', help='Dump Tester parameters in JSON Format')
+        dumpgroup.add_argument('--yaml', action='store_true', help='Dump Tester parameters in Yaml Format')
+        dumpgroup.add_argument('--dump', action='store_true', help='Dump Tester parameters in HIT Format')
 
         code = True
         if self.code.decode() in argv:
@@ -1211,8 +1268,6 @@ class TestHarness:
                 self.options.hpc = hpc_config.scheduler
                 print(f'INFO: Setting --hpc={self.options.hpc} for known host {hpc_host}')
 
-        self.options.runtags = [tag for tag in self.options.run.split(',') if tag != '']
-
         # Convert all list based options of length one to scalars
         for key, value in list(vars(self.options).items()):
             if type(value) == list and len(value) == 1:
@@ -1225,32 +1280,30 @@ class TestHarness:
     def checkAndUpdateCLArgs(self):
         opts = self.options
         if opts.group == opts.not_group:
-            print('ERROR: The group and not_group options cannot specify the same group')
-            sys.exit(1)
+            self.errorExit('The group and not_group options cannot specify the same group')
         if opts.valgrind_mode and opts.nthreads > 1:
-            print('ERROR: --threads cannot be used with --valgrind')
-            sys.exit(1)
+            self.errorExit('--threads cannot be used with --valgrind')
         if opts.check_input and opts.no_check_input:
-            print('ERROR: --check-input and --no-check-input cannot be used simultaneously')
-            sys.exit(1)
-        if opts.check_input and opts.enable_recover:
-            print('ERROR: --check-input and --recover cannot be used simultaneously')
-            sys.exit(1)
+            self.errorExit('--check-input and --no-check-input cannot be used simultaneously')
+        has_flags = []
+        for var, flag in [('check_input', '--check-input'),
+                          ('enable_recover', '--recover'),
+                          ('enable_restep', '--restep')]:
+            if getattr(opts, var):
+                has_flags.append(flag)
+        if len(has_flags) > 1:
+            self.errorExit(' and '.join(has_flags), 'cannot be used together')
         if opts.spec_file:
             if not os.path.exists(opts.spec_file):
-                print('ERROR: --spec-file supplied but path does not exist')
-                sys.exit(1)
+                self.errorExit('--spec-file supplied but path does not exist')
             if os.path.isfile(opts.spec_file):
                 if opts.input_file_name:
-                    print('ERROR: Cannot use -i with --spec-file being a file')
-                    sys.exit(1)
+                    self.errorExit('Cannot use -i with --spec-file being a file')
                 self.options.input_file_name = os.path.basename(opts.spec_file)
         if opts.verbose and opts.quiet:
-            print('Do not be an oxymoron with --verbose and --quiet')
-            sys.exit(1)
+            self.errorExit('Do not be an oxymoron with --verbose and --quiet')
         if opts.error and opts.allow_warnings:
-            print(f'ERROR: Cannot use --error and --allow-warnings together')
-            sys.exit(1)
+            self.errorExit(f'Cannot use --error and --allow-warnings together')
 
         # Setup absolute paths and output paths
         if opts.output_dir:
@@ -1260,8 +1313,7 @@ class TestHarness:
             opts.results_file = os.path.abspath(opts.results_file)
 
         if opts.failed_tests and not os.path.exists(opts.results_file):
-            print('ERROR: --failed-tests could not detect a previous run')
-            sys.exit(1)
+            self.errorExit('--failed-tests could not detect a previous run')
 
         # Update any keys from the environment as necessary
         if not self.options.method:
@@ -1273,10 +1325,6 @@ class TestHarness:
         if not self.options.valgrind_mode:
             self.options.valgrind_mode = ''
 
-        # Update libmesh_dir to reflect arguments
-        if opts.libmesh_dir:
-            self.libmesh_dir = opts.libmesh_dir
-
         # Set default
         if not self.options.input_file_name:
             self.options.input_file_name = 'tests'
@@ -1285,8 +1333,6 @@ class TestHarness:
             print('INFO: Setting --no-capabilities because there is not an application')
             self.options.no_capabilities = True
 
-    def postRun(self, specs, timing):
-        return
 
     def preRun(self):
         if self.options.json:
@@ -1304,16 +1350,20 @@ class TestHarness:
 
     # Helper tuple for storing information about a cluster
     HPCCluster = namedtuple('HPCCluster', ['scheduler', 'apptainer_modules'])
-    # The modules that we want to load when running in a non-moduled
-    # container on INL HPC
-    inl_modules = ['use.moose', 'moose-dev-container-openmpi/5.0.5_0']
     # Define INL HPC clusters
-    # Bitterroot and windriver share software
-    br_wr_config = HPCCluster(scheduler='slurm', apptainer_modules=inl_modules)
-    hpc_configs = {'sawtooth': HPCCluster(scheduler='pbs',
-                                          apptainer_modules=inl_modules),
-                   'bitterroot': br_wr_config,
-                   'windriver': br_wr_config}
+    sawtooth_config = HPCCluster(
+        scheduler='slurm',
+        apptainer_modules=['container-openmpi/5.0.8-gcc13.4.0-ucx1.19.0']
+    )
+    br_wr_config = HPCCluster(
+        scheduler='slurm',
+        apptainer_modules=['container-openmpi/5.0.5-gcc13.2.0']
+    )
+    hpc_configs = {
+        'sawtooth': sawtooth_config,
+        'bitterroot': br_wr_config,
+        'windriver': br_wr_config
+    }
 
     @staticmethod
     def queryHPCCluster(hostname: str):
@@ -1329,3 +1379,31 @@ class TestHarness:
             if host in hostname:
                 return config
         return None
+
+    @staticmethod
+    def buildRequiredCapabilities(registered: list[str],
+                                  required: list[str]) -> list[Tuple[str, bool]]:
+        """
+        Helper for setting up the required capabilities.
+        """
+        assert isinstance(registered, list)
+        assert isinstance(required, list)
+
+        result = []
+        for v in required:
+            assert isinstance(v, str)
+            v = v.strip()
+            is_false = v[0] == '!'
+            capability = v[1:] if is_false else v
+            if capability not in registered:
+                TestHarness.errorExit(f'Required capability "{capability}" is not registered')
+            result.append((capability, is_false))
+        return result
+
+    @staticmethod
+    def errorExit(*args):
+        """
+        Helper for printing an error and exiting
+        """
+        message = ' '.join([f'{v}' for v in args])
+        raise SystemExit(f'ERROR: {message}')

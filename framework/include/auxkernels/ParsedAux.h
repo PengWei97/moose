@@ -61,7 +61,7 @@ protected:
   /// coordinate and time variable names
   const std::vector<std::string> _xyzt;
 
-  /// function parser object for the resudual and on-diagonal Jacobian
+  /// function parser object to compute the local value of the aux-variable
   SymFunctionPtr _func_F;
 
   usingFunctionParserUtilsMembers(false);
@@ -77,6 +77,9 @@ protected:
 
   /// Vector of pointers to functors
   std::vector<const Moose::Functor<Real> *> _functors;
+
+  /// Whether to use qp-functor arguments
+  const bool _use_qp_functor_arguments;
 
   /// Vector of coupled variable names
   std::vector<std::string> _coupled_variable_names;

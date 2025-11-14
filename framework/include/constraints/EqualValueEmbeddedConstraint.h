@@ -33,13 +33,13 @@ public:
 
   virtual bool addCouplingEntriesToJacobian() override { return true; }
 
-  bool shouldApply() override;
+  bool shouldApply() override final;
 
   /**
    * Prepare the residual contribution of the current constraint required to enforce it
    * based on the specified formulation.
    */
-  void reinitConstraint();
+  virtual void reinitConstraint();
 
 protected:
   virtual void prepareSecondaryToPrimaryMap() override;

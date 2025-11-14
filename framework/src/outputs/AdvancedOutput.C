@@ -140,6 +140,7 @@ AdvancedOutput::AdvancedOutput(const InputParameters & parameters)
                                                            : false),
     _scalar_as_nodal(isParamValid("scalar_as_nodal") ? getParam<bool>("scalar_as_nodal") : false),
     _reporter_data(_problem_ptr->getReporterData()),
+    _last_execute_time(declareRecoverableData<std::map<std::string, Real>>("last_execute_time")),
     _postprocessors_as_reporters(getParam<bool>("postprocessors_as_reporters")),
     _vectorpostprocessors_as_reporters(getParam<bool>("vectorpostprocessors_as_reporters"))
 {
@@ -434,7 +435,7 @@ AdvancedOutput::initAvailableLists()
       {
         VariableName vname = var_name;
         if (var.isArray())
-          vname = SubProblem::arrayVariableComponent(var_name, i);
+          vname = var.arrayVariableComponent(i);
 
         // A note that if we have p-refinement we assume "worst-case" scenario that our constant
         // monomial/monomial-vec families have been refined and we can no longer write them as
@@ -526,7 +527,7 @@ AdvancedOutput::initShowHideLists(const std::vector<VariableName> & show,
       {
         VariableName vname = var_name;
         if (var.isArray())
-          vname = SubProblem::arrayVariableComponent(var_name, i);
+          vname = var.arrayVariableComponent(i);
 
         if (type.order == CONSTANT)
           _execute_data["elemental"].show.insert(vname);
@@ -580,7 +581,7 @@ AdvancedOutput::initShowHideLists(const std::vector<VariableName> & show,
       {
         VariableName vname = var_name;
         if (var.isArray())
-          vname = SubProblem::arrayVariableComponent(var_name, i);
+          vname = var.arrayVariableComponent(i);
 
         if (type.order == CONSTANT)
           _execute_data["elemental"].hide.insert(vname);
@@ -641,21 +642,31 @@ AdvancedOutput::initOutputList(OutputData & data)
   std::set<std::string> & avail = data.available;
   std::set<std::string> & output = data.output;
 
-  // Append to the hide list from OutputInterface objects
+  // Get the hide list from OutputInterface objects
+  std::set<std::string> interface_hide_all_types;
+  _app.getOutputWarehouse().buildInterfaceHideVariables(name(), interface_hide_all_types);
+
+  // OutputInterface hide list includes all types; only include those that are available
   std::set<std::string> interface_hide;
-  _app.getOutputWarehouse().buildInterfaceHideVariables(name(), interface_hide);
+  std::set_intersection(interface_hide_all_types.begin(),
+                        interface_hide_all_types.end(),
+                        avail.begin(),
+                        avail.end(),
+                        std::inserter(interface_hide, interface_hide.begin()));
+
+  // Append to the hide list from OutputInterface objects
   hide.insert(interface_hide.begin(), interface_hide.end());
 
   // Both show and hide are empty and no show/hide settings were provided (show all available)
-  if (show.empty() && hide.empty() && !_execute_data.hasShowList())
+  if (!_execute_data.hasShowList() && hide.empty())
     output = avail;
 
   // Only hide is empty (show all the variables listed)
-  else if (!show.empty() && hide.empty())
+  else if (_execute_data.hasShowList() && hide.empty())
     output = show;
 
   // Only show is empty (show all except those hidden)
-  else if (show.empty() && !hide.empty())
+  else if (!_execute_data.hasShowList() && !hide.empty())
     std::set_difference(avail.begin(),
                         avail.end(),
                         hide.begin(),
@@ -663,7 +674,7 @@ AdvancedOutput::initOutputList(OutputData & data)
                         std::inserter(output, output.begin()));
 
   // Both hide and show are present (show all those listed)
-  else
+  else // (_execute_data.hasShowList() && !hide.empty())
   {
     // Check if variables are in both, which is invalid
     std::vector<std::string> tmp;

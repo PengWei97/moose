@@ -1,4 +1,13 @@
-#ifdef MFEM_ENABLED
+//* This file is part of the MOOSE framework
+//* https://mooseframework.inl.gov
+//*
+//* All rights reserved, see COPYRIGHT for full restrictions
+//* https://github.com/idaholab/moose/blob/master/COPYRIGHT
+//*
+//* Licensed under LGPL 2.1, please see LICENSE for details
+//* https://www.gnu.org/licenses/lgpl-2.1.html
+
+#ifdef MOOSE_MFEM_ENABLED
 
 #pragma once
 #include <map>
@@ -106,7 +115,7 @@ public:
   // NOLINTNEXTLINE(readability-identifier-naming)
   [[nodiscard]] inline const_iterator end() const { return _field_map.end(); }
 
-  // Returns the number of elements in the map
+  /// Returns the number of elements in the map
   int size() { return _field_map.size(); }
 
 protected:
@@ -180,15 +189,74 @@ private:
   MapType _field_map{};
 };
 
-inline std::string
-GetTimeDerivativeName(std::string name)
+/// Lightweight adaptor over a std::map relating names of GridFunctions with the name of their time
+/// derivatives
+class TimeDerivativeMap
 {
-  return std::string("d") + name + std::string("_dt");
-}
+public:
+  using MapType = std::map<std::string, std::string>;
+  using const_iterator = typename MapType::const_iterator;
+
+  inline void addTimeDerivativeAssociation(const std::string & var_name,
+                                           const std::string & time_derivative_var_name)
+  {
+    _field_map.emplace(var_name, time_derivative_var_name);
+  }
+
+  inline bool isTimeDerivative(const std::string & time_derivative_var_name) const
+  {
+    for (auto const & [map_var_name, map_time_derivative_var_name] : _field_map)
+    {
+      if (map_time_derivative_var_name == time_derivative_var_name)
+        return true;
+    }
+    return false;
+  }
+
+  inline bool hasTimeDerivative(const std::string & var_name) const
+  {
+    return _field_map.count(var_name);
+  }
+
+  inline const std::string & getTimeDerivativeName(const std::string & var_name) const
+  {
+    auto it = _field_map.find(var_name);
+    if (it != _field_map.end())
+      return it->second;
+    else
+    {
+      mooseError("No variable representing the time derivative of ", var_name, " found.");
+      return null_str;
+    }
+  }
+
+  inline const std::string & getTimeIntegralName(const std::string & time_derivative_var_name) const
+  {
+    for (auto const & [map_var_name, map_time_derivative_var_name] : _field_map)
+    {
+      if (map_time_derivative_var_name == time_derivative_var_name)
+        return map_var_name;
+    }
+    mooseError(
+        "No variable representing the time integral of ", time_derivative_var_name, " found.");
+    return null_str;
+  }
+
+  inline static std::string createTimeDerivativeName(std::string_view name)
+  {
+    return std::string("d") + std::string(name) + std::string("_dt");
+  }
+
+private:
+  MapType _field_map;
+  const std::string null_str;
+};
 
 using FECollections = Moose::MFEM::NamedFieldsMap<mfem::FiniteElementCollection>;
 using FESpaces = Moose::MFEM::NamedFieldsMap<mfem::ParFiniteElementSpace>;
 using GridFunctions = Moose::MFEM::NamedFieldsMap<mfem::ParGridFunction>;
+using SubMeshes = Moose::MFEM::NamedFieldsMap<mfem::ParSubMesh>;
+
 } // namespace Moose::MFEM
 
 #endif

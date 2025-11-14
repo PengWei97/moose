@@ -184,6 +184,7 @@ public:
 
   virtual void copyOldSolutions();
   virtual void copyPreviousNonlinearSolutions();
+  virtual void copyPreviousFixedPointSolutions();
   virtual void restoreSolutions();
 
   /**
@@ -225,11 +226,19 @@ public:
       Moose::SolutionIterationType iteration_type = Moose::SolutionIterationType::Time) const;
 
   /**
+   * Returns the parallel type of the given solution state
+   */
+  libMesh::ParallelType
+  solutionStateParallelType(const unsigned int state,
+                            const Moose::SolutionIterationType iteration_type) const;
+
+  /**
    * Registers that the solution state \p state is needed.
    */
   virtual void needSolutionState(
       const unsigned int state,
-      Moose::SolutionIterationType iteration_type = Moose::SolutionIterationType::Time);
+      Moose::SolutionIterationType iteration_type = Moose::SolutionIterationType::Time,
+      libMesh::ParallelType parallel_type = GHOSTED);
 
   /**
    * Whether or not the system has the solution state (0 = current, 1 = old, 2 = older, etc).
@@ -364,14 +373,9 @@ public:
   virtual const libMesh::SparseMatrix<Number> & getMatrix(TagID tag) const;
 
   /**
-   *  Make all exsiting matrices ative
+   *  Make all existing matrices active
    */
-  virtual void activeAllMatrixTags();
-
-  /**
-   *  Active a matrix for tag
-   */
-  virtual void activeMatrixTag(TagID tag);
+  virtual void activateAllMatrixTags();
 
   /**
    *  If or not a matrix tag is active
@@ -379,14 +383,9 @@ public:
   virtual bool matrixTagActive(TagID tag) const;
 
   /**
-   *  deactive a matrix for tag
-   */
-  virtual void deactiveMatrixTag(TagID tag);
-
-  /**
    * Make matrices inactive
    */
-  virtual void deactiveAllMatrixTags();
+  virtual void deactivateAllMatrixTags();
 
   /**
    * Close all matrices associated the tags
@@ -962,9 +961,16 @@ public:
   const std::vector<std::shared_ptr<TimeIntegrator>> & getTimeIntegrators();
 
   /**
-   * @returns A prefix for solvers
+   * @returns The prefix used for this system for solver settings for PETSc. This prefix is used to
+   * prevent collision of solver settings for different systems. Note that this prefix does not have
+   * a leading dash so it's appropriate for passage straight to PETSc APIs
    */
   std::string prefix() const;
+
+  /**
+   * size the matrix data for each variable for the number of matrix tags we have
+   */
+  void sizeVariableMatrixData();
 
 protected:
   /**
@@ -1015,6 +1021,8 @@ protected:
   std::vector<NumericVector<Number> *> _tagged_vectors;
   /// Tagged matrices (pointer)
   std::vector<libMesh::SparseMatrix<Number> *> _tagged_matrices;
+  /// Active tagged matrices. A matrix is active if its tag-matrix pair is present in the map. We use a map instead of a vector so that users can easily add and remove to this container with calls to (de)activateMatrixTag
+  std::unordered_map<TagID, libMesh::SparseMatrix<Number> *> _active_tagged_matrices;
   /// Active flags for tagged matrices
   std::vector<bool> _matrix_tag_active_flags;
 
@@ -1071,8 +1079,9 @@ private:
   TagName oldSolutionStateVectorName(const unsigned int,
                                      Moose::SolutionIterationType iteration_type) const;
 
-  /// The solution states (0 = current, 1 = old, 2 = older, etc)
-  std::array<std::vector<NumericVector<Number> *>, 2> _solution_states;
+  /// 2D array of solution state vector pointers; first index corresponds to
+  /// SolutionIterationType, second index corresponds to state index (0=current, 1=old, 2=older)
+  std::array<std::vector<NumericVector<Number> *>, 3> _solution_states;
   /// The saved solution states (0 = current, 1 = old, 2 = older, etc)
   std::vector<NumericVector<Number> *> _saved_solution_states;
 };

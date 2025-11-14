@@ -4,7 +4,7 @@
 
 ## Overview
 
-<!-- -->
+!! Intentional comment to provide extra spacing
 
 This is the usual kernel that the user can use to define the mass-flow rate distribution at the inlet [!param](/AuxKernels/SCMMassFlowRateAux/boundary).
 In addition to the boundary, the user must define the [!param](/AuxKernels/SCMMassFlowRateAux/variable) (must be `mdot`) and a uniform [!param](/AuxKernels/SCMMassFlowRateAux/mass_flux),
@@ -13,7 +13,7 @@ The mass-flow rate for each subchannel is calculated as the product of the mass-
 
 ## Example Input File Syntax
 
-!listing /validation/psbt/psbt_ss/psbt.i block=AuxKernels language=cpp
+!listing /validation/psbt/psbt_ss/psbt.i block=AuxKernels language=moose
 
 !syntax parameters /AuxKernels/SCMMassFlowRateAux
 

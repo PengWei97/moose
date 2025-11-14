@@ -17,12 +17,14 @@
 #include "Problem.h"
 #include "ResetDisplacedMeshThread.h"
 #include "SubProblem.h"
-#include "UpdateDisplacedMeshThread.h"
+#include "AllNodesSendListThread.h"
 #include "Assembly.h"
 #include "DisplacedProblem.h"
 #include "libmesh/numeric_vector.h"
 #include "libmesh/fe_interface.h"
 #include "libmesh/mesh_base.h"
+#include "libmesh/transient_system.h"
+#include "libmesh/explicit_system.h"
 
 using namespace libMesh;
 
@@ -52,6 +54,9 @@ DisplacedProblem::DisplacedProblem(const InputParameters & parameters)
     _geometric_search_data(*this, _mesh)
 
 {
+  // Disable refinement/coarsening in EquationSystems::reinit because we already do this ourselves
+  _eq.disable_refine_in_reinit();
+
   // TODO: Move newAssemblyArray further up to SubProblem so that we can use it here
   unsigned int n_threads = libMesh::n_threads();
 
@@ -218,6 +223,13 @@ DisplacedProblem::restoreOldSolutions()
 }
 
 void
+DisplacedProblem::syncAuxSolution(const NumericVector<Number> & aux_soln)
+{
+  (*_displaced_aux->sys().solution) = aux_soln;
+  _displaced_aux->update();
+}
+
+void
 DisplacedProblem::syncSolutions()
 {
   TIME_SECTION("syncSolutions", 5, "Syncing Displaced Solutions");
@@ -232,7 +244,7 @@ DisplacedProblem::syncSolutions()
         *_mproblem.getNonlinearSystemBase(displaced_nl->number()).currentSolution();
     displaced_nl->update();
   }
-  (*_displaced_aux->sys().solution) = *_mproblem.getAuxiliarySystem().currentSolution();
+  syncAuxSolution(*_mproblem.getAuxiliarySystem().currentSolution());
 }
 
 void
@@ -247,7 +259,7 @@ DisplacedProblem::syncSolutions(
     (*_displaced_solver_systems[nl_sys_num]->sys().solution) = *nl_soln;
     _displaced_solver_systems[nl_sys_num]->update();
   }
-  (*_displaced_aux->sys().solution) = aux_soln;
+  syncAuxSolution(aux_soln);
 }
 
 void
@@ -311,6 +323,9 @@ DisplacedProblem::updateMesh(bool mesh_changing)
     _mproblem.setException(e.what());
   }
 
+  if (udmt.hasDisplacement())
+    _mproblem.meshDisplaced();
+
   // The below call will throw an exception on all processes if any of our processes had an
   // exception above. This exception will be caught higher up the call stack and the error message
   // will be printed there
@@ -354,6 +369,9 @@ DisplacedProblem::updateMesh(const std::map<unsigned int, const NumericVector<Nu
   {
     _mproblem.setException(e.what());
   }
+
+  if (udmt.hasDisplacement())
+    _mproblem.meshDisplaced();
 
   // The below call will throw an exception on all processes if any of our processes had an
   // exception above. This exception will be caught higher up the call stack and the error message
@@ -1095,12 +1113,23 @@ DisplacedProblem::updateGeomSearch(GeometricSearchData::GeometricSearchType type
 }
 
 void
-DisplacedProblem::meshChanged()
+DisplacedProblem::meshChanged(const bool contract_mesh, const bool clean_refinement_flags)
 {
-  // The mesh changed. The displaced equations system object only holds ExplicitSystems, so calling
+  // The mesh changed. The displaced equations system object only holds Systems, so calling
   // EquationSystems::reinit only prolongs/restricts the solution vectors, which is something that
   // needs to happen for every step of mesh adaptivity.
   _eq.reinit();
+  if (contract_mesh)
+    // Once vectors are restricted, we can delete children of coarsened elements
+    _mesh.getMesh().contract();
+  if (clean_refinement_flags)
+  {
+    // Finally clean refinement flags so that if someone tries to project vectors again without
+    // an intervening mesh refinement to clean flags they won't run into trouble
+    MeshRefinement refinement(_mesh.getMesh());
+    refinement.clean_refinement_flags();
+  }
+
   // Since the mesh has changed, we need to make sure that we update any of our
   // MOOSE-system specific data.
   for (auto & nl : _displaced_solver_systems)
@@ -1372,4 +1401,129 @@ unsigned int
 DisplacedProblem::solverSysNum(const SolverSystemName & sys_name) const
 {
   return _mproblem.solverSysNum(sys_name);
+}
+
+const libMesh::CouplingMatrix &
+DisplacedProblem::nonlocalCouplingMatrix(const unsigned i) const
+{
+  return _mproblem.nonlocalCouplingMatrix(i);
+}
+
+bool
+DisplacedProblem::checkNonlocalCouplingRequirement() const
+{
+  return _mproblem.checkNonlocalCouplingRequirement();
+}
+
+DisplacedProblem::UpdateDisplacedMeshThread::UpdateDisplacedMeshThread(
+    FEProblemBase & fe_problem, DisplacedProblem & displaced_problem)
+  : ThreadedNodeLoop<NodeRange, NodeRange::const_iterator>(fe_problem),
+    _displaced_problem(displaced_problem),
+    _ref_mesh(_displaced_problem.refMesh()),
+    _nl_soln(_displaced_problem._nl_solution),
+    _aux_soln(*_displaced_problem._aux_solution),
+    _has_displacement(false)
+{
+  this->init();
+}
+
+DisplacedProblem::UpdateDisplacedMeshThread::UpdateDisplacedMeshThread(
+    UpdateDisplacedMeshThread & x, Threads::split split)
+  : ThreadedNodeLoop<NodeRange, NodeRange::const_iterator>(x, split),
+    _displaced_problem(x._displaced_problem),
+    _ref_mesh(x._ref_mesh),
+    _nl_soln(x._nl_soln),
+    _aux_soln(x._aux_soln),
+    _sys_to_nonghost_and_ghost_soln(x._sys_to_nonghost_and_ghost_soln),
+    _sys_to_var_num_and_direction(x._sys_to_var_num_and_direction),
+    _has_displacement(x._has_displacement)
+{
+}
+
+void
+DisplacedProblem::UpdateDisplacedMeshThread::init()
+{
+  std::vector<std::string> & displacement_variables = _displaced_problem._displacements;
+  unsigned int num_displacements = displacement_variables.size();
+  auto & es = _displaced_problem.es();
+
+  _sys_to_var_num_and_direction.clear();
+  _sys_to_nonghost_and_ghost_soln.clear();
+
+  for (unsigned int i = 0; i < num_displacements; i++)
+  {
+    std::string displacement_name = displacement_variables[i];
+
+    for (const auto sys_num : make_range(es.n_systems()))
+    {
+      auto & sys = es.get_system(sys_num);
+      if (sys.has_variable(displacement_name))
+      {
+        auto & val = _sys_to_var_num_and_direction[sys.number()];
+        val.first.push_back(sys.variable_number(displacement_name));
+        val.second.push_back(i);
+        break;
+      }
+    }
+  }
+
+  for (const auto & pr : _sys_to_var_num_and_direction)
+  {
+    auto & sys = es.get_system(pr.first);
+    mooseAssert(sys.number() <= _nl_soln.size(),
+                "The system number should always be less than or equal to the number of nonlinear "
+                "systems. If it is equal, then this system is the auxiliary system");
+    const NumericVector<Number> * const nonghost_soln =
+        sys.number() < _nl_soln.size() ? _nl_soln[sys.number()] : &_aux_soln;
+    _sys_to_nonghost_and_ghost_soln.emplace(
+        sys.number(),
+        std::make_pair(nonghost_soln,
+                       NumericVector<Number>::build(nonghost_soln->comm()).release()));
+  }
+
+  ConstNodeRange node_range(_ref_mesh.getMesh().nodes_begin(), _ref_mesh.getMesh().nodes_end());
+
+  for (auto & [sys_num, var_num_and_direction] : _sys_to_var_num_and_direction)
+  {
+    auto & sys = es.get_system(sys_num);
+    AllNodesSendListThread send_list(
+        this->_fe_problem, _ref_mesh, var_num_and_direction.first, sys);
+    Threads::parallel_reduce(node_range, send_list);
+    send_list.unique();
+    auto & [soln, ghost_soln] = libmesh_map_find(_sys_to_nonghost_and_ghost_soln, sys_num);
+    ghost_soln->init(
+        soln->size(), soln->local_size(), send_list.send_list(), true, libMesh::GHOSTED);
+    soln->localize(*ghost_soln, send_list.send_list());
+  }
+
+  _has_displacement = false;
+}
+
+void
+DisplacedProblem::UpdateDisplacedMeshThread::onNode(NodeRange::const_iterator & nd)
+{
+  Node & displaced_node = *(*nd);
+
+  Node & reference_node = _ref_mesh.nodeRef(displaced_node.id());
+
+  for (auto & [sys_num, var_num_and_direction] : _sys_to_var_num_and_direction)
+  {
+    auto & var_numbers = var_num_and_direction.first;
+    auto & directions = var_num_and_direction.second;
+    for (const auto i : index_range(var_numbers))
+    {
+      const auto direction = directions[i];
+      if (reference_node.n_dofs(sys_num, var_numbers[i]) > 0)
+      {
+        Real coord = reference_node(direction) +
+                     (*libmesh_map_find(_sys_to_nonghost_and_ghost_soln, sys_num).second)(
+                         reference_node.dof_number(sys_num, var_numbers[i], 0));
+        if (displaced_node(direction) != coord)
+        {
+          displaced_node(direction) = coord;
+          _has_displacement = true;
+        }
+      }
+    }
+  }
 }

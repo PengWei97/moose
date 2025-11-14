@@ -131,11 +131,8 @@ ComputeUserObjectsThread::onElement(const Elem * elem)
 
     // update the aux solution vector if writable coupled variables are used
     if (uo->hasWritableCoupledVariables())
-    {
-      Threads::spin_mutex::scoped_lock lock(Threads::spin_mtx);
       for (auto * var : uo->getWritableCoupledVariables())
         var->insert(_aux_sys.solution());
-    }
   }
 
   for (auto & uo : _domain_objs)
@@ -181,7 +178,7 @@ ComputeUserObjectsThread::onBoundary(const Elem * elem,
   // Set up Sentinel class so that, even if reinitMaterialsFace() throws, we
   // still remember to swap back during stack unwinding.
   SwapBackSentinel sentinel(_fe_problem, &FEProblem::swapBackMaterialsFace, _tid);
-  _fe_problem.reinitMaterialsFace(_subdomain, _tid);
+  _fe_problem.reinitMaterialsFaceOnBoundary(bnd_id, elem->subdomain_id(), _tid);
   _fe_problem.reinitMaterialsBoundary(bnd_id, _tid);
 
   for (const auto & uo : userobjs)
@@ -294,7 +291,7 @@ ComputeUserObjectsThread::onInterface(const Elem * elem, unsigned int side, Boun
   // still remember to swap back during stack unwinding.
 
   SwapBackSentinel face_sentinel(_fe_problem, &FEProblem::swapBackMaterialsFace, _tid);
-  _fe_problem.reinitMaterialsFace(elem->subdomain_id(), _tid);
+  _fe_problem.reinitMaterialsFaceOnBoundary(bnd_id, elem->subdomain_id(), _tid);
   _fe_problem.reinitMaterialsBoundary(bnd_id, _tid);
 
   SwapBackSentinel neighbor_sentinel(_fe_problem, &FEProblem::swapBackMaterialsNeighbor, _tid);

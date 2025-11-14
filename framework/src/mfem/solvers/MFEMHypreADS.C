@@ -1,4 +1,13 @@
-#ifdef MFEM_ENABLED
+//* This file is part of the MOOSE framework
+//* https://mooseframework.inl.gov
+//*
+//* All rights reserved, see COPYRIGHT for full restrictions
+//* https://github.com/idaholab/moose/blob/master/COPYRIGHT
+//*
+//* Licensed under LGPL 2.1, please see LICENSE for details
+//* https://www.gnu.org/licenses/lgpl-2.1.html
+
+#ifdef MOOSE_MFEM_ENABLED
 
 #include "MFEMHypreADS.h"
 
@@ -25,10 +34,10 @@ MFEMHypreADS::MFEMHypreADS(const InputParameters & parameters)
 void
 MFEMHypreADS::constructSolver(const InputParameters &)
 {
-  auto solver = std::make_shared<mfem::HypreADS>(_mfem_fespace.getFESpace().get());
+  auto solver = std::make_unique<mfem::HypreADS>(_mfem_fespace.getFESpace().get());
   solver->SetPrintLevel(getParam<int>("print_level"));
 
-  _solver = solver;
+  _solver = std::move(solver);
 }
 
 void
@@ -36,6 +45,7 @@ MFEMHypreADS::updateSolver(mfem::ParBilinearForm & a, mfem::Array<int> & tdofs)
 {
   if (_lor)
   {
+    checkSpectralEquivalence(a);
     if (_mfem_fespace.getFESpace()->GetMesh()->GetElement(0)->GetGeometryType() !=
         mfem::Geometry::Type::CUBE)
       mooseError("LOR HypreADS Solver only supports hex meshes.");

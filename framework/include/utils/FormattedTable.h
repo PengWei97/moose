@@ -167,13 +167,13 @@ public:
   /**
    * Retrieve the last time (or independent variable) value.
    */
-  Real getLastTime();
+  Real getLastTime() const;
 
   /**
    * Retrieve Data for last value of given name
    */
   template <typename T = Real>
-  T & getLastData(const std::string & name);
+  T & getLastData(const std::string & name) const;
 
   void clear();
 
@@ -279,8 +279,13 @@ private:
   void printRow(std::pair<Real, std::map<std::string, std::shared_ptr<TableValueBase>>> & row_data,
                 bool align);
 
-  /// Fill any values that are not defined (usually when there are mismatched column lengths)
-  void fillEmptyValues();
+  /**
+   *  Fill any values that are not defined (usually when there are mismatched column lengths)
+   *
+   *  If \p last_n_entries is non-zero, only values in that many final
+   *  rows will be examined and filled.
+   */
+  void fillEmptyValues(unsigned int last_n_entries = 0);
 
   /// The optional output file stream
   std::string _output_file_name;
@@ -394,7 +399,7 @@ FormattedTable::addData(const std::string & name, const std::vector<T> & vector)
 
 template <typename T>
 T &
-FormattedTable::getLastData(const std::string & name)
+FormattedTable::getLastData(const std::string & name) const
 {
   mooseAssert(!empty(), "No Data stored in the FormattedTable");
 

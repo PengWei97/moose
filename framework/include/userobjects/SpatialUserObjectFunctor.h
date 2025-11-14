@@ -20,7 +20,7 @@ template <typename UserObjectType>
 class SpatialUserObjectFunctor : public UserObjectType, public Moose::FunctorBase<Real>
 {
 public:
-  static InputParameters validParams() { return UserObjectType::validParams(); }
+  static InputParameters validParams();
 
   SpatialUserObjectFunctor(const InputParameters & params);
   virtual bool hasBlocks(SubdomainID sub) const override;
@@ -33,9 +33,9 @@ protected:
   using ElemPointArg = Moose::ElemPointArg;
   using NodeArg = Moose::NodeArg;
 
-  virtual Real evaluate(const ElemArg & elem, const Moose::StateArg & state) const override final;
+  virtual Real evaluate(const ElemArg & elem, const Moose::StateArg & state) const override;
   virtual Real evaluate(const FaceArg & face, const Moose::StateArg & state) const override final;
-  virtual Real evaluate(const ElemQpArg & qp, const Moose::StateArg & state) const override final;
+  virtual Real evaluate(const ElemQpArg & qp, const Moose::StateArg & state) const override;
   virtual Real evaluate(const ElemSideQpArg & elem_side_qp,
                         const Moose::StateArg & state) const override final;
   virtual Real evaluate(const ElemPointArg & elem_point,
@@ -52,6 +52,17 @@ private:
   template <typename SpatialArg>
   Real evaluateTemplate(const SpatialArg & position, const Moose::StateArg & state) const;
 };
+
+template <typename UserObjectType>
+InputParameters
+SpatialUserObjectFunctor<UserObjectType>::validParams()
+{
+  auto params = UserObjectType::validParams();
+  // Spatial UOs are used in the transfers
+  ExecFlagEnum & exec_enum = params.template set<ExecFlagEnum>("execute_on", true);
+  exec_enum.addAvailableFlags(EXEC_TRANSFER);
+  return params;
+}
 
 template <typename UserObjectType>
 SpatialUserObjectFunctor<UserObjectType>::SpatialUserObjectFunctor(const InputParameters & params)

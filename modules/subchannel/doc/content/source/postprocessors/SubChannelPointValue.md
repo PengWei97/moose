@@ -4,14 +4,14 @@
 
 ## Overview
 
-<!-- -->
+!! Intentional comment to provide extra spacing
 
 The user needs to specify the [!param](/Postprocessors/SubChannelPointValue/variable) whose value they want to see, the [!param](/Postprocessors/SubChannelPointValue/index) of the subchannel and the
 [!param](/Postprocessors/SubChannelPointValue/height). The postprocessor will interpolate and print the value of that subchannel variable at that location.
 
 ## Example Input File Syntax
 
-!listing /test/tests/problems/SFR/THORS/FFM-5B.i block=Postprocessors language=cpp
+!listing /test/tests/problems/psbt/psbt_explicit.i block=Postprocessors language=moose
 
 !syntax parameters /Postprocessors/SubChannelPointValue
 

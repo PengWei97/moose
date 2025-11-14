@@ -61,13 +61,10 @@ DGKernelBase::validParams()
   params.addParam<std::vector<BoundaryName>>(
       "exclude_boundary", "The internal side sets to be excluded from this kernel.");
   params.registerBase("DGKernel");
+  params.registerSystemAttributeName("DGKernel");
 
   return params;
 }
-
-// Static mutex definitions
-Threads::spin_mutex DGKernelBase::_resid_vars_mutex;
-Threads::spin_mutex DGKernelBase::_jacoby_vars_mutex;
 
 DGKernelBase::DGKernelBase(const InputParameters & parameters)
   : NeighborResidualObject(parameters),

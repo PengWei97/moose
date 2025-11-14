@@ -34,6 +34,9 @@ public:
   /// Number of equations for the junction
   static const unsigned int N_EQ;
 
+  UserObjectName getVolumeJunctionUserObjectName() const { return _junction_uo_name; }
+  UserObjectName getNumericalFluxName(unsigned int i) const { return _numerical_flux_names[i]; }
+
 protected:
   virtual void setupMesh() override;
   virtual void check() const override;
@@ -66,6 +69,14 @@ protected:
    * @param[in] value  IC value
    */
   void addJunctionIC(const VariableName & var, Real value);
+
+  /**
+   * Adds a VolumeJunctionIC to the problem
+   *
+   * @param[in] var  Variable name
+   * @param[in] quantity  Quantity to compute
+   */
+  void addVolumeJunctionIC(const VariableName & var, const std::string & quantity);
 
   /// Volume of the junction
   const Real _volume;

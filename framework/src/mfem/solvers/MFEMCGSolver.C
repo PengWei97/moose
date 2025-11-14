@@ -1,4 +1,13 @@
-#ifdef MFEM_ENABLED
+//* This file is part of the MOOSE framework
+//* https://mooseframework.inl.gov
+//*
+//* All rights reserved, see COPYRIGHT for full restrictions
+//* https://github.com/idaholab/moose/blob/master/COPYRIGHT
+//*
+//* Licensed under LGPL 2.1, please see LICENSE for details
+//* https://www.gnu.org/licenses/lgpl-2.1.html
+
+#ifdef MOOSE_MFEM_ENABLED
 
 #include "MFEMCGSolver.h"
 #include "MFEMProblem.h"
@@ -21,11 +30,7 @@ MFEMCGSolver::validParams()
   return params;
 }
 
-MFEMCGSolver::MFEMCGSolver(const InputParameters & parameters)
-  : MFEMSolverBase(parameters),
-    _preconditioner(isParamSetByUser("preconditioner")
-                        ? getMFEMProblem().getProblemData().jacobian_preconditioner
-                        : nullptr)
+MFEMCGSolver::MFEMCGSolver(const InputParameters & parameters) : MFEMSolverBase(parameters)
 {
   constructSolver(parameters);
 }
@@ -33,35 +38,29 @@ MFEMCGSolver::MFEMCGSolver(const InputParameters & parameters)
 void
 MFEMCGSolver::constructSolver(const InputParameters &)
 {
-  auto solver =
-      std::make_shared<mfem::CGSolver>(getMFEMProblem().mesh().getMFEMParMesh().GetComm());
+  auto solver = std::make_unique<mfem::CGSolver>(getMFEMProblem().getComm());
   solver->SetRelTol(getParam<mfem::real_t>("l_tol"));
   solver->SetAbsTol(getParam<mfem::real_t>("l_abs_tol"));
   solver->SetMaxIter(getParam<int>("l_max_its"));
   solver->SetPrintLevel(getParam<int>("print_level"));
-
-  if (_preconditioner)
-    solver->SetPreconditioner(*_preconditioner->getSolver());
-
-  _solver = solver;
+  setPreconditioner(*solver);
+  _solver = std::move(solver);
 }
 
 void
 MFEMCGSolver::updateSolver(mfem::ParBilinearForm & a, mfem::Array<int> & tdofs)
 {
-
   if (_lor && _preconditioner)
     mooseError("LOR solver cannot take a preconditioner");
 
   if (_preconditioner)
   {
     _preconditioner->updateSolver(a, tdofs);
-    auto solver = std::dynamic_pointer_cast<mfem::CGSolver>(_solver);
-    solver->SetPreconditioner(*_preconditioner->getSolver());
-    _solver = solver;
+    setPreconditioner(static_cast<mfem::CGSolver &>(*_solver));
   }
   else if (_lor)
   {
+    checkSpectralEquivalence(a);
     auto lor_solver = new mfem::LORSolver<mfem::CGSolver>(a, tdofs);
     lor_solver->GetSolver().SetRelTol(getParam<mfem::real_t>("l_tol"));
     lor_solver->GetSolver().SetAbsTol(getParam<mfem::real_t>("l_abs_tol"));

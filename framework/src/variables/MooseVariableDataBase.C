@@ -67,14 +67,6 @@ MooseVariableDataBase<OutputType>::MooseVariableDataBase(const MooseVariableFiel
   _vector_tag_grad.reserve(max_future_num_vector_tags);
   _vector_tag_grad.resize(num_vector_tags);
 
-  auto num_matrix_tags = _subproblem.numMatrixTags();
-
-  _matrix_tags_dof_u.resize(num_matrix_tags);
-  _need_matrix_tag_dof_u.resize(num_matrix_tags, false);
-
-  _need_matrix_tag_u.resize(num_matrix_tags, false);
-  _matrix_tag_u.resize(num_matrix_tags);
-
   // Always fetch the dof values for the solution tag
   const auto soln_tag = _subproblem.getVectorTagID(Moose::SOLUTION_TAG);
   _need_vector_tag_dof_u[soln_tag] = true;
@@ -89,7 +81,20 @@ MooseVariableDataBase<OutputType>::MooseVariableDataBase(const MooseVariableFiel
 }
 
 template <typename OutputType>
-const typename MooseVariableDataBase<OutputType>::DoFValue &
+void
+MooseVariableDataBase<OutputType>::sizeMatrixTagData()
+{
+  auto num_matrix_tags = _subproblem.numMatrixTags();
+
+  _matrix_tags_dof_u.resize(num_matrix_tags);
+  _need_matrix_tag_dof_u.resize(num_matrix_tags, false);
+
+  _need_matrix_tag_u.resize(num_matrix_tags, false);
+  _matrix_tag_u.resize(num_matrix_tags);
+}
+
+template <typename OutputType>
+const typename MooseVariableDataBase<OutputType>::DofValues &
 MooseVariableDataBase<OutputType>::nodalVectorTagValue(TagID tag) const
 {
   if (isNodal())
@@ -112,7 +117,7 @@ MooseVariableDataBase<OutputType>::nodalVectorTagValue(TagID tag) const
 }
 
 template <typename OutputType>
-const typename MooseVariableDataBase<OutputType>::DoFValue &
+const typename MooseVariableDataBase<OutputType>::DofValues &
 MooseVariableDataBase<OutputType>::nodalMatrixTagValue(TagID tag) const
 {
   if (isNodal())
@@ -185,7 +190,7 @@ MooseVariableDataBase<OutputType>::vectorTagValue(TagID tag) const
 }
 
 template <typename OutputType>
-const typename MooseVariableDataBase<OutputType>::DoFValue &
+const typename MooseVariableDataBase<OutputType>::DofValues &
 MooseVariableDataBase<OutputType>::vectorTagDofValue(TagID tag) const
 {
   if (tag >= _need_vector_tag_dof_u.size())
@@ -319,38 +324,38 @@ MooseVariableDataBase<OutputType>::gradSln(Moose::SolutionState state) const
 }
 
 template <typename OutputType>
-const typename MooseVariableDataBase<OutputType>::DoFValue &
+const typename MooseVariableDataBase<OutputType>::DofValues &
 MooseVariableDataBase<OutputType>::vectorTagDofValue(Moose::SolutionState state) const
 {
-  auto functor = [this](TagID tag_id) -> const DoFValue & { return vectorTagDofValue(tag_id); };
+  auto functor = [this](TagID tag_id) -> const DofValues & { return vectorTagDofValue(tag_id); };
 
-  return const_cast<MooseVariableDataBase<OutputType> *>(this)->stateToTagHelper<DoFValue>(state,
-                                                                                           functor);
+  return const_cast<MooseVariableDataBase<OutputType> *>(this)->stateToTagHelper<DofValues>(
+      state, functor);
 }
 
 template <typename OutputType>
-const typename MooseVariableDataBase<OutputType>::DoFValue &
+const typename MooseVariableDataBase<OutputType>::DofValues &
 MooseVariableDataBase<OutputType>::dofValues() const
 {
   return vectorTagDofValue(Moose::Current);
 }
 
 template <typename OutputType>
-const typename MooseVariableDataBase<OutputType>::DoFValue &
+const typename MooseVariableDataBase<OutputType>::DofValues &
 MooseVariableDataBase<OutputType>::dofValuesOld() const
 {
   return vectorTagDofValue(Moose::Old);
 }
 
 template <typename OutputType>
-const typename MooseVariableDataBase<OutputType>::DoFValue &
+const typename MooseVariableDataBase<OutputType>::DofValues &
 MooseVariableDataBase<OutputType>::dofValuesOlder() const
 {
   return vectorTagDofValue(Moose::Older);
 }
 
 template <typename OutputType>
-const typename MooseVariableDataBase<OutputType>::DoFValue &
+const typename MooseVariableDataBase<OutputType>::DofValues &
 MooseVariableDataBase<OutputType>::dofValuesPreviousNL() const
 {
   return vectorTagDofValue(Moose::PreviousNL);
@@ -391,7 +396,7 @@ MooseVariableDataBase<OutputType>::insert(NumericVector<Number> & residual)
 {
   if (_has_dof_values)
   {
-    auto & dof_values = _vector_tags_dof_u[_solution_tag];
+    const auto & dof_values = _vector_tags_dof_u[_solution_tag];
     mooseAssert(dof_values.size() == _dof_indices.size(),
                 "Degree of freedom values size and degree of freedom indices sizes must match.");
     residual.insert(&dof_values[0], _dof_indices);
@@ -404,22 +409,15 @@ MooseVariableDataBase<RealEigenVector>::insert(NumericVector<Number> & residual)
 {
   if (_has_dof_values)
   {
-    auto & dof_values = _vector_tags_dof_u[_solution_tag];
-    if (isNodal())
+    const auto & dof_values = _vector_tags_dof_u[_solution_tag];
+    mooseAssert(_dof_indices.size() % _count == 0,
+                "Dof indices should be cleanly divisible by the variable count");
+    const auto n_shapes = _dof_indices.size() / _count;
+    for (const auto indx : index_range(_dof_indices))
     {
-      for (unsigned int i = 0; i < _dof_indices.size(); ++i)
-        for (unsigned int j = 0; j < _count; ++j)
-          residual.set(_dof_indices[i] + j, dof_values[i](j));
-    }
-    else
-    {
-      unsigned int n = 0;
-      for (unsigned int j = 0; j < _count; ++j)
-      {
-        for (unsigned int i = 0; i < _dof_indices.size(); ++i)
-          residual.set(_dof_indices[i] + n, dof_values[i](j));
-        n += _dof_indices.size();
-      }
+      const auto i = indx % n_shapes;
+      const auto j = indx / n_shapes;
+      residual.set(_dof_indices[indx], dof_values[i](j));
     }
   }
 }
@@ -430,7 +428,7 @@ MooseVariableDataBase<OutputType>::add(NumericVector<Number> & residual)
 {
   if (_has_dof_values)
   {
-    auto & dof_values = _vector_tags_dof_u[_solution_tag];
+    const auto & dof_values = _vector_tags_dof_u[_solution_tag];
     residual.add_vector(&dof_values[0], _dof_indices);
   }
 }
@@ -441,22 +439,15 @@ MooseVariableDataBase<RealEigenVector>::add(NumericVector<Number> & residual)
 {
   if (_has_dof_values)
   {
-    auto & dof_values = _vector_tags_dof_u[_solution_tag];
-    if (isNodal())
+    const auto & dof_values = _vector_tags_dof_u[_solution_tag];
+    mooseAssert(_dof_indices.size() % _count == 0,
+                "Dof indices should be cleanly divisible by the variable count");
+    const auto n_shapes = _dof_indices.size() / _count;
+    for (const auto indx : index_range(_dof_indices))
     {
-      for (unsigned int i = 0; i < _dof_indices.size(); ++i)
-        for (unsigned int j = 0; j < _count; ++j)
-          residual.add(_dof_indices[i] + j, dof_values[i](j));
-    }
-    else
-    {
-      unsigned int n = 0;
-      for (unsigned int j = 0; j < _count; ++j)
-      {
-        for (unsigned int i = 0; i < _dof_indices.size(); ++i)
-          residual.add(_dof_indices[i] + n, dof_values[i](j));
-        n += _dof_indices.size();
-      }
+      const auto i = indx % n_shapes;
+      const auto j = indx / n_shapes;
+      residual.add(_dof_indices[indx], dof_values[i](j));
     }
   }
 }
@@ -526,7 +517,7 @@ MooseVariableDataBase<OutputType>::nodalValueArray(Moose::SolutionState state) c
 
 template <typename OutputType>
 void
-MooseVariableDataBase<OutputType>::fetchDoFValues()
+MooseVariableDataBase<OutputType>::fetchDofValues()
 {
   bool is_transient = _subproblem.isTransient();
 
@@ -566,32 +557,35 @@ MooseVariableDataBase<OutputType>::fetchDoFValues()
       if ((_subproblem.vectorTagType(tag) == Moose::VECTOR_TAG_RESIDUAL &&
            _subproblem.safeAccessTaggedVectors()) ||
           _subproblem.vectorTagType(tag) == Moose::VECTOR_TAG_SOLUTION)
+      {
         // tag is defined on problem but may not be used by a system
         // the grain tracker requires being able to read from solution vectors that we are also in
         // the process of writing :-/
+        // Note: the extra vector tags are also still not closed when a TagVectorAux uses them
         if (_sys.hasVector(tag) /* && _sys.getVector(tag).closed()*/)
         {
           auto & vec = _sys.getVector(tag);
           _vector_tags_dof_u[tag].resize(n);
           vec.get(_dof_indices, &_vector_tags_dof_u[tag][0]);
         }
+      }
 
   if (_subproblem.safeAccessTaggedMatrices())
   {
     auto & active_coupleable_matrix_tags =
         _subproblem.getActiveFEVariableCoupleableMatrixTags(_tid);
+
     for (auto tag : active_coupleable_matrix_tags)
     {
       _matrix_tags_dof_u[tag].resize(n);
       if (_need_matrix_tag_dof_u[tag] || _need_matrix_tag_u[tag])
-        if (_sys.hasMatrix(tag) && _sys.matrixTagActive(tag) && _sys.getMatrix(tag).closed())
+        if (_sys.hasMatrix(tag) && _sys.matrixTagActive(tag))
         {
+          mooseAssert(_sys.getMatrix(tag).closed(),
+                      "Matrix with tag '" + std::to_string(tag) + "' should be closed");
           auto & mat = _sys.getMatrix(tag);
           for (unsigned i = 0; i < n; i++)
-          {
-            Threads::spin_mutex::scoped_lock lock(Threads::spin_mtx);
             _matrix_tags_dof_u[tag][i] = mat(_dof_indices[i], _dof_indices[i]);
-          }
         }
     }
   }
@@ -612,43 +606,26 @@ MooseVariableDataBase<OutputType>::fetchDoFValues()
 
 template <typename OutputType>
 void
-MooseVariableDataBase<OutputType>::getArrayDoFValues(const NumericVector<Number> & sol,
-                                                     unsigned int n,
+MooseVariableDataBase<OutputType>::getArrayDofValues(const NumericVector<Number> & sol,
+                                                     const unsigned int nshapes,
                                                      MooseArray<RealEigenVector> & dof_values) const
 {
-  dof_values.resize(n);
-  if (isNodal())
+  dof_values.resize(nshapes);
+  for (const auto i : make_range(nshapes))
   {
-    for (unsigned int i = 0; i < n; ++i)
-    {
-      dof_values[i].resize(_count);
-      auto dof = _dof_indices[i];
-      for (unsigned int j = 0; j < _count; ++j)
-        dof_values[i](j) = sol(dof++);
-    }
-  }
-  else
-  {
-    for (unsigned int i = 0; i < n; ++i)
-    {
-      dof_values[i].resize(_count);
-      auto dof = _dof_indices[i];
-      for (unsigned int j = 0; j < _count; ++j)
-      {
-        dof_values[i](j) = sol(dof);
-        dof += n;
-      }
-    }
+    dof_values[i].resize(_count);
+    for (const auto j : make_range(_count))
+      dof_values[i](j) = sol(_dof_indices[j * nshapes + i]);
   }
 }
 
 template <>
 void
-MooseVariableDataBase<RealEigenVector>::fetchDoFValues()
+MooseVariableDataBase<RealEigenVector>::fetchDofValues()
 {
   bool is_transient = _subproblem.isTransient();
 
-  auto n = _dof_indices.size();
+  auto n = _dof_indices.size() / _count;
   libmesh_assert(n);
 
   if (is_transient)
@@ -656,22 +633,22 @@ MooseVariableDataBase<RealEigenVector>::fetchDoFValues()
     if (_need_u_dot || _need_grad_dot || _need_dof_values_dot)
     {
       libmesh_assert(_sys.solutionUDot());
-      getArrayDoFValues(*_sys.solutionUDot(), n, _dof_values_dot);
+      getArrayDofValues(*_sys.solutionUDot(), n, _dof_values_dot);
     }
     if (_need_u_dotdot || _need_grad_dotdot || _need_dof_values_dotdot)
     {
       libmesh_assert(_sys.solutionUDotDot());
-      getArrayDoFValues(*_sys.solutionUDot(), n, _dof_values_dotdot);
+      getArrayDofValues(*_sys.solutionUDot(), n, _dof_values_dotdot);
     }
     if (_need_u_dot_old || _need_dof_values_dot_old)
     {
       libmesh_assert(_sys.solutionUDotOld());
-      getArrayDoFValues(*_sys.solutionUDotOld(), n, _dof_values_dot_old);
+      getArrayDofValues(*_sys.solutionUDotOld(), n, _dof_values_dot_old);
     }
     if (_need_u_dotdot_old || _need_dof_values_dotdot_old)
     {
       libmesh_assert(_sys.solutionUDotDotOld());
-      getArrayDoFValues(*_sys.solutionUDotDotOld(), n, _dof_values_dotdot_old);
+      getArrayDofValues(*_sys.solutionUDotDotOld(), n, _dof_values_dotdot_old);
     }
   }
 
@@ -680,8 +657,12 @@ MooseVariableDataBase<RealEigenVector>::fetchDoFValues()
          _subproblem.safeAccessTaggedVectors()) ||
         _subproblem.vectorTagType(tag) == Moose::VECTOR_TAG_SOLUTION)
       // tag is defined on problem but may not be used by a system
-      if (_sys.hasVector(tag) && _sys.getVector(tag).closed())
-        getArrayDoFValues(_sys.getVector(tag), n, _vector_tags_dof_u[tag]);
+      if (_sys.hasVector(tag))
+      {
+        mooseAssert(_sys.getVector(tag).closed(),
+                    "Vector with tag '" + std::to_string(tag) + "' should be closed");
+        getArrayDofValues(_sys.getVector(tag), n, _vector_tags_dof_u[tag]);
+      }
 
   if (_subproblem.safeAccessTaggedMatrices())
   {
@@ -691,15 +672,14 @@ MooseVariableDataBase<RealEigenVector>::fetchDoFValues()
     {
       _matrix_tags_dof_u[tag].resize(n);
       if (_need_matrix_tag_dof_u[tag] || _need_matrix_tag_u[tag])
-        if (_sys.hasMatrix(tag) && _sys.matrixTagActive(tag) && _sys.getMatrix(tag).closed())
+        if (_sys.hasMatrix(tag) && _sys.matrixTagActive(tag))
         {
+          mooseAssert(_sys.getMatrix(tag).closed(),
+                      "Matrix with tag '" + std::to_string(tag) + "' should be closed");
           auto & mat = _sys.getMatrix(tag);
           for (unsigned i = 0; i < n; i++)
-          {
-            Threads::spin_mutex::scoped_lock lock(Threads::spin_mtx);
             for (unsigned j = 0; j < _count; j++)
               _matrix_tags_dof_u[tag][i](j) = mat(_dof_indices[i] + j, _dof_indices[i] + j);
-          }
         }
     }
   }
@@ -743,7 +723,6 @@ void
 MooseVariableDataBase<OutputType>::assignNodalValue()
 {
   bool is_transient = _subproblem.isTransient();
-
   libmesh_assert(_dof_indices.size());
 
   auto & dof_values = _vector_tags_dof_u[_solution_tag];

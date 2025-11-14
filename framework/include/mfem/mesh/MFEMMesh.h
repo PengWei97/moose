@@ -1,5 +1,3 @@
-#ifdef MFEM_ENABLED
-
 //* This file is part of the MOOSE framework
 //* https://mooseframework.inl.gov
 //*
@@ -9,16 +7,15 @@
 //* Licensed under LGPL 2.1, please see LICENSE for details
 //* https://www.gnu.org/licenses/lgpl-2.1.html
 
+#ifdef MOOSE_MFEM_ENABLED
+
 #pragma once
 #include "FileMesh.h"
-#include "libmesh/face_quad4.h"
 #include "libmesh/ignore_warnings.h"
 #include <mfem.hpp>
 #include "libmesh/restore_warnings.h"
 
 /**
- * MFEMMesh
- *
  * MFEMMesh inherits a MOOSE mesh class which allows us to work with
  * other MOOSE objects. It contains a pointer to the parallel MFEM mesh.
  */
@@ -72,6 +69,13 @@ public:
    * Does not update FE spaces for variables.
    */
   void displace(mfem::GridFunction const & displacement);
+
+  bool isDistributedMesh() const override { return true; }
+  unsigned int dimension() const override { return _mfem_par_mesh->Dimension(); }
+  unsigned int spatialDimension() const override { return _mfem_par_mesh->SpaceDimension(); }
+  SubdomainID nSubdomains() const override { return _mfem_par_mesh->attributes.Size(); }
+  dof_id_type nActiveElem() const override { return _mfem_par_mesh->GetGlobalNE(); }
+  dof_id_type nActiveLocalElem() const override { return _mfem_par_mesh->GetNE(); }
 
 private:
   /**

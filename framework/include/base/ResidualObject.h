@@ -55,6 +55,13 @@ public:
    */
   ResidualObject(const InputParameters & parameters, bool nodal = false);
 
+#ifdef MOOSE_KOKKOS_ENABLED
+  /**
+   * Special constructor used for Kokkos functor copy during parallel dispatch
+   */
+  ResidualObject(const ResidualObject & object, const Moose::Kokkos::FunctorCopy & key);
+#endif
+
   /// Compute this object's contribution to the residual
   virtual void computeResidual() = 0;
 
@@ -106,6 +113,12 @@ public:
    * @param var_num The variable number whose shape functions should be prepared
    */
   virtual void prepareShapes(unsigned int var_num);
+
+  /**
+   * @returns Additional variables covered by this residual object in addition to \p variable(). A
+   * covered variable here means a variable for whom this object computes residuals/Jacobians
+   */
+  virtual std::set<std::string> additionalROVariables() { return {}; }
 
 protected:
   virtual void precalculateResidual() {}

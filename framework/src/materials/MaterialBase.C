@@ -26,6 +26,7 @@ MaterialBase::validParams()
   params += BoundaryRestrictable::validParams();
   params += TransientInterface::validParams();
   params += RandomInterface::validParams();
+  params += GeometricSearchInterface::validParams();
   params += ADFunctorInterface::validParams();
 
   params.addParam<bool>("use_displaced_mesh",
@@ -99,7 +100,6 @@ MaterialBase::MaterialBase(const InputParameters & parameters)
     ElementIDInterface(this),
     GeometricSearchInterface(this),
     ADFunctorInterface(this),
-    SolutionInvalidInterface(this),
     _subproblem(*getCheckedPointerParam<SubProblem *>("_subproblem")),
     _fe_problem(*getCheckedPointerParam<FEProblemBase *>("_fe_problem_base")),
     _tid(parameters.get<THREAD_ID>("_tid")),
@@ -116,8 +116,46 @@ MaterialBase::MaterialBase(const InputParameters & parameters)
 {
 }
 
+#ifdef MOOSE_KOKKOS_ENABLED
+MaterialBase::MaterialBase(const MaterialBase & object, const Moose::Kokkos::FunctorCopy & key)
+  : MooseObject(object, key),
+    BlockRestrictable(object, key),
+    BoundaryRestrictable(object, key),
+    SetupInterface(object, key),
+    MooseVariableDependencyInterface(object, key),
+    ScalarCoupleable(object, key),
+    FunctionInterface(object, key),
+    DistributionInterface(object, key),
+    UserObjectInterface(object, key),
+    TransientInterface(object, key),
+    PostprocessorInterface(object, key),
+    VectorPostprocessorInterface(object, key),
+    DependencyResolverInterface(object, key),
+    Restartable(object, key),
+    MeshChangedInterface(object, key),
+    OutputInterface(object, key),
+    RandomInterface(object, key),
+    ElementIDInterface(object, key),
+    GeometricSearchInterface(object, key),
+    ADFunctorInterface(object, key),
+    _subproblem(object._subproblem),
+    _fe_problem(object._fe_problem),
+    _tid(object._tid),
+    _assembly(object._assembly),
+    _coord(object._coord),
+    _normals(object._normals),
+    _mesh(object._mesh),
+    _coord_sys(object._coord_sys),
+    _compute(object._compute),
+    _has_stateful_property(object._has_stateful_property),
+    _declare_suffix(object._declare_suffix),
+    _force_stateful_init(object._force_stateful_init)
+{
+}
+#endif
+
 void
-MaterialBase::initStatefulProperties(unsigned int n_points)
+MaterialBase::initStatefulProperties(const unsigned int n_points)
 {
   for (_qp = 0; _qp < n_points; ++_qp)
     initQpStatefulProperties();
@@ -149,6 +187,16 @@ MaterialBase::checkStatefulSanity() const
       mooseError("The stateful property '",
                  _fe_problem.getMaterialPropertyRegistry().getName(id),
                  "' is undefined");
+}
+
+bool
+MaterialBase::hasRestoredProperties() const
+{
+  for (auto & prop : _supplied_props)
+    if (materialData().getMaterialPropertyStorage().isRestoredProperty(prop))
+      return true;
+
+  return false;
 }
 
 void

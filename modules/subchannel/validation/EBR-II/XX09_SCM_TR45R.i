@@ -116,11 +116,15 @@ unheated_length_exit = '${fparse 26.9*scale_factor}'
   compute_density = true
   compute_viscosity = true
   compute_power = true
-  P_tol = 1.0e-6
-  T_tol = 1.0e-5
+  P_tol = 1.0e-4
+  T_tol = 1.0e-4
   implicit = true
   segregated = false
   interpolation_scheme = 'upwind'
+
+  # Heat Transfer Correlations
+  pin_htc_correlation = 'gnielinski'
+  duct_htc_correlation = 'gnielinski'
 []
 
 [ICs]
@@ -254,14 +258,13 @@ unheated_length_exit = '${fparse 26.9*scale_factor}'
   [change_q_prime]
     type = ParsedAux
     variable = q_prime
-    args = 'q_prime_init power_history_field'
-    function = 'q_prime_init*power_history_field'
+    coupled_variables = 'q_prime_init power_history_field'
+    expression = 'q_prime_init*power_history_field'
     execute_on = 'INITIAL TIMESTEP_BEGIN'
   []
 []
 
 [Outputs]
-  exodus = true
   csv = true
 []
 
@@ -310,7 +313,7 @@ unheated_length_exit = '${fparse 26.9*scale_factor}'
     growth_factor = 2.0
   []
   dtmax = 20
-  num_steps = 15
+  # num_steps = 15
 []
 
 ################################################################################

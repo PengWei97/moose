@@ -1,4 +1,13 @@
-#ifdef MFEM_ENABLED
+//* This file is part of the MOOSE framework
+//* https://mooseframework.inl.gov
+//*
+//* All rights reserved, see COPYRIGHT for full restrictions
+//* https://github.com/idaholab/moose/blob/master/COPYRIGHT
+//*
+//* Licensed under LGPL 2.1, please see LICENSE for details
+//* https://www.gnu.org/licenses/lgpl-2.1.html
+
+#ifdef MOOSE_MFEM_ENABLED
 
 #include "MFEMGenericFunctorMaterial.h"
 #include "MFEMProblem.h"
@@ -15,9 +24,7 @@ MFEMGenericFunctorMaterial::validParams()
       "prop_names", "The names of the properties this material will have");
   params.addRequiredParam<std::vector<MFEMScalarCoefficientName>>(
       "prop_values",
-      "The corresponding names of coefficients associated with the named properties. A coefficient "
-      "can be any "
-      "of the following: a variable, an MFEM material property, a function, or a post-processor.");
+      "The corresponding names of coefficients associated with the named properties");
 
   return params;
 }
@@ -32,7 +39,7 @@ MFEMGenericFunctorMaterial::MFEMGenericFunctorMaterial(const InputParameters & p
 
   for (const auto i : index_range(_prop_names))
     _properties.declareScalarProperty(
-        _prop_names[i], subdomainsToStrings(_block_ids), _prop_values[i]);
+        _prop_names[i], subdomainsToStrings(_subdomain_names), _prop_values[i]);
 }
 
 MFEMGenericFunctorMaterial::~MFEMGenericFunctorMaterial() {}

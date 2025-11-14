@@ -8,33 +8,44 @@ list of publications that have cited MOOSE, please refer to the [publications.md
 For all publications that use MOOSE or a MOOSE-based application please cite the following.
 
 ```tex
-@article{giudicelli2024moose,
-   title = {3.0 - {MOOSE}: Enabling massively parallel multiphysics simulations},
-   author = {Guillaume Giudicelli and Alexander Lindsay and Logan Harbour and Casey Icenhour and
-             Mengnan Li and Joshua E. Hansel and Peter German and Patrick Behne and Oana Marin and
-             Roy H. Stogner and Jason M. Miller and Daniel Schwen and Yaqi Wang and Lynn Munday and
-             Sebastian Schunert and Benjamin W. Spencer and Dewen Yushu and Antonio Recuero and
-             Zachary M. Prince and Max Nezdyur and Tianchen Hu and Yinbin Miao and
-             Yeon Sang Jung and Christopher Matthews and April Novak and Brandon Langley and
-             Timothy Truster and Nuno Nobre and Brian Alger and David Andr{\v{s}} and
-             Fande Kong and Robert Carlsen and Andrew E. Slaughter and John W. Peterson and
-             Derek Gaston and Cody Permann},
-    year = {2024},
- journal = {{SoftwareX}},
-  volume = {26},
-   pages = {101690},
+@article{harbour2025moose,
+   title = {4.0 {MOOSE}: Enabling massively parallel Multiphysics simulation},
+ journal = {SoftwareX},
+  volume = {31},
+   pages = {102264},
+    year = {2025},
     issn = {2352-7110},
-     doi = {https://doi.org/10.1016/j.softx.2024.101690},
-     url = {https://www.sciencedirect.com/science/article/pii/S235271102400061X},
-keywords = {Framework, Finite-element, Finite-volume, Parallel, Multiphysics, Multiscale},
+     doi = {https://doi.org/10.1016/j.softx.2025.102264},
+     url = {https://www.sciencedirect.com/science/article/pii/S2352711025002316},
+  author = {Logan Harbour and Guillaume Giudicelli and Alexander D. Lindsay and Peter German and
+            Joshua Hansel and Casey Icenhour and Mengnan Li and Jason M. Miller and Roy H. Stogner and
+            Patrick Behne and Daniel Yankura and Zachary M. Prince and Corey DeChant and Daniel Schwen and
+            Benjamin W. Spencer and Mauricio Tano and Namjae Choi and Yaqi Wang and Max Nezdyur and
+            Yinbin Miao and Tianchen Hu and Shikhar Kumar and Christopher Matthews and Brandon Langley and
+            Nuno Nobre and Alexander Blair and Chris MacMackin and Henrique Bergallo Rocha and
+            Edward Palmer and Jesse Carter and J{\"o}rg Meier and Andrew E. Slaughter and David Andr{\v{s}} and
+            Robert W. Carlsen and Fande Kong and Derek R. Gaston and Cody J. Permann},
+keywords = {Finite element, Multiphysics, Finite volume, Engineering, Modeling, Simulation}
 }
 ```
 
-## MultiApp System
+## MultiApp & Transfers System
 
-If your application uses the MultiApp system, please also cite the following.
+If your application uses the `MultiApp` and `Transfers` systems, please also cite the following.
 
-```
+```tex
+@article{giudicelli2025transfers,
+ author = {Giudicelli, Guillaume L. and Kong, Fande and Stogner, Roy and Harbour, Logan and
+           Gaston, Derek and Lindsay, Alexander and Prince, Zachary and Charlot, Lise and
+           Terlizzi, Stefano and Eltawila, Mahmoud and Novak, April},
+  title = {Data transfers for nuclear reactor multiphysics studies using the {MOOSE} framework},
+journal = {Frontiers in Nuclear Engineering},
+ volume = {Volume 4 - 2025},
+   year = {2025},
+    url = {https://www.frontiersin.org/journals/nuclear-engineering/articles/10.3389/fnuen.2025.1611173},
+    doi = {10.3389/fnuen.2025.1611173},
+   issn = {2813-3412}
+}
 @article{gaston2015physics,
     title = {Physics-based multiscale coupling for full core nuclear reactor simulation},
    author = {Derek R. Gaston and Cody J. Permann and John W. Peterson and Andrew E. Slaughter and
@@ -98,6 +109,25 @@ If you are using Libtorch APIs within MOOSE, please consider citing:
   pages={101489},
   year={2023},
   publisher={Elsevier}
+}
+```
+
+## NEML2 constitutive models
+
+If you are using NEML2 constitutive models, please consider citing:
+
+```
+@article{neml2softwarex,
+  title    = {NEML2: An efficient and modular multiphysics constitutive modeling library for hybrid computing environments},
+  journal  = {SoftwareX},
+  volume   = {31},
+  pages    = {102302},
+  year     = {2025},
+  issn     = {2352-7110},
+  doi      = {https://doi.org/10.1016/j.softx.2025.102302},
+  url      = {https://www.sciencedirect.com/science/article/pii/S2352711025002687},
+  author   = {Tianchen Hu and Mark C. Messner},
+  keywords = {Constitutive model, GPU, Multiphysics}
 }
 ```
 
@@ -180,6 +210,29 @@ journal = {International Journal for Numerical Methods in Engineering},
  number = {3},
   pages = {434--449},
     doi = {10.1002/nme.6215}
+}
+```
+
+If you use the Lagrangian mechanics kernels and/or materials, please consider citing:
+
+```
+@article{10.1145/3716308,
+  author     = {Hu, Tianchen and Messner, Mark C.},
+  title      = {A Simple, Scalable Large Deformation Solid Mechanics Implementation in the MOOSE Framework},
+  year       = {2025},
+  issue_date = {March 2025},
+  publisher  = {Association for Computing Machinery},
+  address    = {New York, NY, USA},
+  volume     = {51},
+  number     = {1},
+  issn       = {0098-3500},
+  url        = {https://doi.org/10.1145/3716308},
+  doi        = {10.1145/3716308},
+  journal    = {ACM Trans. Math. Softw.},
+  month      = apr,
+  articleno  = {4},
+  numpages   = {22},
+  keywords   = {finite element method, solid mechanics, large deformation}
 }
 ```
 

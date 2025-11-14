@@ -62,7 +62,7 @@ P_out = 2.0e5 # Pa
   [displacement]
     block = subchannel
   []
-  [q_prime_duct]
+  [duct_heat_flux]
     block = duct
   []
   [Tduct]
@@ -85,10 +85,12 @@ P_out = 2.0e5 # Pa
   compute_density = true
   compute_viscosity = true
   compute_power = true
-  T_tol = 1.0e-6
-  P_tol = 1.0e-6
   implicit = true
   segregated = true
+  verbose_subchannel = true
+
+  # Heat Transfer Correlations
+  duct_htc_correlation = 'gnielinski'
 []
 
 [ICs]
@@ -113,6 +115,12 @@ P_out = 2.0e5 # Pa
     type = ConstantIC
     variable = T
     value = ${T_in}
+  []
+
+  [duct_heat_flux_ic]
+    type = ConstantIC
+    variable = duct_heat_flux #W/m2
+    value = 1000.0
   []
 
   [P_ic]
@@ -182,10 +190,91 @@ P_out = 2.0e5 # Pa
 []
 
 [Postprocessors]
-  [total_pressure_drop]
+  [T1]
+    type = SubChannelPointValue
+    variable = T
+    index = 37
+    execute_on = "timestep_end"
+    height = 0.5
+  []
+  [T2]
+    type = SubChannelPointValue
+    variable = T
+    index = 36
+    execute_on = "timestep_end"
+    height = 0.5
+  []
+  [T3]
+    type = SubChannelPointValue
+    variable = T
+    index = 20
+    execute_on = "timestep_end"
+    height = 0.5
+  []
+  [T4]
+    type = SubChannelPointValue
+    variable = T
+    index = 10
+    execute_on = "timestep_end"
+    height = 0.5
+  []
+  [T5]
+    type = SubChannelPointValue
+    variable = T
+    index = 4
+    execute_on = "timestep_end"
+    height = 0.5
+  []
+  [T6]
+    type = SubChannelPointValue
+    variable = T
+    index = 1
+    execute_on = "timestep_end"
+    height = 0.5
+  []
+  [T7]
+    type = SubChannelPointValue
+    variable = T
+    index = 14
+    execute_on = "timestep_end"
+    height = 0.5
+  []
+  [T8]
+    type = SubChannelPointValue
+    variable = T
+    index = 28
+    execute_on = "timestep_end"
+    height = 0.5
+  []
+  ####### Assembly pressure drop
+  [DP_SubchannelDelta]
     type = SubChannelDelta
     variable = P
-    execute_on = "timestep_end"
+    execute_on = 'TIMESTEP_END'
+  []
+  #####
+  [Mean_Temp]
+    type = SCMPlanarMean
+    variable = T
+    height = 2
+  []
+  [mdot-8]
+    type = SubChannelPointValue
+    variable = mdot
+    index = 28
+    execute_on = 'TIMESTEP_END'
+    height = 0.5
+  []
+  [Total_power]
+    type = ElementIntegralVariablePostprocessor
+    variable = q_prime
+    block = subchannel
+  []
+  [Total_power_SCMDuctPowerPostprocessor]
+    type = SCMDuctHeatRatePostprocessor
+  []
+  [Total_power_SCMTHPowerPostprocessor]
+    type = SCMTHPowerPostprocessor
   []
 []
 

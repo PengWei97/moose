@@ -8,6 +8,7 @@
 //* https://www.gnu.org/licenses/lgpl-2.1.html
 
 #include "WCNSFVFlowPhysicsBase.h"
+#include "WCNSLinearFVFlowPhysics.h"
 #include "WCNSFVTurbulencePhysics.h"
 #include "NSFVBase.h"
 #include "MapConversionUtils.h"
@@ -55,10 +56,6 @@ WCNSFVFlowPhysicsBase::validParams()
   params.transferParam<bool>(NSFVBase::validParams(), "porous_medium_treatment");
   params.transferParam<MooseFunctorName>(NSFVBase::validParams(), "porosity");
 
-  // New functor boundary conditions
-  params.deprecateParam("momentum_inlet_function", "momentum_inlet_functors", "01/01/2025");
-  params.deprecateParam("pressure_function", "pressure_functors", "01/01/2025");
-
   // Initialization parameters
   params.transferParam<std::vector<FunctionName>>(NSFVBase::validParams(), "initial_velocity");
   params.transferParam<FunctionName>(NSFVBase::validParams(), "initial_pressure");
@@ -75,6 +72,12 @@ WCNSFVFlowPhysicsBase::validParams()
                              coeff_interp_method,
                              "Switch that can select face interpolation method for the viscosity.");
 
+  // Fluid properties
+  params.addParam<UserObjectName>(NS::fluid, "Fluid properties userobject");
+  params.addParam<FunctionName>(
+      "mu_rampdown", 1, "A function describing a ramp down of viscosity over time");
+  params.addParamNamesToGroup(NS::fluid + " mu_rampdown", "Material properties");
+
   // Parameter groups
   params.addParamNamesToGroup(
       "velocity_variable pressure_variable initial_pressure initial_velocity", "Variables");
@@ -86,8 +89,9 @@ WCNSFVFlowPhysicsBase::validParams()
   params.addParamNamesToGroup("wall_boundaries momentum_wall_types momentum_wall_functors",
                               "Wall boundary conditions");
   params.addParamNamesToGroup(
-      "velocity_interpolation momentum_advection_interpolation momentum_face_interpolation "
-      "momentum_two_term_bc_expansion pressure_two_term_bc_expansion mu_interp_method",
+      "include_deviatoric_stress velocity_interpolation momentum_advection_interpolation "
+      "momentum_two_term_bc_expansion pressure_two_term_bc_expansion mu_interp_method "
+      "momentum_face_interpolation",
       "Numerical scheme");
   params.addParamNamesToGroup("thermal_expansion", "Gravity treatment");
 
@@ -123,6 +127,9 @@ WCNSFVFlowPhysicsBase::WCNSFVFlowPhysicsBase(const InputParameters & parameters)
     _velocity_interpolation(getParam<MooseEnum>("velocity_interpolation")),
     _momentum_advection_interpolation(getParam<MooseEnum>("momentum_advection_interpolation")),
     _momentum_face_interpolation(getParam<MooseEnum>("momentum_face_interpolation")),
+    _friction_blocks(getParam<std::vector<std::vector<SubdomainName>>>("friction_blocks")),
+    _friction_types(getParam<std::vector<std::vector<std::string>>>("friction_types")),
+    _friction_coeffs(getParam<std::vector<std::vector<std::string>>>("friction_coeffs")),
     _inlet_boundaries(getParam<std::vector<BoundaryName>>("inlet_boundaries")),
     _outlet_boundaries(getParam<std::vector<BoundaryName>>("outlet_boundaries")),
     _wall_boundaries(getParam<std::vector<BoundaryName>>("wall_boundaries")),
@@ -170,6 +177,12 @@ WCNSFVFlowPhysicsBase::WCNSFVFlowPhysicsBase(const InputParameters & parameters)
                        " is already reserved for the automatically-computed interstitial velocity. "
                        "Please choose another name for your external velocity variable!");
     }
+
+  // Friction parameter checks
+  if (_friction_blocks.size())
+    checkVectorParamsSameLength<std::vector<SubdomainName>, std::vector<std::string>>(
+        "friction_blocks", "friction_types");
+  checkTwoDVectorParamsSameLength<std::string, std::string>("friction_types", "friction_coeffs");
 
   // Create maps for boundary-restricted parameters
   _momentum_inlet_types = Moose::createMapFromVectorAndMultiMooseEnum<BoundaryName>(
@@ -262,6 +275,9 @@ WCNSFVFlowPhysicsBase::addMaterials()
     addPorousMediumSpeedMaterial();
   else
     addNonPorousMediumSpeedMaterial();
+
+  if (isParamValid(NS::fluid))
+    addFluidPropertiesFunctorMaterial();
 }
 
 void
@@ -278,7 +294,8 @@ WCNSFVFlowPhysicsBase::addPorousMediumSpeedMaterial()
     params.set<MooseFunctorName>(NS::porosity) = "1";
   params.set<bool>("define_interstitial_velocity_components") = _porous_medium_treatment;
 
-  getProblem().addMaterial("PINSFVSpeedFunctorMaterial", prefix() + "pins_speed_material", params);
+  getProblem().addFunctorMaterial(
+      "PINSFVSpeedFunctorMaterial", prefix() + "pins_speed_material", params);
 }
 
 void
@@ -293,7 +310,52 @@ WCNSFVFlowPhysicsBase::addNonPorousMediumSpeedMaterial()
     params.set<MooseFunctorName>(param_names[dim_i]) = _velocity_names[dim_i];
   params.set<MooseFunctorName>("vector_magnitude_name") = NS::speed;
 
-  getProblem().addMaterial(class_name, prefix() + "ins_speed_material", params);
+  getProblem().addFunctorMaterial(class_name, prefix() + "ins_speed_material", params);
+}
+
+void
+WCNSFVFlowPhysicsBase::addFluidPropertiesFunctorMaterial()
+{
+  // Not very future-proof but it works
+  const bool use_ad = !dynamic_cast<WCNSLinearFVFlowPhysics *>(this);
+  const std::string class_name =
+      use_ad ? "GeneralFunctorFluidProps" : "NonADGeneralFunctorFluidProps";
+  InputParameters params = getFactory().getValidParams(class_name);
+  assignBlocks(params, _blocks);
+
+  params.set<MooseFunctorName>(NS::pressure) = _pressure_name;
+  params.set<MooseFunctorName>(NS::T_fluid) = _fluid_temperature_name;
+  params.set<MooseFunctorName>(NS::speed) = NS::speed;
+  params.applySpecificParameters(parameters(), {NS::fluid, NS::density, "mu_rampdown"});
+  if (!MooseUtils::parsesToReal(_density_name))
+    params.set<bool>("force_define_density") = true;
+  if (!_porous_medium_treatment)
+  {
+    params.set<MooseFunctorName>(NS::porosity) = "1";
+    params.set<MooseFunctorName>("characteristic_length") = "1";
+  }
+  else
+    // not implemented yet
+    paramWarning(
+        NS::fluid,
+        "Specifying the fluid properties user object does not define the GeneralFunctorFluidProps "
+        "when using the porous medium treatment. You have to define this object in the input");
+
+  // Dynamic pressure
+  params.set<bool>("solving_for_dynamic_pressure") = _solve_for_dynamic_pressure;
+  if (_solve_for_dynamic_pressure)
+  {
+    params.set<Point>("reference_pressure_point") = getParam<Point>("reference_pressure_point");
+    if (!isParamSetByUser("reference_pressure_point"))
+      paramWarning("reference_pressure_point",
+                   "Default value of (0,0,0) used. If this point is outside the flow domain, the "
+                   "simulation will error");
+    params.set<Real>("reference_pressure") = getParam<Real>("reference_pressure");
+  }
+  params.set<Point>("gravity") = getParam<RealVectorValue>("gravity");
+
+  if (!_porous_medium_treatment)
+    getProblem().addFunctorMaterial(class_name, prefix() + "functor_fluidprops", params);
 }
 
 void
@@ -321,27 +383,26 @@ WCNSFVFlowPhysicsBase::addInitialConditions()
                "The number of velocity components in the " + type() + " initial condition is not " +
                    std::to_string(dimension()) + " or 3!");
 
-  // do not set initial conditions if we load from file
-  if (getParam<bool>("initialize_variables_from_mesh_file"))
-    return;
-  // do not set initial conditions if we are not defining variables
-  if (!_define_variables)
-    return;
-
   InputParameters params = getFactory().getValidParams("FunctionIC");
   assignBlocks(params, _blocks);
   auto vvalue = getParam<std::vector<FunctionName>>("initial_velocity");
 
-  if (!_app.isRestarting() || parameters().isParamSetByUser("initial_velocity"))
-    for (const auto d : make_range(dimension()))
-    {
-      params.set<VariableName>("variable") = _velocity_names[d];
-      params.set<FunctionName>("function") = vvalue[d];
+  for (const auto d : make_range(dimension()))
+  {
+    params.set<VariableName>("variable") = _velocity_names[d];
+    params.set<FunctionName>("function") = vvalue[d];
 
+    if (shouldCreateIC(_velocity_names[d],
+                       _blocks,
+                       /*whether IC is a default*/ !isParamSetByUser("initial_velocity"),
+                       /*error if already an IC*/ isParamSetByUser("initial_velocity")))
       getProblem().addInitialCondition("FunctionIC", prefix() + _velocity_names[d] + "_ic", params);
-    }
+  }
 
-  if (!_app.isRestarting() || parameters().isParamSetByUser("initial_pressure"))
+  if (shouldCreateIC(_pressure_name,
+                     _blocks,
+                     /*whether IC is a default*/ !isParamSetByUser("initial_pressure"),
+                     /*error if already an IC*/ isParamSetByUser("initial_pressure")))
   {
     params.set<VariableName>("variable") = _pressure_name;
     params.set<FunctionName>("function") = getParam<FunctionName>("initial_pressure");

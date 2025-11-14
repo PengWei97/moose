@@ -18,10 +18,11 @@ ParsedPostprocessor::validParams()
   params += FunctionParserUtils<false>::validParams();
 
   params.addRequiredCustomTypeParam<std::string>(
-      "function", "FunctionExpression", "function expression");
-  params.deprecateParam("function", "expression", "05/01/2025");
+      "expression", "FunctionExpression", "function expression");
 
   params.addParam<std::vector<PostprocessorName>>("pp_names", {}, "Post-processors arguments");
+  params.addParam<std::vector<std::string>>(
+      "pp_symbols", {}, "Symbol associated with each post-processor argument");
   params.addParam<std::vector<std::string>>(
       "constant_names",
       {},
@@ -47,48 +48,33 @@ ParsedPostprocessor::ParsedPostprocessor(const InputParameters & parameters)
   // build postprocessors argument
   std::string postprocessors;
 
-  // coupled  postprocessors
+  const std::vector<std::string> pp_symbols = getParam<std::vector<std::string>>("pp_symbols");
+  // sanity checks
+  if (!pp_symbols.empty() && (pp_symbols.size() != _n_pp))
+    paramError("pp_symbols", "pp_symbols must be the same length as pp_names.");
+
+  // coupled  postprocessors with capacity for symbol inputs
   std::vector<PostprocessorName> pp_names = getParam<std::vector<PostprocessorName>>("pp_names");
-  for (std::size_t i = 0; i < _n_pp; ++i)
-    postprocessors += (i == 0 ? "" : ",") + pp_names[i];
+  if (pp_symbols.empty())
+  {
+    for (std::size_t i = 0; i < _n_pp; ++i)
+      postprocessors += (i == 0 ? "" : ",") + pp_names[i];
+  }
+  else
+    postprocessors = MooseUtils::stringJoin(pp_symbols, ",");
 
   // add time if required
   if (_use_t)
     postprocessors += (postprocessors.empty() ? "" : ",") + std::string("t");
 
-  // base function object
+  // Create parsed function
   _func_F = std::make_shared<SymFunction>();
-
-  // set FParser internal feature flags
-  setParserFeatureFlags(_func_F);
-
-  // add the constant expressions
-  addFParserConstants(_func_F,
+  parsedFunctionSetup(_func_F,
+                      getParam<std::string>("expression"),
+                      postprocessors,
                       getParam<std::vector<std::string>>("constant_names"),
-                      getParam<std::vector<std::string>>("constant_expressions"));
-
-  // parse function
-  std::string function = getParam<std::string>("expression");
-  if (_func_F->Parse(function, postprocessors) >= 0)
-    mooseError("Invalid parsed function\n", function, "\n", _func_F->ErrorMsg());
-
-  // optimize
-  if (!_disable_fpoptimizer)
-    _func_F->Optimize();
-
-  // just-in-time compile
-  if (_enable_jit)
-  {
-    // let rank 0 do the JIT compilation first
-    if (_communicator.rank() != 0)
-      _communicator.barrier();
-
-    _func_F->JITCompile();
-
-    // wait for ranks > 0 to catch up
-    if (_communicator.rank() == 0)
-      _communicator.barrier();
-  }
+                      getParam<std::vector<std::string>>("constant_expressions"),
+                      comm());
 
   // reserve storage for parameter passing buffer
   _func_params.resize(_n_pp + _use_t);

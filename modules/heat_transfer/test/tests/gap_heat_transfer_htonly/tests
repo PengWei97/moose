@@ -24,7 +24,7 @@
     exodiff = 'gap_heat_transfer_htonly_syntax_out.e'
     abs_zero = 1e-6
     requirement = "Thermal contact shall solve plate heat transfer for a constant conductivity gap "
-                  "in 3D using the Modules/HeatConduction/Thermal contact syntax"
+                  "in 3D using the ThermalContact syntax."
     design = 'source/bcs/GapHeatTransfer.md'
     issues = '#1609'
   []
@@ -33,6 +33,7 @@
     input = 'gap_heat_transfer_htonly_it_plot_test.i'
     exodiff = 'out_it_plot.e'
     custom_cmp = 'gap_heat_transfer_htonly_it_plot_test.cmp'
+    restep = false # Output on nonlinear does not support consistency with restep
     requirement = "Thermal contact shall solve plate heat transfer for a constant conductivity gap "
                   "in 3D at each iteration"
     design = 'source/bcs/GapHeatTransfer.md'
@@ -59,7 +60,7 @@
                   "gap in 2D axisymmetric coordinates where the axial axis is along the x-direction"
     design = 'source/bcs/GapHeatTransfer.md'
     issues = '#12071'
-    cli_args = "Problem/rz_coord_axis=X Mesh/active='file rotate' "
+    cli_args = "Mesh/rz_coord_axis=X Mesh/active='file rotate' "
                "Outputs/file_base=gap_heat_transfer_htonly_zr_test_out"
   []
   [RSpherical]
@@ -185,9 +186,9 @@
     type = RunException
     input = 'corner_wrap.i'
     cli_args = ThermalContact/thermal_contact/check_boundary_restricted=true
-    requirement = "When the 'check_boundary_restricted' option is set to true, the AuxKernels set "
-                  "up by the ThermalContact system shall generate an error when multiple faces of "
-                  "an element are in one of the contact surfaces."
+    requirement = "When the 'check_boundary_restricted' option is set to true, the AuxKernels set up "
+                  "by the ThermalContact system shall generate an error when multiple faces of an "
+                  "element are in one of the contact surfaces."
     expect_err = "Boundary restricted auxiliary kernel 'gap_value_thermal_contact_0' has element "
     design = 'source/bcs/GapHeatTransfer.md'
     issues = '#23058'
@@ -197,8 +198,8 @@
     type = RunException
     input = 'corner_wrap.i'
     cli_args = ThermalContact/thermal_contact/quadrature=false
-    requirement = "If 'quadrature=false' the thermal contact system shall generate an error if "
-                  "the user also sets 'check_boundary_restricted=true'."
+    requirement = "If 'quadrature=false' the thermal contact system shall generate an error if the "
+                  "user also sets 'check_boundary_restricted=true'."
     expect_err = "This parameter cannot be 'false' when 'quadrature=false'"
     design = 'source/bcs/GapHeatTransfer.md'
     issues = '#23058'

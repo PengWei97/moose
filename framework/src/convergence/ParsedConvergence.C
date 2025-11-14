@@ -63,7 +63,8 @@ ParsedConvergence::initialSetup()
   const auto divergence_expression = isParamValid("divergence_expression")
                                          ? getParam<std::string>("divergence_expression")
                                          : MooseUtils::join(_convergence_symbol_names, "|");
-  _divergence_function = makeParsedFunction(divergence_expression);
+  if (divergence_expression.size())
+    _divergence_function = makeParsedFunction(divergence_expression);
 }
 
 void
@@ -130,26 +131,14 @@ ParsedConvergence::initializeConstantSymbol(unsigned int i)
 ParsedConvergence::SymFunctionPtr
 ParsedConvergence::makeParsedFunction(const std::string & expression)
 {
+  // Create parsed function
   auto sym_function = std::make_shared<SymFunction>();
-
-  setParserFeatureFlags(sym_function);
-
-  // Add constants
-  sym_function->AddConstant("pi", std::acos(Real(-1)));
-  sym_function->AddConstant("e", std::exp(Real(1)));
-
-  // Parse the expression
-  const auto symbols_str = Moose::stringify(_symbol_names);
-  if (sym_function->Parse(expression, symbols_str) >= 0)
-    mooseError("The expression\n  '",
-               expression,
-               "'\nwith symbols\n  '",
-               symbols_str,
-               "'\ncould not be parsed:\n",
-               sym_function->ErrorMsg());
-
-  // Optimize the parsed function
-  functionsOptimize(sym_function);
+  parsedFunctionSetup(sym_function,
+                      expression,
+                      Moose::stringify(_symbol_names),
+                      {"pi", "e"},
+                      {std::to_string(libMesh::pi), std::to_string(std::exp(Real(1)))},
+                      comm());
 
   return sym_function;
 }
@@ -160,7 +149,9 @@ ParsedConvergence::checkConvergence(unsigned int iter)
   updateSymbolValues(iter);
 
   const Real converged_real = evaluate(_convergence_function, _convergence_function_params, name());
-  const Real diverged_real = evaluate(_divergence_function, _divergence_function_params, name());
+  const Real diverged_real =
+      _divergence_function ? evaluate(_divergence_function, _divergence_function_params, name())
+                           : 0;
 
   if (convertRealToBool(diverged_real, "divergence_expression"))
     return MooseConvergenceStatus::DIVERGED;

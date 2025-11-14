@@ -1,0 +1,20 @@
+# KokkosVariableTimeIntegrationAux
+
+!if! function=hasCapability('kokkos')
+
+This is the Kokkos version of [VariableTimeIntegrationAux](VariableTimeIntegrationAux.md). See the original document for details.
+
+## Example Syntax
+
+!listing test/tests/kokkos/auxkernels/time_integration/kokkos_time_integration.i start=[SimpsonsTimeIntegrator] end=[] include-end=true
+
+!syntax parameters /AuxKernels/KokkosVariableTimeIntegrationAux
+
+!syntax inputs /AuxKernels/KokkosVariableTimeIntegrationAux
+
+!syntax children /AuxKernels/KokkosVariableTimeIntegrationAux
+
+!if-end!
+
+!else
+!include kokkos/kokkos_warning.md

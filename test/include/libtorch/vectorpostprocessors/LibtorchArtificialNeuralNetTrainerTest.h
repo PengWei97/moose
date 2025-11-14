@@ -7,7 +7,7 @@
 //* Licensed under LGPL 2.1, please see LICENSE for details
 //* https://www.gnu.org/licenses/lgpl-2.1.html
 
-#ifdef LIBTORCH_ENABLED
+#ifdef MOOSE_LIBTORCH_ENABLED
 
 #pragma once
 
@@ -24,7 +24,7 @@ public:
   LibtorchArtificialNeuralNetTrainerTest(const InputParameters & params);
 
   virtual void initialize(){};
-  virtual void execute(){};
+  virtual void execute();
   virtual void finalize(){};
 
 protected:

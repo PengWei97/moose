@@ -18,11 +18,22 @@ FunctorInterface::validParams()
 
 FunctorInterface::FunctorInterface(const MooseObject * const moose_object)
   : _fi_params(moose_object->parameters()),
-    _fi_name(_fi_params.get<std::string>("_object_name")),
+    _fi_name(moose_object->name()),
     _fi_subproblem(_fi_params.get<SubProblem *>("_subproblem")),
     _fi_tid(_fi_params.get<THREAD_ID>("_tid"))
 {
 }
+
+#ifdef MOOSE_KOKKOS_ENABLED
+FunctorInterface::FunctorInterface(const FunctorInterface & object,
+                                   const Moose::Kokkos::FunctorCopy &)
+  : _fi_params(object._fi_params),
+    _fi_name(object._fi_name),
+    _fi_subproblem(object._fi_subproblem),
+    _fi_tid(object._fi_tid)
+{
+}
+#endif
 
 std::string
 FunctorInterface::deduceFunctorName(const std::string & name, const InputParameters & params)

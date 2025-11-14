@@ -1,25 +1,18 @@
-#ifdef MFEM_ENABLED
+//* This file is part of the MOOSE framework
+//* https://mooseframework.inl.gov
+//*
+//* All rights reserved, see COPYRIGHT for full restrictions
+//* https://github.com/idaholab/moose/blob/master/COPYRIGHT
+//*
+//* Licensed under LGPL 2.1, please see LICENSE for details
+//* https://www.gnu.org/licenses/lgpl-2.1.html
+
+#ifdef MOOSE_MFEM_ENABLED
 
 #pragma once
-#include <map>
-#include "libmesh/ignore_warnings.h"
-#include "mfem/miniapps/common/pfem_extras.hpp"
-#include "libmesh/restore_warnings.h"
 #include "ExternalProblem.h"
 #include "MFEMProblemData.h"
 #include "MFEMMesh.h"
-#include "MFEMFunctorMaterial.h"
-#include "MFEMVariable.h"
-#include "MFEMBoundaryCondition.h"
-#include "MFEMKernel.h"
-#include "MFEMMixedBilinearFormKernel.h"
-#include "MFEMExecutioner.h"
-#include "MFEMDataCollection.h"
-#include "MFEMFESpace.h"
-#include "MFEMSolverBase.h"
-#include "Function.h"
-#include "MooseEnum.h"
-#include "libmesh/string_to_enum.h"
 
 class MFEMProblem : public ExternalProblem
 {
@@ -31,7 +24,6 @@ public:
 
   virtual void initialSetup() override;
   virtual void externalSolve() override {}
-  virtual bool nlConverged(const unsigned int) override { return true; }
   virtual void syncSolutions(Direction) override {}
 
   /**
@@ -77,10 +69,18 @@ public:
   void setMesh();
 
   /**
-   * Initialise the required ProblemOperator used in the Executioner to solve the problem.
+   * Add an MFEM SubMesh to the problem.
    */
-  void initProblemOperator();
+  void addSubMesh(const std::string & user_object_name,
+                  const std::string & name,
+                  InputParameters & parameters);
 
+  /**
+   * Add transfers between MultiApps and/or MFEM SubMeshes.
+   */
+  void addTransfer(const std::string & transfer_name,
+                   const std::string & name,
+                   InputParameters & parameters) override;
   /**
    * Override of ExternalProblem::addVariable. Sets a
    * MFEM grid function (and time derivative, for transient problems) to be used in the MFEM solve.
@@ -132,6 +132,10 @@ public:
                    const std::string & name,
                    InputParameters & parameters) override;
 
+  void addInitialCondition(const std::string & ic_name,
+                           const std::string & name,
+                           InputParameters & parameters) override;
+
   /**
    * Override of ExternalProblem::addPostprocessor. In addition to
    * creating the postprocessor object, it will create a coefficient
@@ -180,6 +184,12 @@ public:
    * current data specifying the FE problem.
    */
   MFEMProblemData & getProblemData() { return _problem_data; }
+  const MFEMProblemData & getProblemData() const { return _problem_data; }
+
+  /**
+   * Return the MPI communicator associated with this FE problem's mesh.
+   */
+  MPI_Comm getComm() { return getProblemData().comm; }
 
   /**
    * Displace the mesh, if mesh displacement is enabled.
@@ -191,6 +201,15 @@ public:
    */
   std::optional<std::reference_wrapper<mfem::ParGridFunction const>>
   getMeshDisplacementGridFunction();
+
+  Moose::FEBackend feBackend() const override { return Moose::FEBackend::MFEM; }
+
+  std::string solverTypeString(unsigned int solver_sys_num) override;
+
+  /**
+   * @returns a shared pointer to an MFEM parallel grid function
+   */
+  std::shared_ptr<mfem::ParGridFunction> getGridFunction(const std::string & name);
 
 protected:
   MFEMProblemData _problem_data;

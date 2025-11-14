@@ -7,6 +7,7 @@
 //* Licensed under LGPL 2.1, please see LICENSE for details
 //* https://www.gnu.org/licenses/lgpl-2.1.html
 
+#include "MooseError.h"
 #include "MooseMesh.h"
 #include "Factory.h"
 #include "CacheChangedListsThread.h"
@@ -36,9 +37,7 @@
 #include "libmesh/periodic_boundary_base.h"
 #include "libmesh/fe_base.h"
 #include "libmesh/fe_interface.h"
-#include "libmesh/mesh_inserter_iterator.h"
 #include "libmesh/mesh_communication.h"
-#include "libmesh/mesh_inserter_iterator.h"
 #include "libmesh/mesh_tools.h"
 #include "libmesh/parallel.h"
 #include "libmesh/parallel_elem.h"
@@ -134,7 +133,13 @@ MooseMesh::validParams()
   params.addParam<bool>(
       "construct_node_list_from_side_list",
       true,
-      "Whether or not to generate nodesets from the sidesets (usually a good idea).");
+      "Whether or not to generate nodesets from the sidesets (currently often required).");
+  params.addParam<bool>(
+      "displace_node_list_by_side_list",
+      false,
+      "Whether to renumber existing nodesets with ids matching sidesets that "
+      "lack names matching sidesets, when constructing nodesets from sidesets via the default "
+      "'construct_node_list_from_side_list' option, rather than to merge them with the sideset.");
   params.addParam<unsigned int>(
       "patch_size", 40, "The number of nodes to consider in the NearestNode neighborhood.");
   params.addParam<unsigned int>("ghosting_patch_size",
@@ -216,7 +221,8 @@ MooseMesh::validParams()
   params.addParamNamesToGroup("add_subdomain_ids add_subdomain_names add_sideset_ids "
                               "add_sideset_names add_nodeset_ids add_nodeset_names",
                               "Pre-declaration of future mesh sub-entities");
-  params.addParamNamesToGroup("construct_node_list_from_side_list build_all_side_lowerd_mesh",
+  params.addParamNamesToGroup("construct_node_list_from_side_list build_all_side_lowerd_mesh "
+                              "displace_node_list_by_side_list",
                               "Automatic definition of mesh element sides entities");
   params.addParamNamesToGroup("partitioner centroid_partitioner_direction", "Partitioning");
 
@@ -253,6 +259,7 @@ MooseMesh::MooseMesh(const InputParameters & parameters)
     _has_lower_d(false),
     _allow_recovery(true),
     _construct_node_list_from_side_list(getParam<bool>("construct_node_list_from_side_list")),
+    _displace_node_list_by_side_list(getParam<bool>("displace_node_list_by_side_list")),
     _need_delete(false),
     _allow_remote_element_removal(true),
     _need_ghost_ghosted_boundaries(true),
@@ -266,6 +273,11 @@ MooseMesh::MooseMesh(const InputParameters & parameters)
   if (isParamValid("ghosting_patch_size") && (_patch_update_strategy != Moose::Iteration))
     mooseError("Ghosting patch size parameter has to be set in the mesh block "
                "only when 'iteration' patch update strategy is used.");
+
+  if (_displace_node_list_by_side_list && !_construct_node_list_from_side_list)
+    paramError("displace_node_list_by_side_list",
+               "'Mesh/displace_node_list_by_side_list' is true, but unused when "
+               "'Mesh/construct_node_list_from_side_list' is false");
 
   if (isParamValid("coord_block"))
   {
@@ -284,6 +296,11 @@ MooseMesh::MooseMesh(const InputParameters & parameters)
     allowRemoteElementRemoval(false);
 
   determineUseDistributedMesh();
+
+#ifdef MOOSE_KOKKOS_ENABLED
+  if (_app.isKokkosAvailable())
+    _kokkos_mesh = std::make_unique<Moose::Kokkos::Mesh>(*this);
+#endif
 }
 
 MooseMesh::MooseMesh(const MooseMesh & other_mesh)
@@ -316,6 +333,7 @@ MooseMesh::MooseMesh(const MooseMesh & other_mesh)
     _has_lower_d(other_mesh._has_lower_d),
     _allow_recovery(other_mesh._allow_recovery),
     _construct_node_list_from_side_list(other_mesh._construct_node_list_from_side_list),
+    _displace_node_list_by_side_list(other_mesh._displace_node_list_by_side_list),
     _need_delete(other_mesh._need_delete),
     _allow_remote_element_removal(other_mesh._allow_remote_element_removal),
     _need_ghost_ghosted_boundaries(other_mesh._need_ghost_ghosted_boundaries),
@@ -362,6 +380,11 @@ MooseMesh::MooseMesh(const MooseMesh & other_mesh)
   }
 
   updateCoordTransform();
+
+#ifdef MOOSE_KOKKOS_ENABLED
+  if (_app.isKokkosAvailable())
+    _kokkos_mesh = std::make_unique<Moose::Kokkos::Mesh>(*this);
+#endif
 }
 
 MooseMesh::~MooseMesh()
@@ -387,6 +410,7 @@ MooseMesh::freeBndNodes()
     it.second.clear();
 
   _bnd_node_ids.clear();
+  _bnd_node_range.reset();
 }
 
 void
@@ -400,6 +424,7 @@ MooseMesh::freeBndElems()
     it.second.clear();
 
   _bnd_elem_ids.clear();
+  _bnd_elem_range.reset();
 }
 
 bool
@@ -648,6 +673,11 @@ MooseMesh::update()
   // the flag might have been set by calling doingPRefinement(true)
   _doing_p_refinement = _doing_p_refinement || (_max_p_level > 0);
 
+#ifdef MOOSE_KOKKOS_ENABLED
+  if (_app.hasKokkosObjects() || (_app.getExecutioner() && _app.feProblem().hasKokkosObjects()))
+    _kokkos_mesh->update();
+#endif
+
   _finite_volume_info_dirty = true;
 }
 
@@ -764,7 +794,7 @@ MooseMesh::buildLowerDMesh()
 
       if (build_side)
       {
-        std::unique_ptr<Elem> side_elem(elem->build_side_ptr(side, false));
+        std::unique_ptr<Elem> side_elem(elem->build_side_ptr(side));
 
         // The side will be added with the same processor id as the parent.
         side_elem->processor_id() = elem->processor_id();
@@ -1050,6 +1080,29 @@ MooseMesh::buildNodeList()
 
   // This sort is here so that boundary conditions are always applied in the same order
   std::sort(_bnd_nodes.begin(), _bnd_nodes.end(), BndNodeCompare());
+}
+
+void
+MooseMesh::computeMaxPerElemAndSide()
+{
+  auto & mesh = getMesh();
+
+  _max_sides_per_elem = 0;
+  _max_nodes_per_elem = 0;
+  _max_nodes_per_side = 0;
+
+  for (auto & elem : as_range(mesh.local_elements_begin(), mesh.local_elements_end()))
+  {
+    _max_sides_per_elem = std::max(_max_sides_per_elem, elem->n_sides());
+    _max_nodes_per_elem = std::max(_max_nodes_per_elem, elem->n_nodes());
+
+    for (unsigned int side = 0; side < elem->n_sides(); ++side)
+      _max_nodes_per_side = std::max(_max_nodes_per_side, elem->side_ptr(side)->n_nodes());
+  }
+
+  mesh.comm().max(_max_sides_per_elem);
+  mesh.comm().max(_max_nodes_per_elem);
+  mesh.comm().max(_max_nodes_per_side);
 }
 
 void
@@ -1736,15 +1789,23 @@ MooseMesh::getSubdomainIDs(const std::vector<SubdomainName> & subdomain_name) co
   return MooseMeshUtils::getSubdomainIDs(getMesh(), subdomain_name);
 }
 
+std::set<SubdomainID>
+MooseMesh::getSubdomainIDs(const std::set<SubdomainName> & subdomain_name) const
+{
+  return MooseMeshUtils::getSubdomainIDs(getMesh(), subdomain_name);
+}
+
 void
 MooseMesh::setSubdomainName(SubdomainID subdomain_id, const SubdomainName & name)
 {
+  mooseAssert(name != "ANY_BLOCK_ID", "Cannot set subdomain name to 'ANY_BLOCK_ID'");
   getMesh().subdomain_name(subdomain_id) = name;
 }
 
 void
 MooseMesh::setSubdomainName(MeshBase & mesh, SubdomainID subdomain_id, const SubdomainName & name)
 {
+  mooseAssert(name != "ANY_BLOCK_ID", "Cannot set subdomain name to 'ANY_BLOCK_ID'");
   mesh.subdomain_name(subdomain_id) = name;
 }
 
@@ -1778,9 +1839,9 @@ MooseMesh::setBoundaryName(BoundaryID boundary_id, BoundaryName name)
 }
 
 const std::string &
-MooseMesh::getBoundaryName(BoundaryID boundary_id)
+MooseMesh::getBoundaryName(BoundaryID boundary_id) const
 {
-  BoundaryInfo & boundary_info = getMesh().get_boundary_info();
+  const BoundaryInfo & boundary_info = getMesh().get_boundary_info();
 
   // We need to figure out if this boundary is a sideset or nodeset
   if (boundary_info.get_side_boundary_ids().count(boundary_id))
@@ -2911,6 +2972,8 @@ MooseMesh::init()
     if (getParam<bool>("build_all_side_lowerd_mesh"))
       buildLowerDMesh();
   }
+
+  computeMaxPerElemAndSide();
 }
 
 unsigned int
@@ -2971,27 +3034,55 @@ MooseMesh::getBoundaryIDs() const
 void
 MooseMesh::buildNodeListFromSideList()
 {
-  if (_construct_node_list_from_side_list)
-    getMesh().get_boundary_info().build_node_list_from_side_list();
-}
+  auto & boundary_info = getMesh().get_boundary_info();
 
-void
-MooseMesh::buildSideList(std::vector<dof_id_type> & el,
-                         std::vector<unsigned short int> & sl,
-                         std::vector<boundary_id_type> & il)
-{
-#ifdef LIBMESH_ENABLE_DEPRECATED
-  mooseDeprecated("The version of MooseMesh::buildSideList() taking three arguments is "
-                  "deprecated, call the version that returns a vector of tuples instead.");
-  getMesh().get_boundary_info().build_side_list(el, sl, il);
-#else
-  libmesh_ignore(el);
-  libmesh_ignore(sl);
-  libmesh_ignore(il);
-  mooseError("The version of MooseMesh::buildSideList() taking three "
-             "arguments is not available in your version of libmesh, call the "
-             "version that returns a vector of tuples instead.");
-#endif
+  if (_construct_node_list_from_side_list)
+  {
+    const std::set<boundary_id_type> & side_bcids = boundary_info.get_side_boundary_ids();
+
+    if (_displace_node_list_by_side_list)
+    {
+      // Don't want to use auto here - the rbegin trick relies on a
+      // sorted set and we want the compiler to scream if libMesh ever
+      // switches type
+      const std::set<boundary_id_type> & node_bcids = boundary_info.get_node_boundary_ids();
+
+      // If we've got a reasonable largest BC id, we can just use the
+      // subsequent unused ones
+      boundary_id_type next_bcid = 0;
+      if (!node_bcids.empty())
+        next_bcid = std::max(next_bcid, cast_int<boundary_id_type>(*node_bcids.rbegin() + 1));
+      if (!side_bcids.empty())
+        next_bcid = std::max(next_bcid, cast_int<boundary_id_type>(*side_bcids.rbegin() + 1));
+
+      // If we've got an unreasonable largest BC id, we should
+      // probably just search for unused ones with moderate values, so we
+      // don't risk wrapping.
+      if (next_bcid > 1000 || next_bcid <= 0)
+        next_bcid = 1000;
+
+      // If any side bcid is already a node bcid with a different name,
+      // that's a different boundary condition that we need to reassign
+      // rather than overwrite or merge to.
+      for (auto bcid : side_bcids)
+        if (node_bcids.count(bcid) &&
+            (boundary_info.get_sideset_name(bcid) != boundary_info.get_nodeset_name(bcid)))
+        {
+          boundary_info.renumber_node_id(bcid, next_bcid);
+          do
+          {
+            ++next_bcid;
+          } while (node_bcids.count(next_bcid) || side_bcids.count(next_bcid));
+        }
+    }
+
+    // If any side bcid isn't already a node bcid, we should make
+    // sure that our new node bcid is given the same name.
+    for (auto bcid : side_bcids)
+      boundary_info.nodeset_name(bcid) = boundary_info.get_sideset_name(bcid);
+
+    boundary_info.build_node_list_from_side_list();
+  }
 }
 
 std::vector<std::tuple<dof_id_type, unsigned short int, boundary_id_type>>
@@ -3242,7 +3333,7 @@ namespace // Anonymous namespace for helpers
 {
 // A class for templated methods that expect output iterator
 // arguments, which adds objects to the Mesh.
-// Although any mesh_inserter_iterator can add any object, we
+// Although extra_ghost_elem_inserter can add any object, we
 // template it around object type so that type inference and
 // iterator_traits will work.
 // This object specifically is used to insert extra ghost elems into the mesh
@@ -4092,6 +4183,32 @@ MooseMesh::setCoordSystem(const std::vector<SubdomainName> & blocks,
                "of the 'Mesh/coord_type' parameter. Did you provide different parameter values for "
                "'coord_type' to 'Mesh' and 'Problem'?");
 
+  // If blocks contain ANY_BLOCK_ID, it should be the only block specified, and coord_sys should
+  // have one and only one entry. In that case, the same coordinate system will be set for all
+  // subdomains.
+  if (blocks.size() == 1 && blocks[0] == "ANY_BLOCK_ID")
+  {
+    if (coord_sys.size() > 1)
+      mooseError("If you specify ANY_BLOCK_ID as the only block, you must also specify a single "
+                 "coordinate system for it.");
+    if (!_mesh->is_prepared())
+      mooseError(
+          "You cannot set the coordinate system for ANY_BLOCK_ID before the mesh is prepared. "
+          "Please call this method after the mesh is prepared.");
+    const auto coord_type = coord_sys.size() == 0
+                                ? Moose::COORD_XYZ
+                                : Moose::stringToEnum<Moose::CoordinateSystemType>(coord_sys[0]);
+    for (const auto sid : meshSubdomains())
+      _coord_sys[sid] = coord_type;
+    return;
+  }
+
+  // If multiple blocks are specified, but one of them is ANY_BLOCK_ID, let's emit a helpful error
+  if (std::find(blocks.begin(), blocks.end(), "ANY_BLOCK_ID") != blocks.end())
+    mooseError("You cannot specify ANY_BLOCK_ID together with other blocks in the "
+               "setCoordSystem() method. If you want to set the same coordinate system for all "
+               "blocks, use ANY_BLOCK_ID as the only block.");
+
   auto subdomains = meshSubdomains();
   // It's possible that a user has called this API before the mesh is prepared and consequently we
   // don't yet have the subdomains in meshSubdomains()
@@ -4321,8 +4438,6 @@ MooseMesh::getPRefinementMapHelper(
     const Elem & elem,
     const std::map<std::pair<ElemType, unsigned int>, std::vector<QpMap>> & map) const
 {
-  mooseAssert(elem.active() && elem.p_refinement_flag() == Elem::JUST_REFINED,
-              "These are the conditions that should be met for requesting a refinement map");
   // We are actually seeking the map stored with the p_level - 1 key, e.g. the refinement map that
   // maps from the previous p_level to this element's p_level
   return libmesh_map_find(map,
@@ -4361,4 +4476,10 @@ const std::vector<QpMap> &
 MooseMesh::getPCoarseningSideMap(const Elem & elem) const
 {
   return getPCoarseningMapHelper(elem, _elem_type_to_p_coarsening_side_map);
+}
+
+bool
+MooseMesh::skipNoncriticalPartitioning() const
+{
+  return _mesh->skip_noncritical_partitioning();
 }

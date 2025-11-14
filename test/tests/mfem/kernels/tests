@@ -6,42 +6,25 @@
     input = curlcurl.i
     xmldiff = 'OutputData/CurlCurl/Run0/Run0.pvd
                 OutputData/CurlCurl/Run0/Cycle000001/proc000000.vtu'
-    ignored_items = "root['VTKFile']['@version']"
     requirement = 'The system shall have the ability to solve a definite Maxwell problem with Nedelec elements of the first kind using MFEM.'
-    mfem = true
-    max_parallel = 1
+    capabilities = 'mfem'
+    compute_devices = 'cpu' # schemadiff with cuda
+    max_parallel = 1 # schemadiff with multiple ranks
     recover = false
     max_threads = 1
     platform = 'linux'
-  []
-  [MFEMCurlCurlLOR]
-    type = XMLDiff
-    input = curlcurl.i
-    xmldiff = 'OutputData/CurlCurlLOR/Run0/Run0.pvd
-                OutputData/CurlCurlLOR/Run0/Cycle000001/proc000000.vtu'
-    ignored_items = "root['VTKFile']['@version']"
-    cli_args = 'FESpaces/HCurlFESpace/fec_order=THIRD Solver/type=MFEMGMRESSolver '
-               'Solver/l_tol=1e-14 Solver/preconditioner=ams Preconditioner/ams/low_order_refined=true '
-               'Outputs/ParaViewDataCollection/file_base=OutputData/CurlCurlLOR '
-    requirement = 'The system shall have the ability to solve a LOR definite Maxwell problem with Nedelec elements of the first kind using MFEM.'
-    mfem = true
-    max_parallel = 1
-    recover = false
-    max_threads = 1
-    platform = 'linux'
-    abs_zero = 1e-6
   []
   [MFEMDiffusion]
     type = XMLDiff
     input = diffusion.i
     xmldiff = 'OutputData/Diffusion/Run0/Run0.pvd
                 OutputData/Diffusion/Run0/Cycle000001/proc000000.vtu'
-    ignored_items = "root['VTKFile']['@version']"
-    cli_args = 'Solver/type=MFEMCGSolver Solver/preconditioner=boomeramg'
     requirement = 'The system shall have the ability to solve a diffusion problem using MFEM.'
-    mfem = true
-    max_parallel = 1
+    capabilities = 'mfem'
+    compute_devices = 'cpu cuda'
+    max_parallel = 1 # schemadiff with multiple ranks
     recover = false
+    expect_out = 'Parallel Type:.*distributed.*Mesh Dimension.*3.*Spatial Dimension.*3.*Elems.*2476.*Num Subdomains.*1.*Solver.*MFEMHypreGMRES'
   []
   [MFEMDiffusionPartial]
     type = XMLDiff
@@ -50,53 +33,37 @@
               'OutputData/Diffusion/Run0/Cycle000001/proc000000.vtu'
     cli_args = 'Solver/type=MFEMCGSolver Solver/preconditioner=jacobi '
                'Executioner/assembly_level=partial'
-    ignored_items = "root['VTKFile']['@version']"
     requirement = 'The system shall have the ability to solve a diffusion problem with partial assembly using MFEM.'
-    mfem = true
-    max_parallel = 1
+    capabilities = 'mfem'
+    compute_devices = 'cpu cuda'
+    max_parallel = 1 # schemadiff with multiple ranks
     recover = false
   []
-  [MFEMDiffusionLOR]
+  [MFEMDiffusionMatFree]
     type = XMLDiff
     input = diffusion.i
-    xmldiff = 'OutputData/DiffusionLOR/Run0/Run0.pvd '
-              'OutputData/DiffusionLOR/Run0/Cycle000001/proc000000.vtu'
-    ignored_items = "root['VTKFile']['@version']"
-    cli_args = 'FESpaces/H1FESpace/fec_order=SECOND Solver/type=MFEMCGSolver Solver/l_tol=1e-16 '
-               'Solver/preconditioner=boomeramg Preconditioner/boomeramg/low_order_refined=true '
-               'Outputs/ParaViewDataCollection/file_base=OutputData/DiffusionLOR '
-    requirement = 'MOOSE shall have the ability to solve a diffusion problem with Low-Order-Refined preconditioning set up from MOOSE and produce the same result as a native MFEM run.'
-    mfem = true
+    xmldiff = 'OutputData/Diffusion/Run0/Run0.pvd '
+              'OutputData/Diffusion/Run0/Cycle000001/proc000000.vtu'
+    cli_args = 'Solver/type=MFEMCGSolver Solver/preconditioner=jacobi '
+               'Executioner/device=ceed-cpu '
+               'Executioner/assembly_level=none'
+    compute_devices = 'ceed-cpu'
+    requirement = 'The system shall have the ability to solve a diffusion problem with matrix-free assembly using MFEM.'
+    capabilities = 'mfem'
     max_parallel = 1
     recover = false
-    abs_zero = 1e-6
   []
   [MFEMGradDiv]
     type = XMLDiff
     input = graddiv.i
     xmldiff = 'OutputData/GradDiv/Run0/Run0.pvd
                 OutputData/GradDiv/Run0/Cycle000001/proc000000.vtu'
-    ignored_items = "root['VTKFile']['@version']"
     requirement = 'The system shall have the ability to solve a grad-div problem with Raviart-Thomas elements using MFEM.'
-    mfem = true
-    max_parallel = 1
+    capabilities = 'mfem'
+    compute_devices = 'cpu cuda'
+    max_parallel = 1 # schemadiff with multiple ranks
     recover = false
-  []
-  [MFEMGradDivLOR]
-    type = XMLDiff
-    input = graddiv.i
-    xmldiff = 'OutputData/GradDivLOR/Run0/Run0.pvd
-                OutputData/GradDivLOR/Run0/Cycle000001/proc000000.vtu'
-    ignored_items = "root['VTKFile']['@version']"
-    cli_args = 'Mesh/file=../mesh/beam-hex.mesh FESpaces/HDivFESpace/fec_order=THIRD '
-               'Solver/type=MFEMCGSolver Solver/l_tol=1e-14 Solver/preconditioner=ADS '
-               'Preconditioner/ADS/low_order_refined=true '
-               'Outputs/ParaViewDataCollection/file_base=OutputData/GradDivLOR '
-    requirement = 'The system shall have the ability to solve a LOR grad-div problem with Raviart-Thomas elements using MFEM.'
-    mfem = true
-    max_parallel = 1
-    recover = false
-    abs_zero = 1e-6
+    errors = 'foobarbaz' # allow cuda errors I guess?
   []
   [MFEMHeatConduction]
     type = XMLDiff
@@ -106,14 +73,13 @@
               'OutputData/HeatConduction/Run0/Cycle000004/proc000000.vtu'
     cli_args = 'BCs/active="bottom top_dirichlet" '
                'Executioner/dt=0.25 Executioner/end_time=1.0 '
-               'Outputs/ParaViewDataCollection/file_base=OutputData/HeatConduction '
-               'Solver/type=MFEMCGSolver Solver/preconditioner=boomeramg '
-               'Executioner/assembly_level=element'
-    ignored_items = "root['VTKFile']['@version']"
+               'Outputs/ParaViewDataCollection/file_base=OutputData/HeatConduction'
     requirement = 'The system shall have the ability to solve a transient heat conduction problem using MFEM.'
-    mfem = true
-    max_parallel = 1
+    capabilities = 'mfem'
+    compute_devices = 'cpu cuda'
+    max_parallel = 1 # schemadiff with multiple ranks
     recover = false
+    restep = false
   []
   [MFEMHeatConductionElement]
     type = XMLDiff
@@ -126,50 +92,67 @@
                'Outputs/ParaViewDataCollection/file_base=OutputData/HeatConduction '
                'Solver/type=MFEMCGSolver Solver/preconditioner=jacobi '
                'Executioner/assembly_level=element'
-    ignored_items = "root['VTKFile']['@version']"
     requirement = 'The system shall have the ability to solve a transient heat conduction problem with element assembly using MFEM.'
-    mfem = true
-    max_parallel = 1
+    capabilities = 'mfem'
+    compute_devices = 'cpu cuda'
+    valgrind = none
+    max_parallel = 1 # schemadiff with multiple ranks
     recover = false
+    restep = false
   []
-  [MFEMHeatConductionLOR]
+  [MFEMHeatConductionMatFree]
     type = XMLDiff
     input = heattransfer.i
-    xmldiff = 'OutputData/HeatConductionLOR/Run0/Run0.pvd
-                OutputData/HeatConductionLOR/Run0/Cycle000001/proc000000.vtu
-                OutputData/HeatConductionLOR/Run0/Cycle000004/proc000000.vtu'
-    ignored_items = "root['VTKFile']['@version']"
+    xmldiff = 'OutputData/HeatConduction/Run0/Run0.pvd '
+              'OutputData/HeatConduction/Run0/Cycle000001/proc000000.vtu '
+              'OutputData/HeatConduction/Run0/Cycle000004/proc000000.vtu'
     cli_args = 'BCs/active="bottom top_dirichlet" '
                'Executioner/dt=0.25 Executioner/end_time=1.0 '
-               'FESpaces/H1FESpace/fec_order=SECOND Solver/type=MFEMCGSolver Solver/l_tol=1e-22 '
-               'Solver/preconditioner=boomeramg Preconditioner/boomeramg/low_order_refined=true '
-               'Outputs/ParaViewDataCollection/file_base=OutputData/HeatConductionLOR '
-    requirement = 'MOOSE shall have the ability to solve a transient heat conduction problem with Low-Order-Refined preconditioning set up from MOOSE and produce the same result as a native MFEM run.'
-    mfem = true
+               'Outputs/ParaViewDataCollection/file_base=OutputData/HeatConduction '
+               'Solver/type=MFEMCGSolver Solver/preconditioner=jacobi '
+               'Executioner/assembly_level=none '
+               'Executioner/device=ceed-cpu'
+    compute_devices = 'ceed-cpu'
+    requirement = 'The system shall have the ability to solve a transient heat conduction problem with matrix-free assembly using MFEM.'
+    capabilities = 'mfem'
+    valgrind = none
     max_parallel = 1
     recover = false
+    restep = false
   []
   [MFEMHeatTransfer]
     type = XMLDiff
     input = heattransfer.i
     xmldiff = 'OutputData/HeatTransfer/Run0/Run0.pvd
-               OutputData/HeatTransfer/Run0/Cycle000003/proc000000.vtu'
-    cli_args = 'Solver/type=MFEMCGSolver Solver/preconditioner=boomeramg '
-    ignored_items = "root['VTKFile']['@version']"
+                OutputData/HeatTransfer/Run0/Cycle000003/proc000000.vtu'
     requirement = 'The system shall have the ability to solve a transient heat conduction problem with a heat transfer coefficient on one boundary using MFEM.'
-    mfem = true
-    max_parallel = 1
+    capabilities = 'mfem'
+    compute_devices = 'cpu cuda'
+    max_parallel = 1 # schemadiff with multiple ranks
     recover = false
+    restep = false
   []
+  [MFEMMixedHeatTransfer]
+    type = XMLDiff
+    input = mixed_heattransfer.i
+    xmldiff = 'OutputData/MixedHeatTransfer/Run0/Run0.pvd
+                OutputData/MixedHeatTransfer/Run0/Cycle000003/proc000000.vtu'
+    requirement = 'The system shall have the ability to solve a transient heat conduction problem solved using the mixed form of the heat equation using MFEM.'
+    capabilities = 'mfem'
+    compute_devices = 'cpu' # schemadiff with cuda
+    max_parallel = 1 # schemadiff with multiple ranks
+    recover = false
+    restep = false
+  []  
   [MFEMLinearElasticity]
     type = XMLDiff
     input = linearelasticity.i
     xmldiff = 'OutputData/LinearElasticity/Run0/Run0.pvd
                 OutputData/LinearElasticity/Run0/Cycle000001/proc000000.vtu'
-    ignored_items = "root['VTKFile']['@version']"
     requirement = 'The system shall have the ability to solve a linear elasticity problem using MFEM.'
-    mfem = true
-    max_parallel = 1
+    capabilities = 'mfem'
+    compute_devices = 'cpu cuda'
+    max_parallel = 1 # schemadiff with multiple ranks
     recover = false
   []
   [MFEMGravity]
@@ -177,10 +160,10 @@
     input = gravity.i
     xmldiff = 'OutputData/Gravity/Run0/Run0.pvd
                 OutputData/Gravity/Run0/Cycle000001/proc000000.vtu'
-    ignored_items = "root['VTKFile']['@version']"
     requirement = 'The system shall have the ability to solve a linear elasticity problem for a beam deformed under gravitational loads using MFEM.'
-    mfem = true
-    max_parallel = 1
+    capabilities = 'mfem'
+    compute_devices = 'cpu' # schemadiff with cuda
+    max_parallel = 1 # schemadiff with multiple ranks
     recover = false
     max_threads = 1
     platform = 'linux'
@@ -191,7 +174,18 @@
     csvdiff = 'OutputData/Irrotational.csv'
     requirement = 'The system shall have the ability to solve for an irrotational vortex in two dimensions using MFEM.'
     abs_zero = 1e-6
-    mfem = true
+    capabilities = 'mfem'
+    compute_devices = 'cpu cuda'
+    recover = false
+  []
+  [MFEMDarcy]
+    type = CSVDiff
+    input = darcy.i
+    csvdiff = 'OutputData/Darcy.csv'
+    requirement = 'The system shall have the ability to solve a mixed Darcy problem in two dimensions using MFEM.'
+    abs_zero = 1e-6
+    capabilities = 'mfem'
+    compute_devices = 'cpu cuda'
     recover = false
   []
 []

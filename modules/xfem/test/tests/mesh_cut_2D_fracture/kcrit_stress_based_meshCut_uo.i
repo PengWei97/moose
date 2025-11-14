@@ -1,3 +1,6 @@
+# This will first use the nonlocal stress to drive the
+# right cracktip through the boundary.
+# Next, the left crack will grow from kcrit
 [VectorPostprocessors]
   [CrackFrontNonlocalStressVpp]
     type = CrackFrontNonlocalStress
@@ -5,13 +8,12 @@
     crack_front_definition = crackFrontDefinition
     box_length = 0.05
     box_height = 0.1
-    execute_on = NONLINEAR
   []
 []
 [UserObjects]
   [cut_mesh2]
     type = MeshCut2DFractureUserObject
-    mesh_file = make_edge_crack_in.e
+    mesh_generator_name = mesh_cutter
     growth_increment = 0.05
     ki_vectorpostprocessor = "II_KI_1"
     kii_vectorpostprocessor = "II_KII_1"

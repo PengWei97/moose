@@ -19,12 +19,16 @@
 #include "waspcore/Object.h"
 #include "wasplsp/LSP.h"
 #include "wasplsp/SymbolIterator.h"
+#include "waspplot/CustomPlotFile.h"
+#include "waspplot/CustomPlotSerialization.h"
 #include <string>
 #include <sstream>
 #include <memory>
 #include <vector>
+#include <set>
 #include <fstream>
 #include <cstdio>
+#include <filesystem>
 
 class MooseServerTest : public ::testing::Test
 {
@@ -187,8 +191,8 @@ protected:
   void format_locations(const wasp::DataArray & locations_array,
                         std::ostringstream & locations_stream) const
   {
-    std::string uri_pattern = "(" + std::string(wasp::lsp::m_uri_prefix) + ")(/.*/framework/)(.*)";
-    std::string uri_replace = "\\1...absolute.../framework/\\3";
+    auto uri_pattern = "(" + std::string(wasp::lsp::m_uri_prefix) + ")(.*/)(framework/.*|unit/.*)";
+    auto uri_replace = "\\1...absolute.../\\3";
 
     std::size_t locations_size = locations_array.size();
 
@@ -331,12 +335,109 @@ protected:
     EXPECT_EQ(expect_text, actual_text);
   }
 
-  // create moose_unit_app and moose_server to persist for reuse between tests
+  // build plotting request, handle request with server, and check response
+  void check_plotting(int request_id,
+                      const std::string & request_uri,
+                      int request_line,
+                      int request_char,
+                      const std::string & expect_title,
+                      const std::vector<double> & expect_keys,
+                      const std::vector<double> & expect_vals,
+                      double expect_xaxis_range_min,
+                      double expect_xaxis_range_max,
+                      double expect_yaxis_range_min,
+                      double expect_yaxis_range_max) const
+  {
+    // build plotting extension request for server with provided parameters
+    wasp::DataObject ext_request;
+    std::stringstream ext_errors;
+    std::string ext_method = "plotting";
+    EXPECT_TRUE(wasp::lsp::buildExtensionRequest(
+        ext_request, ext_errors, ext_method, request_id, request_uri, request_line, request_char));
+    EXPECT_TRUE(ext_errors.str().empty());
+
+    // handle plotting extension request built from parameters using server
+    wasp::DataObject ext_response;
+    EXPECT_TRUE(moose_server->handleExtensionRequest(ext_method, ext_request, ext_response));
+    EXPECT_TRUE(moose_server->getErrors().empty());
+
+    // dissect server plotting extension response and get CustomPlot object
+    std::stringstream response_errors;
+    int response_id;
+    wasp::DataArray ext_array;
+    EXPECT_TRUE(
+        wasp::lsp::dissectExtensionResponse(ext_response, response_errors, response_id, ext_array));
+    EXPECT_TRUE(response_errors.str().empty());
+    EXPECT_EQ(request_id, response_id);
+    EXPECT_EQ(1u, ext_array.size());
+    auto check_plot = wasp::deserializeCustomPlot(*(ext_array.at(0).to_object()));
+
+    // check dissected values of CustomPlot response object built by server
+    EXPECT_EQ(expect_title, check_plot->title().text());
+    EXPECT_TRUE(check_plot->x1Axis().hasRangeMin());
+    EXPECT_TRUE(check_plot->x1Axis().hasRangeMax());
+    EXPECT_TRUE(check_plot->y1Axis().hasRangeMin());
+    EXPECT_TRUE(check_plot->y1Axis().hasRangeMax());
+    EXPECT_EQ(expect_xaxis_range_min, check_plot->x1Axis().rangeMin());
+    EXPECT_EQ(expect_xaxis_range_max, check_plot->x1Axis().rangeMax());
+    EXPECT_EQ(expect_yaxis_range_min, check_plot->y1Axis().rangeMin());
+    EXPECT_EQ(expect_yaxis_range_max, check_plot->y1Axis().rangeMax());
+    EXPECT_EQ(1u, check_plot->series().size());
+    EXPECT_EQ(expect_keys, check_plot->series()[0]->keys());
+    EXPECT_EQ(expect_vals, check_plot->series()[0]->values());
+  }
+
+  // build watch files notification, handle using server, check diagnostics
+  void check_resource_updates(const std::set<std::string> & changed_resource_uris,
+                              std::size_t expect_diagnostics_size,
+                              const std::string & expect_diagnostics_list) const
+  {
+    // build watch files notification for server with changed resource uris
+    wasp::DataObject watch_files_notification;
+    std::stringstream watch_files_errors;
+    EXPECT_TRUE(wasp::lsp::buildDidChangeWatchedFilesNotification(
+        watch_files_notification, watch_files_errors, changed_resource_uris));
+    EXPECT_TRUE(watch_files_errors.str().empty());
+
+    // handle watch files notification built from resource uris with server
+    wasp::DataArray publish_diagnostics_array;
+    EXPECT_TRUE(moose_server->handleDidChangeWatchedFilesNotification(watch_files_notification,
+                                                                      publish_diagnostics_array));
+    EXPECT_TRUE(moose_server->getErrors().empty());
+
+    // check that array has two objects and last one is sentinel terminator
+    EXPECT_EQ(2u, publish_diagnostics_array.size());
+    EXPECT_TRUE(wasp::lsp::isDiagnosticsSentinelObject(*publish_diagnostics_array[1].to_object()));
+
+    // dissect diagnostics notification and check that it has expected size
+    std::stringstream diag_errors;
+    std::string diag_uri;
+    wasp::DataArray diag_array;
+    EXPECT_TRUE(wasp::lsp::dissectPublishDiagnosticsNotification(
+        *publish_diagnostics_array[0].to_object(), diag_errors, diag_uri, diag_array));
+    EXPECT_TRUE(diag_errors.str().empty());
+    EXPECT_EQ(wasp::lsp::m_uri_prefix + test_input_path, diag_uri);
+    EXPECT_EQ(expect_diagnostics_size, diag_array.size());
+
+    // lambda used to remove blank lines from formatted list of diagnostics
+    auto remove_blank_lines = [](std::string formatted_diagnostics)
+    {
+      pcrecpp::RE("\\n{2,}").GlobalReplace("\n", &formatted_diagnostics);
+      return formatted_diagnostics;
+    };
+
+    // build formatted list of diagnostics and check that it is as expected
+    std::ostringstream actual_diagnostics_list;
+    format_diagnostics(diag_array, actual_diagnostics_list);
+    EXPECT_EQ(expect_diagnostics_list, "\n" + remove_blank_lines(actual_diagnostics_list.str()));
+  }
+
+  // create moose_unit_app, moose_server, and test_input_path for all tests
   static void SetUpTestCase()
   {
     moose_unit_app = Moose::createMooseApp("MooseUnitApp", 0, nullptr);
-
     moose_server = std::make_unique<MooseServer>(*moose_unit_app);
+    test_input_path = std::filesystem::current_path().string() + "/test.i";
   }
 
   // delete moose_unit_app and moose_server after all test runs have completed
@@ -346,14 +447,16 @@ protected:
     moose_server.reset();
   }
 
-  // statically declare moose_unit_app and moose_server for reuse across tests
+  // make sure moose_unit_app, moose_server, and test_input_path are static
   static std::shared_ptr<MooseApp> moose_unit_app;
   static std::unique_ptr<MooseServer> moose_server;
+  static std::string test_input_path;
 };
 
-// define moose_unit_app and moose_server that are declared as static in class
+// define moose_unit_app, moose_server, and test_input_path declared static
 std::shared_ptr<MooseApp> MooseServerTest::moose_unit_app;
 std::unique_ptr<MooseServer> MooseServerTest::moose_server;
+std::string MooseServerTest::test_input_path;
 
 TEST_F(MooseServerTest, InitializeAndInitialized)
 {
@@ -369,6 +472,17 @@ TEST_F(MooseServerTest, InitializeAndInitialized)
   complete_caps[wasp::lsp::m_compitem] = compitem_caps;
   textdoc_caps[wasp::lsp::m_comp] = complete_caps;
   client_caps[wasp::lsp::m_text_document] = textdoc_caps;
+
+  // enable client workspace capabilities so server will register resources
+  wasp::DataObject watchfile_caps, workspace_caps;
+  watchfile_caps[wasp::lsp::m_dynamic_registration] = true;
+  watchfile_caps[wasp::lsp::m_relative_patterns] = true;
+  workspace_caps[wasp::lsp::m_change_watched_files] = watchfile_caps;
+  client_caps[wasp::lsp::m_workspace] = workspace_caps;
+
+  // enable plotting extension in client so server knows that it is allowed
+  client_caps[wasp::lsp::m_extensions_provider] = wasp::DataObject();
+  client_caps[wasp::lsp::m_extensions_provider]["plotting"] = true;
 
   // build initialize request with the test parameters
 
@@ -387,10 +501,16 @@ TEST_F(MooseServerTest, InitializeAndInitialized)
   // check snippet support is disabled by default before initialize request
   EXPECT_FALSE(moose_server->clientSupportsSnippets());
 
+  // check watcher support is disabled by default before initialize request
+  EXPECT_FALSE(moose_server->clientSupportsWatchers());
+
   EXPECT_TRUE(moose_server->handleInitializeRequest(initialize_request, initialize_response));
 
   // check server knows client has snippet support after initialize request
   EXPECT_TRUE(moose_server->clientSupportsSnippets());
+
+  // check server knows client has watcher support after initialize request
+  EXPECT_TRUE(moose_server->clientSupportsWatchers());
 
   EXPECT_TRUE(moose_server->getErrors().empty());
 
@@ -407,7 +527,7 @@ TEST_F(MooseServerTest, InitializeAndInitialized)
 
   EXPECT_EQ(request_id, response_id);
 
-  EXPECT_EQ(7u, server_capabilities.size());
+  EXPECT_EQ(8u, server_capabilities.size());
 
   EXPECT_TRUE(server_capabilities[wasp::lsp::m_text_doc_sync].is_object());
   const auto & text_doc_sync_caps = *(server_capabilities[wasp::lsp::m_text_doc_sync].to_object());
@@ -441,6 +561,17 @@ TEST_F(MooseServerTest, InitializeAndInitialized)
   EXPECT_TRUE(server_capabilities[wasp::lsp::m_hover_provider].is_bool());
   EXPECT_TRUE(server_capabilities[wasp::lsp::m_hover_provider].to_bool());
 
+  EXPECT_TRUE(server_capabilities[wasp::lsp::m_extensions_provider].is_object());
+  const auto & ext_caps = *(server_capabilities[wasp::lsp::m_extensions_provider].to_object());
+  EXPECT_EQ(2u, ext_caps.size());
+  EXPECT_TRUE(ext_caps.contains("plotting"));
+  EXPECT_TRUE(ext_caps["plotting"].is_bool());
+  EXPECT_TRUE(ext_caps["plotting"].to_bool());
+
+  EXPECT_TRUE(ext_caps.contains("watcherRegistration"));
+  EXPECT_TRUE(ext_caps["watcherRegistration"].is_bool());
+  EXPECT_TRUE(ext_caps["watcherRegistration"].to_bool());
+
   // build initialized notification which takes no extra parameters
 
   wasp::DataObject initialized_notification;
@@ -462,7 +593,7 @@ TEST_F(MooseServerTest, DocumentOpenAndDiagnostics)
 {
   // didopen test parameters - note input has error with variable u twice
 
-  std::string document_uri = wasp::lsp::m_uri_prefix + std::string("/test/input/path");
+  std::string document_uri = wasp::lsp::m_uri_prefix + test_input_path;
   std::string document_language_id = "test_language_id_string";
   int document_version = 1;
   std::string document_text_open = R"INPUT(
@@ -555,7 +686,7 @@ TEST_F(MooseServerTest, DocumentOpenAndSymbols)
   // symbols test parameters
 
   int request_id = 2;
-  std::string document_uri = wasp::lsp::m_uri_prefix + std::string("/test/input/path");
+  std::string document_uri = wasp::lsp::m_uri_prefix + test_input_path;
 
   // build symbols request with the test parameters
 
@@ -680,7 +811,7 @@ TEST_F(MooseServerTest, DocumentChangeAndDiagnostics)
 {
   // didchange test parameters - note input has error with bad bcs boundary
 
-  std::string document_uri = wasp::lsp::m_uri_prefix + std::string("/test/input/path");
+  std::string document_uri = wasp::lsp::m_uri_prefix + test_input_path;
   int document_version = 2;
   int start_line = -1;
   int start_character = -1;
@@ -757,7 +888,7 @@ TEST_F(MooseServerTest, DocumentChangeAndDiagnostics)
 
   EXPECT_EQ(document_uri, response_uri);
 
-  EXPECT_EQ(7u, diagnostics_array.size());
+  EXPECT_EQ(1u, diagnostics_array.size());
 
   std::ostringstream diagnostics_actual;
 
@@ -766,13 +897,14 @@ TEST_F(MooseServerTest, DocumentChangeAndDiagnostics)
   // expected diagnostics with zero-based lines and columns - bad bcs boundary
 
   std::string diagnostics_expect = R"INPUT(
-line:18 column:0 - (BCs/all/boundary):
-line:18 column:0 -     the following side sets (ids) do not exist on the mesh: top (2), bottom (3)
-line:18 column:0 -     MOOSE distinguishes between "node sets" and "side sets" depending on whether
-line:18 column:0 -     you are using "Nodal" or "Integrated" BCs respectively. Node sets corresponding
-line:18 column:0 -     to your side sets are constructed for you by default.
-line:18 column:0 -     Try setting "Mesh/construct_side_list_from_node_list=true" if you see this error.
-line:18 column:0 -     Note: If you are running with adaptivity you should prefer using side sets.
+line:18 column:4 - BCs/all/boundary: the following side sets (ids) do not exist on the mesh: top (2), bottom (3)
+
+MOOSE distinguishes between "node sets" and "side sets" depending on whether
+you are using "Nodal" or "Integrated" BCs respectively. Node sets corresponding
+to your side sets are constructed for you by default.
+
+Try setting "Mesh/construct_side_list_from_node_list=true" if you see this error.
+Note: If you are running with adaptivity you should prefer using side sets.
 )INPUT";
 
   EXPECT_EQ(diagnostics_expect, "\n" + diagnostics_actual.str());
@@ -783,7 +915,7 @@ TEST_F(MooseServerTest, DocumentChangeAndSymbols)
   // symbols test parameters
 
   int request_id = 3;
-  std::string document_uri = wasp::lsp::m_uri_prefix + std::string("/test/input/path");
+  std::string document_uri = wasp::lsp::m_uri_prefix + test_input_path;
 
   // build symbols request with the test parameters
 
@@ -910,7 +1042,7 @@ TEST_F(MooseServerTest, CompletionMeshDefaultedType)
 {
   // didchange test parameters - update input to set up autocomplete scenarios
 
-  std::string doc_uri = wasp::lsp::m_uri_prefix + std::string("/test/input/path");
+  std::string doc_uri = wasp::lsp::m_uri_prefix + test_input_path;
   int doc_version = 3;
   std::string doc_text_change = R"INPUT(
 [Mesh]
@@ -1028,8 +1160,8 @@ label: uniform_refine                         text: uniform_refine = ${1:0}     
 label: up_direction                           text: up_direction =                                      desc: Specify what axis... pos: [6.0]-[6.0] kind: 13 format: regular
 label: use_displaced_mesh                     text: use_displaced_mesh = ${1:true}                      desc: Create the displa... pos: [6.0]-[6.0] kind:  8 format: snippet
 label: use_split                              text: use_split = ${1:false}                              desc: Use split distrib... pos: [6.0]-[6.0] kind:  8 format: snippet
-label: *                                      text: [block_name]\n  type = \n  $0\n[]                   desc: custom user named... pos: [6.0]-[6.0] kind:  6 format: snippet
-label: Partitioner                            text: [Partitioner]\n  type = \n  $0\n[]                  desc: application named... pos: [6.0]-[6.0] kind: 22 format: snippet
+label: *                                      text: [block_name]\n  type = $1\n  $0\n[]                 desc: custom user named... pos: [6.0]-[6.0] kind:  6 format: snippet
+label: Partitioner                            text: [Partitioner]\n  type = $1\n  $0\n[]                desc: application named... pos: [6.0]-[6.0] kind: 22 format: snippet
 )INPUT";
 
   check_completions(request_id, doc_uri, request_line, request_char, expect_count, expect_items);
@@ -1038,7 +1170,7 @@ label: Partitioner                            text: [Partitioner]\n  type = \n  
 TEST_F(MooseServerTest, CompletionDocumentRootLevel)
 {
   // completion test parameters - at document root level outside of all blocks
-  std::string doc_uri = wasp::lsp::m_uri_prefix + std::string("/test/input/path");
+  std::string doc_uri = wasp::lsp::m_uri_prefix + test_input_path;
   int request_id = 5;
   int request_line = 42;
   int request_char = 0;
@@ -1061,7 +1193,7 @@ label: Debug                            text: [Debug]\n  $0\n[]                 
 label: DeprecatedBlock                  text: [DeprecatedBlock]\n  $0\n[]                  desc: application named... pos: [42.0]-[42.0] kind: 22 format: snippet
 label: DiracKernels                     text: [DiracKernels]\n  $0\n[]                     desc: application named... pos: [42.0]-[42.0] kind: 22 format: snippet
 label: Distributions                    text: [Distributions]\n  $0\n[]                    desc: application named... pos: [42.0]-[42.0] kind: 22 format: snippet
-label: Executioner                      text: [Executioner]\n  type = \n  $0\n[]           desc: application named... pos: [42.0]-[42.0] kind: 22 format: snippet
+label: Executioner                      text: [Executioner]\n  type = $1\n  $0\n[]         desc: application named... pos: [42.0]-[42.0] kind: 22 format: snippet
 label: Executors                        text: [Executors]\n  $0\n[]                        desc: application named... pos: [42.0]-[42.0] kind: 22 format: snippet
 label: FVBCs                            text: [FVBCs]\n  $0\n[]                            desc: application named... pos: [42.0]-[42.0] kind: 22 format: snippet
 label: FVICs                            text: [FVICs]\n  $0\n[]                            desc: application named... pos: [42.0]-[42.0] kind: 22 format: snippet
@@ -1074,7 +1206,7 @@ label: ICs                              text: [ICs]\n  $0\n[]                   
 label: InterfaceKernels                 text: [InterfaceKernels]\n  $0\n[]                 desc: application named... pos: [42.0]-[42.0] kind: 22 format: snippet
 label: Kernels                          text: [Kernels]\n  $0\n[]                          desc: application named... pos: [42.0]-[42.0] kind: 22 format: snippet
 label: Materials                        text: [Materials]\n  $0\n[]                        desc: application named... pos: [42.0]-[42.0] kind: 22 format: snippet
-label: Mesh                             text: [Mesh]\n  file = \n  $0\n[]                  desc: application named... pos: [42.0]-[42.0] kind: 22 format: snippet
+label: Mesh                             text: [Mesh]\n  file = $1\n  $0\n[]                desc: application named... pos: [42.0]-[42.0] kind: 22 format: snippet
 label: MeshDivisions                    text: [MeshDivisions]\n  $0\n[]                    desc: application named... pos: [42.0]-[42.0] kind: 22 format: snippet
 label: MultiApps                        text: [MultiApps]\n  $0\n[]                        desc: application named... pos: [42.0]-[42.0] kind: 22 format: snippet
 label: NodalKernels                     text: [NodalKernels]\n  $0\n[]                     desc: application named... pos: [42.0]-[42.0] kind: 22 format: snippet
@@ -1101,14 +1233,14 @@ label: VectorPostprocessors             text: [VectorPostprocessors]\n  $0\n[]  
 TEST_F(MooseServerTest, CompletionValueActiveBlocks)
 {
   // completion test parameters - on active parameter value in Variables block
-  std::string doc_uri = wasp::lsp::m_uri_prefix + std::string("/test/input/path");
+  std::string doc_uri = wasp::lsp::m_uri_prefix + test_input_path;
   int request_id = 6;
   int request_line = 9;
   int request_char = 12;
   std::size_t expect_count = 2;
   std::string expect_items = R"INPUT(
-label: u text: u desc: subblock name pos: [9.12]-[9.19] kind:  7 format: regular
-label: v text: v desc: subblock name pos: [9.12]-[9.19] kind:  7 format: regular
+label: u text: u desc: subblock name pos: [9.12]-[9.19] kind:  7 format: snippet
+label: v text: v desc: subblock name pos: [9.12]-[9.19] kind:  7 format: snippet
 )INPUT";
   check_completions(request_id, doc_uri, request_line, request_char, expect_count, expect_items);
 }
@@ -1116,14 +1248,14 @@ label: v text: v desc: subblock name pos: [9.12]-[9.19] kind:  7 format: regular
 TEST_F(MooseServerTest, CompletionValueBooleanParam)
 {
   // completion test parameters - on boolean value of solve param from Problem
-  std::string doc_uri = wasp::lsp::m_uri_prefix + std::string("/test/input/path");
+  std::string doc_uri = wasp::lsp::m_uri_prefix + test_input_path;
   int request_id = 7;
   int request_line = 33;
   int request_char = 10;
   std::size_t expect_count = 2;
   std::string expect_items = R"INPUT(
-label: false text: false desc:  pos: [33.10]-[33.15] kind:  8 format: regular
-label: true  text: true  desc:  pos: [33.10]-[33.15] kind:  8 format: regular
+label: false text: false desc:  pos: [33.10]-[33.15] kind:  8 format: snippet
+label: true  text: true  desc:  pos: [33.10]-[33.15] kind:  8 format: snippet
 )INPUT";
   check_completions(request_id, doc_uri, request_line, request_char, expect_count, expect_items);
 }
@@ -1131,16 +1263,16 @@ label: true  text: true  desc:  pos: [33.10]-[33.15] kind:  8 format: regular
 TEST_F(MooseServerTest, CompletionValueEnumsAndDocs)
 {
   // completion test parameters - on error_level enum in Terminator UserObject
-  std::string doc_uri = wasp::lsp::m_uri_prefix + std::string("/test/input/path");
+  std::string doc_uri = wasp::lsp::m_uri_prefix + test_input_path;
   int request_id = 8;
   int request_line = 39;
   int request_char = 18;
   std::size_t expect_count = 4;
   std::string expect_items = R"INPUT(
-label: ERROR   text: ERROR   desc: Throw a MOOSE err... pos: [39.18]-[39.22] kind: 20 format: regular
-label: INFO    text: INFO    desc: Output an informa... pos: [39.18]-[39.22] kind: 20 format: regular
-label: NONE    text: NONE    desc: No message will b... pos: [39.18]-[39.22] kind: 20 format: regular
-label: WARNING text: WARNING desc: Output a warning ... pos: [39.18]-[39.22] kind: 20 format: regular
+label: ERROR   text: ERROR   desc: Throw a MOOSE err... pos: [39.18]-[39.22] kind: 20 format: snippet
+label: INFO    text: INFO    desc: Output an informa... pos: [39.18]-[39.22] kind: 20 format: snippet
+label: NONE    text: NONE    desc: No message will b... pos: [39.18]-[39.22] kind: 20 format: snippet
+label: WARNING text: WARNING desc: Output a warning ... pos: [39.18]-[39.22] kind: 20 format: snippet
 )INPUT";
   check_completions(request_id, doc_uri, request_line, request_char, expect_count, expect_items);
 }
@@ -1148,17 +1280,17 @@ label: WARNING text: WARNING desc: Output a warning ... pos: [39.18]-[39.22] kin
 TEST_F(MooseServerTest, CompletionValueAllowedTypes)
 {
   // completion test parameters - on type parameter value in Executioner block
-  std::string doc_uri = wasp::lsp::m_uri_prefix + std::string("/test/input/path");
+  std::string doc_uri = wasp::lsp::m_uri_prefix + test_input_path;
   int request_id = 9;
   int request_line = 30;
   int request_char = 9;
   std::size_t expect_count = 5;
   std::string expect_items = R"INPUT(
-label: Eigenvalue         text: Eigenvalue                       desc: Eigenvalue solves... pos: [30.9]-[30.18] kind: 25 format: regular
-label: InversePowerMethod text: InversePowerMethod\nbx_norm = \n desc: Inverse power met... pos: [30.9]-[30.18] kind: 25 format: regular
-label: NonlinearEigen     text: NonlinearEigen\nbx_norm = \n     desc: Executioner for e... pos: [30.9]-[30.18] kind: 25 format: regular
-label: Steady             text: Steady                           desc: Executioner for s... pos: [30.9]-[30.18] kind: 25 format: regular
-label: Transient          text: Transient                        desc: Executioner for t... pos: [30.9]-[30.18] kind: 25 format: regular
+label: Eigenvalue         text: Eigenvalue                           desc: Eigenvalue solves... pos: [30.9]-[30.18] kind: 25 format: snippet
+label: InversePowerMethod text: InversePowerMethod\nbx_norm = $1\n$0 desc: Inverse power met... pos: [30.9]-[30.18] kind: 25 format: snippet
+label: NonlinearEigen     text: NonlinearEigen\nbx_norm = $1\n$0     desc: Executioner for e... pos: [30.9]-[30.18] kind: 25 format: snippet
+label: Steady             text: Steady                               desc: Executioner for s... pos: [30.9]-[30.18] kind: 25 format: snippet
+label: Transient          text: Transient                            desc: Executioner for t... pos: [30.9]-[30.18] kind: 25 format: snippet
 )INPUT";
   check_completions(request_id, doc_uri, request_line, request_char, expect_count, expect_items);
 }
@@ -1166,16 +1298,16 @@ label: Transient          text: Transient                        desc: Execution
 TEST_F(MooseServerTest, CompletionValueInputLookups)
 {
   // completion test parameters - on displacements parameter value in VacuumBC
-  std::string doc_uri = wasp::lsp::m_uri_prefix + std::string("/test/input/path");
+  std::string doc_uri = wasp::lsp::m_uri_prefix + test_input_path;
   int request_id = 10;
   int request_line = 26;
   int request_char = 21;
   std::size_t expect_count = 4;
   std::string expect_items = R"INPUT(
-label: disp_x text: disp_x desc: from /AuxVariables/* pos: [26.21]-[26.27] kind: 18 format: regular
-label: disp_y text: disp_y desc: from /AuxVariables/* pos: [26.21]-[26.27] kind: 18 format: regular
-label: u      text: u      desc: from /Variables/*    pos: [26.21]-[26.27] kind: 18 format: regular
-label: v      text: v      desc: from /Variables/*    pos: [26.21]-[26.27] kind: 18 format: regular
+label: disp_x text: disp_x desc: from /AuxVariables/* pos: [26.21]-[26.27] kind: 18 format: snippet
+label: disp_y text: disp_y desc: from /AuxVariables/* pos: [26.21]-[26.27] kind: 18 format: snippet
+label: u      text: u      desc: from /Variables/*    pos: [26.21]-[26.27] kind: 18 format: snippet
+label: v      text: v      desc: from /Variables/*    pos: [26.21]-[26.27] kind: 18 format: snippet
 )INPUT";
   check_completions(request_id, doc_uri, request_line, request_char, expect_count, expect_items);
 }
@@ -1185,7 +1317,7 @@ TEST_F(MooseServerTest, DefinitionObjectTypeSource)
   // definition test parameters - on Transient.C defined object type Transient
 
   int request_id = 11;
-  std::string doc_uri = wasp::lsp::m_uri_prefix + std::string("/test/input/path");
+  std::string doc_uri = wasp::lsp::m_uri_prefix + test_input_path;
   int line = 30;
   int character = 9;
 
@@ -1240,7 +1372,7 @@ TEST_F(MooseServerTest, DefinitionInputFileLookups)
   // definition test parameters - on AuxVariables defined displacements disp_x
 
   int request_id = 12;
-  std::string doc_uri = wasp::lsp::m_uri_prefix + std::string("/test/input/path");
+  std::string doc_uri = wasp::lsp::m_uri_prefix + test_input_path;
   int line = 26;
   int character = 21;
 
@@ -1284,9 +1416,9 @@ TEST_F(MooseServerTest, DefinitionInputFileLookups)
   // expected locations with zero-based lines and columns
 
   std::string locations_expect = R"INPUT(
-document_uri: "file:///test/input/path"    location_start: [16.4]    location_end: [16.10]
-document_uri: "file:///test/input/path"    location_start: [17.7]    location_end: [17.13]
-document_uri: "file:///test/input/path"    location_start: [19.5]    location_end: [19.11]
+document_uri: "file://...absolute.../unit/test.i"    location_start: [16.4]    location_end: [16.10]
+document_uri: "file://...absolute.../unit/test.i"    location_start: [17.7]    location_end: [17.13]
+document_uri: "file://...absolute.../unit/test.i"    location_start: [19.5]    location_end: [19.11]
 )INPUT";
 
   EXPECT_EQ(locations_expect, "\n" + locations_actual.str());
@@ -1295,7 +1427,7 @@ document_uri: "file:///test/input/path"    location_start: [19.5]    location_en
 TEST_F(MooseServerTest, HoverDocumentationRequests)
 {
   // check hover 01 - on boundary parameter key in BCs block of VacuumBC type
-  std::string doc_uri = wasp::lsp::m_uri_prefix + std::string("/test/input/path");
+  std::string doc_uri = wasp::lsp::m_uri_prefix + test_input_path;
   int request_id = 13;
   int request_line = 24;
   int request_char = 10;
@@ -1341,7 +1473,7 @@ TEST_F(MooseServerTest, HoverDocumentationRequests)
 TEST_F(MooseServerTest, CompletionPartialInputCases)
 {
   // didchange test parameters - update for partial input completion checking
-  std::string doc_uri = wasp::lsp::m_uri_prefix + std::string("/test/input/path");
+  std::string doc_uri = wasp::lsp::m_uri_prefix + test_input_path;
   int doc_version = 4;
   std::string doc_text_change = R"INPUT(
 [Mesh]
@@ -1392,7 +1524,7 @@ TEST_F(MooseServerTest, CompletionPartialInputCases)
 label: ghosted_boundaries           text: ghosted_boundaries =            desc: Boundaries to be ... pos: [3.2]-[3.6] kind: 14 format: regular
 label: ghosted_boundaries_inflation text: ghosted_boundaries_inflation =  desc: If you are using ... pos: [3.2]-[3.6] kind: 14 format: regular
 label: ghosting_patch_size          text: ghosting_patch_size =           desc: The number of nea... pos: [3.2]-[3.6] kind: 14 format: regular
-label: *                            text: [ghos]\n  type = \n  $0\n[]     desc: custom user named... pos: [3.2]-[3.6] kind:  6 format: snippet
+label: *                            text: [ghos]\n  type = $1\n  $0\n[]   desc: custom user named... pos: [3.2]-[3.6] kind:  6 format: snippet
 )INPUT";
   check_completions(request_id, doc_uri, request_line, request_char, expect_count, expect_items);
 
@@ -1402,8 +1534,8 @@ label: *                            text: [ghos]\n  type = \n  $0\n[]     desc: 
   request_char = 5;
   expect_count = 2;
   expect_items = R"INPUT(
-label: FVInitialCondition text: FVInitialCondition]\n  type = \n  $0\n[] desc: application named... pos: [7.5]-[7.6] kind: 22 format: snippet
-label: InitialCondition   text: InitialCondition]\n  type = \n  $0\n[]   desc: application named... pos: [7.5]-[7.6] kind: 22 format: snippet
+label: FVInitialCondition text: FVInitialCondition]\n  type = $1\n  $0\n[] desc: application named... pos: [7.5]-[7.6] kind: 22 format: snippet
+label: InitialCondition   text: InitialCondition]\n  type = $1\n  $0\n[]   desc: application named... pos: [7.5]-[7.6] kind: 22 format: snippet
 )INPUT";
   check_completions(request_id, doc_uri, request_line, request_char, expect_count, expect_items);
 
@@ -1413,8 +1545,8 @@ label: InitialCondition   text: InitialCondition]\n  type = \n  $0\n[]   desc: a
   request_char = 15;
   expect_count = 2;
   expect_items = R"INPUT(
-label: u text: u desc: from /Variables/* pos: [16.15]-[16.15] kind: 18 format: regular
-label: v text: v desc: from /Variables/* pos: [16.15]-[16.15] kind: 18 format: regular
+label: u text: u desc: from /Variables/* pos: [16.15]-[16.15] kind: 18 format: snippet
+label: v text: v desc: from /Variables/* pos: [16.15]-[16.15] kind: 18 format: snippet
 )INPUT";
   check_completions(request_id, doc_uri, request_line, request_char, expect_count, expect_items);
 
@@ -1424,9 +1556,9 @@ label: v text: v desc: from /Variables/* pos: [16.15]-[16.15] kind: 18 format: r
   request_char = 6;
   expect_count = 3;
   expect_items = R"INPUT(
-label: TimeIntegrator  text: TimeIntegrator]\n  type = \n  $0\n[] desc: application named... pos: [21.3]-[21.6] kind: 22 format: snippet
-label: TimeStepper     text: TimeStepper]\n  type = \n  $0\n[]    desc: application named... pos: [21.3]-[21.6] kind: 22 format: snippet
-label: TimeSteppers    text: TimeSteppers]\n  $0\n[]              desc: application named... pos: [21.3]-[21.6] kind: 22 format: snippet
+label: TimeIntegrator  text: TimeIntegrator]\n  type = $1\n  $0\n[] desc: application named... pos: [21.3]-[21.6] kind: 22 format: snippet
+label: TimeStepper     text: TimeStepper]\n  type = $1\n  $0\n[]    desc: application named... pos: [21.3]-[21.6] kind: 22 format: snippet
+label: TimeSteppers    text: TimeSteppers]\n  $0\n[]                desc: application named... pos: [21.3]-[21.6] kind: 22 format: snippet
 )INPUT";
   check_completions(request_id, doc_uri, request_line, request_char, expect_count, expect_items);
 
@@ -1436,11 +1568,11 @@ label: TimeSteppers    text: TimeSteppers]\n  $0\n[]              desc: applicat
   request_char = 23;
   expect_count = 5;
   expect_items = R"INPUT(
-label: 1                 text: 1                 desc:  pos: [27.23]-[27.23] kind: 20 format: regular
-label: 2                 text: 2                 desc:  pos: [27.23]-[27.23] kind: 20 format: regular
-label: 3                 text: 3                 desc:  pos: [27.23]-[27.23] kind: 20 format: regular
-label: DEFAULT           text: DEFAULT           desc:  pos: [27.23]-[27.23] kind: 20 format: regular
-label: PROBLEM_DIMENSION text: PROBLEM_DIMENSION desc:  pos: [27.23]-[27.23] kind: 20 format: regular
+label: 1                 text: 1                 desc:  pos: [27.23]-[27.23] kind: 20 format: snippet
+label: 2                 text: 2                 desc:  pos: [27.23]-[27.23] kind: 20 format: snippet
+label: 3                 text: 3                 desc:  pos: [27.23]-[27.23] kind: 20 format: snippet
+label: DEFAULT           text: DEFAULT           desc:  pos: [27.23]-[27.23] kind: 20 format: snippet
+label: PROBLEM_DIMENSION text: PROBLEM_DIMENSION desc:  pos: [27.23]-[27.23] kind: 20 format: snippet
 )INPUT";
   check_completions(request_id, doc_uri, request_line, request_char, expect_count, expect_items);
 
@@ -1460,7 +1592,7 @@ label: linear_residual_start_time text: linear_residual_start_time =           d
 TEST_F(MooseServerTest, DocumentReferencesRequest)
 {
   // didchange test parameters - update input to set up document references
-  std::string doc_uri = wasp::lsp::m_uri_prefix + std::string("/test/input/path");
+  std::string doc_uri = wasp::lsp::m_uri_prefix + test_input_path;
   int doc_version = 5;
   std::string doc_text_change = R"INPUT(
 [Mesh]
@@ -1544,12 +1676,12 @@ TEST_F(MooseServerTest, DocumentReferencesRequest)
   std::ostringstream locations_actual;
   format_locations(locations_array, locations_actual);
   std::string locations_expect = R"INPUT(
-document_uri: "file:///test/input/path"    location_start: [6.3]    location_end: [6.4]
-document_uri: "file:///test/input/path"    location_start: [12.15]    location_end: [12.18]
-document_uri: "file:///test/input/path"    location_start: [19.15]    location_end: [19.16]
-document_uri: "file:///test/input/path"    location_start: [26.21]    location_end: [26.22]
-document_uri: "file:///test/input/path"    location_start: [26.25]    location_end: [26.26]
-document_uri: "file:///test/input/path"    location_start: [26.29]    location_end: [26.30]
+document_uri: "file://...absolute.../unit/test.i"    location_start: [6.3]    location_end: [6.4]
+document_uri: "file://...absolute.../unit/test.i"    location_start: [12.15]    location_end: [12.18]
+document_uri: "file://...absolute.../unit/test.i"    location_start: [19.15]    location_end: [19.16]
+document_uri: "file://...absolute.../unit/test.i"    location_start: [26.21]    location_end: [26.22]
+document_uri: "file://...absolute.../unit/test.i"    location_start: [26.25]    location_end: [26.26]
+document_uri: "file://...absolute.../unit/test.i"    location_start: [26.29]    location_end: [26.30]
 )INPUT";
   EXPECT_EQ(locations_expect, "\n" + locations_actual.str());
 }
@@ -1564,7 +1696,7 @@ TEST_F(MooseServerTest, DocumentFormattingRequest)
 
   // didchange test parameters - update input to set up document formatting
 
-  std::string doc_uri = wasp::lsp::m_uri_prefix + std::string("/test/input/path");
+  std::string doc_uri = wasp::lsp::m_uri_prefix + test_input_path;
   int doc_version = 6;
   std::string doc_text_change = R"INPUT(
 
@@ -1619,7 +1751,9 @@ expression = '0.1 - 2.0 * 0.2 * x^1 + 3.0 * 0.3 * x^2 - 4.0 * 0.4 * x^3 + 5.0 * 
     !include    include_variables.i    # inline comment 01
 
         # normal comment 01
-   [Problem] solve=  false []
+   Problem/solve=  true
+
+   [Kernels/diff]type=Diffusion variable=u[]
 
 [Executioner]        # inline comment 02
 # normal comment 02
@@ -1686,7 +1820,7 @@ expression = '0.1 - 2.0 * 0.2 * x^1 + 3.0 * 0.3 * x^2 - 4.0 * 0.4 * x^3 + 5.0 * 
   // expected textedits with zero-based lines and columns
 
   std::string textedits_expect = R"INPUT(
-textedit_position: [2.0]-[58.11]
+textedit_position: [2.0]-[60.11]
 textedit_new_text:
 num_dim = 2
 
@@ -1742,8 +1876,11 @@ num_dim = 2
 !include include_variables.i # inline comment 01
 
 # normal comment 01
-[Problem]
-    solve = false
+Problem/solve = true
+
+[Kernels/diff]
+    type = Diffusion
+    variable = u
 []
 
 [Executioner] # inline comment 02
@@ -1762,7 +1899,7 @@ num_dim = 2
 TEST_F(MooseServerTest, DiagnosticsEmptyMessageSkip)
 {
   // didchange test parameters - create empty diagnostic which is not added
-  std::string doc_uri = wasp::lsp::m_uri_prefix + std::string("/test/input/path");
+  std::string doc_uri = wasp::lsp::m_uri_prefix + test_input_path;
   int doc_version = 7;
   std::string doc_text_change = R"INPUT(
 [Mesh]
@@ -1797,11 +1934,469 @@ TEST_F(MooseServerTest, DiagnosticsEmptyMessageSkip)
   // check that diagnostics array size and message contents are as expected
   std::size_t diagnostics_size_expect = 1;
   std::string diagnostics_list_expect = R"INPUT(
-line:11 column:2 -     no variable 'undefined' found for use in function parser expression
+line:11 column:2 - no variable 'undefined' found for use in function parser expression in 'globalvar'
 )INPUT";
 
   EXPECT_EQ(diagnostics_size_expect, diagnostics_array.size());
   EXPECT_EQ(diagnostics_list_expect, "\n" + diagnostics_list_actual.str());
+}
+
+TEST_F(MooseServerTest, PlottingExtensionRequests)
+{
+  // write csv files with data to disk that will be referenced by functions
+  std::ofstream csv_row_basic("csv_row_basic.csv");
+  csv_row_basic << R"INPUT(
+301, 302, 303, 304 # ignored comment
+3.1, 3.2, 3.3, 3.4 # ignored comment
+)INPUT";
+  csv_row_basic.close();
+  std::ofstream csv_col_basic("csv_col_basic.csv");
+  csv_col_basic << R"INPUT(
+401, 4.1 # ignored comment
+402, 4.2 # ignored comment
+403, 4.3 # ignored comment
+404, 4.4 # ignored comment
+)INPUT";
+  csv_col_basic.close();
+  std::ofstream csv_row_title("csv_row_title.csv");
+  csv_row_title << R"INPUT(
+heat, 5.1, 5.2, 5.3, 5.4 # ignored comment
+skip, 710, 720, 730, 740 # ignored comment
+time, 501, 502, 503, 504 # ignored comment
+)INPUT";
+  csv_row_title.close();
+  std::ofstream csv_col_index("csv_col_index.csv");
+  csv_col_index << R"INPUT(
+6.1, 810, 601 # ignored comment
+6.2, 820, 602 # ignored comment
+6.3, 830, 603 # ignored comment
+6.4, 840, 604 # ignored comment
+)INPUT";
+  csv_col_index.close();
+
+  // didchange test parameters - update input and prepare plotting requests
+  std::string doc_uri = wasp::lsp::m_uri_prefix + test_input_path;
+  int doc_version = 8;
+  std::string doc_text_change = R"INPUT(
+[Mesh]
+  type = GeneratedMesh
+  dim = 3
+[]
+[Functions]
+  [input_x_and_y]
+    type = PiecewiseLinear
+    x = '101 102 103 104 105 106 107 108'
+    y = '1.1 1.2 1.3 1.4 1.5 1.6 1.7 1.8'
+  []
+  [input_xy_data]
+    type = PiecewiseConstant
+    xy_data = '2.1 201
+               2.2 202
+               2.3 203
+               2.4 204
+               2.5 205
+               2.6 206
+               2.7 207
+               2.8 208'
+  []
+  [csv_row_basic]
+    type = PiecewiseLinear
+    data_file = csv_row_basic.csv
+    format = rows
+  []
+  [csv_col_basic]
+    type = PiecewiseConstant
+    data_file = csv_col_basic.csv
+    format = columns
+  []
+  [csv_row_title]
+    type = PiecewiseLinear
+    data_file = csv_row_title.csv
+    format = rows
+    xy_in_file_only = false
+    x_title = time
+    y_title = heat
+  []
+  [csv_col_index]
+    type = PiecewiseConstant
+    data_file = csv_col_index.csv
+    format = columns
+    xy_in_file_only = false
+    x_index_in_file = 2
+    y_index_in_file = 0
+  []
+[]
+[Variables]
+  [u]
+  []
+[]
+[BCs]
+  [bc_input_x_and_y_func]
+    type = FunctionDirichletBC
+    boundary = 0
+    variable = u
+    function = input_x_and_y
+  []
+  [bc_input_xy_data_func]
+    type = FunctionDirichletBC
+    boundary = 1
+    variable = u
+    function = input_xy_data
+  []
+  [bc_csv_row_basic_func]
+    type = FunctionDirichletBC
+    boundary = 2
+    variable = u
+    function = csv_row_basic
+  []
+  [bc_csv_col_basic_func]
+    type = FunctionDirichletBC
+    boundary = 3
+    variable = u
+    function = csv_col_basic
+  []
+  [bc_csv_row_title_func]
+    type = FunctionDirichletBC
+    boundary = 4
+    variable = u
+    function = csv_row_title
+  []
+  [bc_csv_col_index_func]
+    type = FunctionDirichletBC
+    boundary = 5
+    variable = u
+    function = csv_col_index
+  []
+[]
+[Kernels]
+  [diff]
+    type = Diffusion
+    variable = u
+  []
+[]
+[Executioner]
+  type = Transient
+[]
+)INPUT";
+
+  // build didchange notification from parameters and handle it with server
+  wasp::DataObject didchange_notification, diagnostics_notification;
+  std::stringstream errors;
+  EXPECT_TRUE(wasp::lsp::buildDidChangeNotification(
+      didchange_notification, errors, doc_uri, doc_version, -1, -1, -1, -1, -1, doc_text_change));
+  EXPECT_TRUE(
+      moose_server->handleDidChangeNotification(didchange_notification, diagnostics_notification));
+
+  // check plotting 01 - PiecewiseLinear type function giving x and y input
+  double pad_factor = 0.05;
+  int request_id = 27;
+  int request_line = 8;
+  int request_char = 25;
+  auto expect_title = "input_x_and_y PiecewiseLinear Function";
+  auto expect_keys = std::vector<double>{101, 102, 103, 104, 105, 106, 107, 108};
+  auto expect_vals = std::vector<double>{1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8};
+  double expect_xaxis_range_min = 101 - ((108 - 101) * pad_factor);
+  double expect_xaxis_range_max = 108 + ((108 - 101) * pad_factor);
+  double expect_yaxis_range_min = 1.1 - ((1.8 - 1.1) * pad_factor);
+  double expect_yaxis_range_max = 1.8 + ((1.8 - 1.1) * pad_factor);
+  check_plotting(request_id,
+                 doc_uri,
+                 request_line,
+                 request_char,
+                 expect_title,
+                 expect_keys,
+                 expect_vals,
+                 expect_xaxis_range_min,
+                 expect_xaxis_range_max,
+                 expect_yaxis_range_min,
+                 expect_yaxis_range_max);
+
+  // check plotting 02 - PiecewiseConstant function providing xy_data input
+  request_id = 28;
+  request_line = 12;
+  request_char = 28;
+  expect_title = "input_xy_data PiecewiseConstant Function";
+  expect_keys = std::vector<double>{2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8};
+  expect_vals = std::vector<double>{201, 202, 203, 204, 205, 206, 207, 208};
+  expect_xaxis_range_min = 2.1 - ((2.8 - 2.1) * pad_factor);
+  expect_xaxis_range_max = 2.8 + ((2.8 - 2.1) * pad_factor);
+  expect_yaxis_range_min = 201 - ((208 - 201) * pad_factor);
+  expect_yaxis_range_max = 208 + ((208 - 201) * pad_factor);
+  check_plotting(request_id,
+                 doc_uri,
+                 request_line,
+                 request_char,
+                 expect_title,
+                 expect_keys,
+                 expect_vals,
+                 expect_xaxis_range_min,
+                 expect_xaxis_range_max,
+                 expect_yaxis_range_min,
+                 expect_yaxis_range_max);
+
+  // check plotting 03 - PiecewiseLinear type function giving basic row csv
+  request_id = 29;
+  request_line = 24;
+  request_char = 33;
+  expect_title = "csv_row_basic PiecewiseLinear Function";
+  expect_keys = std::vector<double>{301, 302, 303, 304};
+  expect_vals = std::vector<double>{3.1, 3.2, 3.3, 3.4};
+  expect_xaxis_range_min = 301 - ((304 - 301) * pad_factor);
+  expect_xaxis_range_max = 304 + ((304 - 301) * pad_factor);
+  expect_yaxis_range_min = 3.1 - ((3.4 - 3.1) * pad_factor);
+  expect_yaxis_range_max = 3.4 + ((3.4 - 3.1) * pad_factor);
+  check_plotting(request_id,
+                 doc_uri,
+                 request_line,
+                 request_char,
+                 expect_title,
+                 expect_keys,
+                 expect_vals,
+                 expect_xaxis_range_min,
+                 expect_xaxis_range_max,
+                 expect_yaxis_range_min,
+                 expect_yaxis_range_max);
+
+  // check plotting 04 - PiecewiseConstant function giving basic column csv
+  request_id = 30;
+  request_line = 30;
+  request_char = 20;
+  expect_title = "csv_col_basic PiecewiseConstant Function";
+  expect_keys = std::vector<double>{401, 402, 403, 404};
+  expect_vals = std::vector<double>{4.1, 4.2, 4.3, 4.4};
+  expect_xaxis_range_min = 401 - ((404 - 401) * pad_factor);
+  expect_xaxis_range_max = 404 + ((404 - 401) * pad_factor);
+  expect_yaxis_range_min = 4.1 - ((4.4 - 4.1) * pad_factor);
+  expect_yaxis_range_max = 4.4 + ((4.4 - 4.1) * pad_factor);
+  check_plotting(request_id,
+                 doc_uri,
+                 request_line,
+                 request_char,
+                 expect_title,
+                 expect_keys,
+                 expect_vals,
+                 expect_xaxis_range_min,
+                 expect_xaxis_range_max,
+                 expect_yaxis_range_min,
+                 expect_yaxis_range_max);
+
+  // check plotting 05 - PiecewiseLinear type function giving title row csv
+  request_id = 31;
+  request_line = 36;
+  request_char = 27;
+  expect_title = "csv_row_title PiecewiseLinear Function";
+  expect_keys = std::vector<double>{501, 502, 503, 504};
+  expect_vals = std::vector<double>{5.1, 5.2, 5.3, 5.4};
+  expect_xaxis_range_min = 501 - ((504 - 501) * pad_factor);
+  expect_xaxis_range_max = 504 + ((504 - 501) * pad_factor);
+  expect_yaxis_range_min = 5.1 - ((5.4 - 5.1) * pad_factor);
+  expect_yaxis_range_max = 5.4 + ((5.4 - 5.1) * pad_factor);
+  check_plotting(request_id,
+                 doc_uri,
+                 request_line,
+                 request_char,
+                 expect_title,
+                 expect_keys,
+                 expect_vals,
+                 expect_xaxis_range_min,
+                 expect_xaxis_range_max,
+                 expect_yaxis_range_min,
+                 expect_yaxis_range_max);
+
+  // check plotting 06 - PiecewiseConstant function giving index column csv
+  request_id = 32;
+  request_line = 46;
+  request_char = 23;
+  expect_title = "csv_col_index PiecewiseConstant Function";
+  expect_keys = std::vector<double>{601, 602, 603, 604};
+  expect_vals = std::vector<double>{6.1, 6.2, 6.3, 6.4};
+  expect_xaxis_range_min = 601 - ((604 - 601) * pad_factor);
+  expect_xaxis_range_max = 604 + ((604 - 601) * pad_factor);
+  expect_yaxis_range_min = 6.1 - ((6.4 - 6.1) * pad_factor);
+  expect_yaxis_range_max = 6.4 + ((6.4 - 6.1) * pad_factor);
+  check_plotting(request_id,
+                 doc_uri,
+                 request_line,
+                 request_char,
+                 expect_title,
+                 expect_keys,
+                 expect_vals,
+                 expect_xaxis_range_min,
+                 expect_xaxis_range_max,
+                 expect_yaxis_range_min,
+                 expect_yaxis_range_max);
+
+  // remove csv files with data from disk that were referenced by functions
+  std::remove("csv_row_basic.csv");
+  std::remove("csv_col_basic.csv");
+  std::remove("csv_row_title.csv");
+  std::remove("csv_col_index.csv");
+}
+
+TEST_F(MooseServerTest, WorkspaceResourceFileChanges)
+{
+  // write resource files to disk which will be used by base input document
+  std::ofstream include_01("include_01.i");
+  include_01 << R"INPUT(
+[Variables]
+  [u]
+  []
+[]
+!include include_02.i
+)INPUT";
+  include_01.close();
+  std::ofstream include_02("include_02.i");
+  include_02 << R"INPUT(
+[BCs]
+  [bc_csv_rows_func]
+    type = FunctionDirichletBC
+    boundary = 1
+    variable = u
+    function = csv_rows
+  []
+[]
+)INPUT";
+  include_02.close();
+  std::ofstream csv_rows("csv_rows.csv");
+  csv_rows << R"INPUT(
+100, 200, 300, 400, 500
+1.1, 2.2, 3.3, 4.4, 5.5
+)INPUT";
+  csv_rows.close();
+
+  // didchange test parameters - update input to use on disk resource files
+  std::string doc_uri = wasp::lsp::m_uri_prefix + test_input_path;
+  int doc_version = 9;
+  std::string doc_text_change = R"INPUT(
+[Mesh]
+  type = GeneratedMesh
+  dim = 1
+[]
+!include include_01.i
+[Functions]
+  [csv_rows]
+    type = PiecewiseConstant
+    data_file = csv_rows.csv
+  []
+[]
+[Problem]
+  solve = false
+[]
+[Executioner]
+  type = Transient
+[]
+)INPUT";
+
+  // build didchange notification from parameters and handle it with server
+  wasp::DataObject didchange_notification, diagnostics_notification;
+  std::stringstream errors;
+  EXPECT_TRUE(wasp::lsp::buildDidChangeNotification(
+      didchange_notification, errors, doc_uri, doc_version, -1, -1, -1, -1, -1, doc_text_change));
+  EXPECT_TRUE(
+      moose_server->handleDidChangeNotification(didchange_notification, diagnostics_notification));
+
+  // dissect diagnostics notification from server and make sure it is empty
+  std::string response_uri;
+  wasp::DataArray diagnostics_array;
+  EXPECT_TRUE(wasp::lsp::dissectPublishDiagnosticsNotification(
+      diagnostics_notification, errors, response_uri, diagnostics_array));
+  EXPECT_EQ(doc_uri, response_uri);
+  EXPECT_TRUE(diagnostics_array.empty());
+
+  // check that resource files added by server for document is expected set
+  auto cwd = std::filesystem::current_path().string();
+  auto actual_resource_uris = moose_server->getResourcesForBase(doc_uri);
+  auto expect_resource_uris = std::set<std::string>{"file://" + cwd + "/csv_rows.csv",
+                                                    "file://" + cwd + "/include_01.i",
+                                                    "file://" + cwd + "/include_02.i"};
+  EXPECT_EQ(3u, actual_resource_uris.size());
+  EXPECT_EQ(expect_resource_uris, actual_resource_uris);
+
+  // ----------------------------------------------------------------------
+
+  // update content of included resource file to introduce diagnostic error
+  include_02.open("include_02.i");
+  include_02 << R"INPUT(
+[BCs]
+  [bc_csv_rows_func]
+    type = FunctionDirichletBC
+    boundary = 1
+    variable = x
+    function = csv_rows
+  []
+[]
+)INPUT";
+  include_02.close();
+  std::set<std::string> changed_resource_uris = {"file://" + cwd + "/include_02.i"};
+
+  // expected diagnostics messages due to using variable x in included file
+  std::size_t expect_diagnostics_size = 1;
+  std::string expect_diagnostics_list = R"INPUT(
+line:12 column:0 - The following occurred in the Problem 'MOOSE Problem' of type FEProblem.
+Unknown variable 'x'. It does not exist in the solver system(s) or auxiliary system
+)INPUT";
+
+  // notify server of changed resource files and check expected diagnostics
+  check_resource_updates(changed_resource_uris, expect_diagnostics_size, expect_diagnostics_list);
+
+  // ----------------------------------------------------------------------
+
+  // revert included file error and update csv file to add diagnostic error
+  include_02.open("include_02.i");
+  include_02 << R"INPUT(
+[BCs]
+  [bc_csv_rows_func]
+    type = FunctionDirichletBC
+    boundary = 1
+    variable = u
+    function = csv_rows
+  []
+[]
+)INPUT";
+  include_02.close();
+  csv_rows.open("csv_rows.csv");
+  csv_rows << R"INPUT(
+100, 200, 300, 400
+1.1, 2.2, 3.3, 4.4, 5.5
+)INPUT";
+  csv_rows.close();
+  changed_resource_uris = {"file://" + cwd + "/include_02.i", "file://" + cwd + "/csv_rows.csv"};
+
+  // expected diagnostics messages due to removing key from row in csv file
+  expect_diagnostics_size = 1;
+  expect_diagnostics_list = R"INPUT(
+line:7 column:2 - The following occurred in the Function 'csv_rows' of type PiecewiseConstant.
+In csv_rows: Lengths of x and y data do not match.
+)INPUT";
+
+  // notify server of changed resource files and check expected diagnostics
+  check_resource_updates(changed_resource_uris, expect_diagnostics_size, expect_diagnostics_list);
+
+  // ----------------------------------------------------------------------
+
+  // revert error introduced in csv file to clear out all diagnostic errors
+  csv_rows.open("csv_rows.csv");
+  csv_rows << R"INPUT(
+100, 200, 300, 400, 500
+1.1, 2.2, 3.3, 4.4, 5.5
+)INPUT";
+  csv_rows.close();
+  changed_resource_uris = {"file://" + cwd + "/csv_rows.csv"};
+
+  // no diagnostics messages are expected now since csv file has been fixed
+  expect_diagnostics_size = 0;
+  expect_diagnostics_list = R"INPUT(
+)INPUT";
+
+  // notify server of changed resource files and check resolved diagnostics
+  check_resource_updates(changed_resource_uris, expect_diagnostics_size, expect_diagnostics_list);
+
+  // ----------------------------------------------------------------------
+
+  // remove resource files from disk which were used by base input document
+  std::remove("include_01.i");
+  std::remove("include_02.i");
+  std::remove("csv_rows.csv");
 }
 
 TEST_F(MooseServerTest, DocumentCloseShutdownAndExit)
@@ -1812,7 +2407,7 @@ TEST_F(MooseServerTest, DocumentCloseShutdownAndExit)
 
   // didclose test parameter
 
-  std::string document_uri = wasp::lsp::m_uri_prefix + std::string("/test/input/path");
+  std::string document_uri = wasp::lsp::m_uri_prefix + test_input_path;
 
   // build didclose notification with the test parameter
 
@@ -1832,7 +2427,7 @@ TEST_F(MooseServerTest, DocumentCloseShutdownAndExit)
 
   // shutdown test parameter
 
-  int request_id = 27;
+  int request_id = 33;
 
   // build shutdown request with the test parameters
 

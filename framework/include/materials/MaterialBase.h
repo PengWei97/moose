@@ -78,13 +78,19 @@ class MaterialBase : public MooseObject,
                      public RandomInterface,
                      public ElementIDInterface,
                      protected GeometricSearchInterface,
-                     protected ADFunctorInterface,
-                     protected SolutionInvalidInterface
+                     protected ADFunctorInterface
 {
 public:
   static InputParameters validParams();
 
   MaterialBase(const InputParameters & parameters);
+
+#ifdef MOOSE_KOKKOS_ENABLED
+  /**
+   * Special constructor used for Kokkos functor copy during parallel dispatch
+   */
+  MaterialBase(const MaterialBase & object, const Moose::Kokkos::FunctorCopy & key);
+#endif
 
   /**
    * Initialize stateful properties (if material has some)
@@ -92,7 +98,7 @@ public:
    * This is _only_ called if this material has properties that are
    * requested as stateful
    */
-  virtual void initStatefulProperties(unsigned int n_points);
+  virtual void initStatefulProperties(const unsigned int n_points);
 
   virtual bool isInterfaceMaterial() { return false; };
 
@@ -230,6 +236,11 @@ public:
   bool hasStatefulProperties() const { return _has_stateful_property; }
 
   /**
+   * @return Whether this material has restored properties
+   */
+  bool hasRestoredProperties() const;
+
+  /**
    * Whether this material supports ghosted computations. This is important for finite volume
    * calculations in which variables have defined values on ghost cells/elements and for which these
    * ghost values may need to flow through material calculations to be eventually consumed by FV
@@ -297,6 +308,7 @@ protected:
 
   virtual const MaterialData & materialData() const = 0;
   virtual MaterialData & materialData() = 0;
+  virtual Moose::MaterialDataType materialDataType() = 0;
 
   virtual const FEProblemBase & miProblem() const { return _fe_problem; }
   virtual FEProblemBase & miProblem() { return _fe_problem; }
@@ -374,6 +386,9 @@ protected:
 
   const FaceInfo * _face_info = nullptr;
 
+  /// Suffix to append to the name of the material property/ies when declaring it/them
+  const MaterialPropertyName _declare_suffix;
+
 private:
   /**
    * Helper method for adding a material property name to the material property requested set
@@ -404,9 +419,6 @@ private:
    * @return The maximum number of quadrature points in use on any element in this problem.
    */
   unsigned int getMaxQps() const;
-
-  /// Suffix to append to the name of the material property/ies when declaring it/them
-  const MaterialPropertyName _declare_suffix;
 
   /// Whether or not to force stateful init; see forceStatefulInit()
   const bool _force_stateful_init;

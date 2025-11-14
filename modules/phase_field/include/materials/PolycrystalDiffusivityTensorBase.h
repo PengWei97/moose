@@ -11,6 +11,7 @@
 
 #include "Material.h"
 #include "DerivativeMaterialInterface.h"
+#include "RankThreeTensor.h"
 
 /**
  * Generates a diffusion tensor to distinguish between the bulk, grain boundary,
@@ -35,6 +36,7 @@ protected:
   std::string _diffusivity_name;
   MaterialProperty<RealTensorValue> & _D;
   MaterialProperty<RealTensorValue> * _dDdc;
+  MaterialProperty<RankThreeTensor> * _dDdgradc;
 
   Real _D0;
   Real _Em;
@@ -49,4 +51,5 @@ protected:
   /// solid phase order parameters
   std::vector<NonlinearVariableName> _vals_name;
   std::vector<MaterialProperty<RealTensorValue> *> _dDdeta;
+  std::vector<MaterialProperty<RankThreeTensor> *> _dDdgradeta;
 };

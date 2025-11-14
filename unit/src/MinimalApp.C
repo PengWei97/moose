@@ -12,14 +12,11 @@
 #include "AppFactory.h"
 #include "Executioner.h"
 #include "MooseMesh.h"
-#include "MooseMain.h"
 #include "FEProblemBase.h"
 
 TEST(MinimalApp, create)
 {
-  const char * argv[1] = {"\0"};
-  std::shared_ptr<MooseApp> app = Moose::createMooseApp("MooseUnitApp", 1, (char **)argv);
-  app->parameters().set<bool>("minimal") = true;
+  const auto app = AppFactory::create("MooseUnitApp", {"--minimal"});
   app->run();
   Executioner * exec = app->getExecutioner();
   EXPECT_EQ(exec->name(), "Executioner");

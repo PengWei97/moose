@@ -1,7 +1,7 @@
 [Mesh]
   type = MFEMMesh
   file = ../../mesh/square.msh
-  dim = 3
+  dim = 2
 []
 
 [Problem]
@@ -28,21 +28,12 @@
     type = MFEMScalarDirichletBC
     variable = u
     boundary = 2
-    value = 1.0
+    coefficient = 1.0
   []
-  [low_terminal]
+  [top]
     type = MFEMScalarDirichletBC
     variable = u
     boundary = 4
-    value = 0.0
-  []
-[]
-
-[FunctorMaterials]
-  [Substance]
-    type = MFEMGenericConstantFunctorMaterial
-    prop_names = diffusivity
-    prop_values = 1.0
   []
 []
 
@@ -50,7 +41,6 @@
   [diff]
     type = MFEMDiffusionKernel
     variable = u
-    coefficient = diffusivity
   []
 []
 
@@ -69,7 +59,6 @@
 
 [Executioner]
   type = MFEMSteady
-  device = cpu
 []
 
 [MultiApps]

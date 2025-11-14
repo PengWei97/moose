@@ -26,7 +26,8 @@ MeshGeneratorSystem::MeshGeneratorSystem(MooseApp & app)
     ParallelObject(app),
     _app(app),
     _has_bmbb(false),
-    _verbose(false)
+    _verbose(false),
+    _csg_only(false)
 {
 }
 
@@ -194,6 +195,12 @@ MeshGeneratorSystem::createAddedMeshGenerators()
                              "' does not exist");
   }
 
+  // Check compatibility for CLI / meshing options with csg_only
+  const bool csg_only = getCSGOnly();
+  if (csg_only && _data_driven_generator_name)
+    moose_mesh->paramError(data_driven_generator_param,
+                           "This parameter should not be set in conjunction with --csg-only");
+
   // Construct all of the mesh generators that we know exist
   for (const auto & generator_names : ordered_generators)
     for (const auto & generator_name : generator_names)
@@ -202,12 +209,19 @@ MeshGeneratorSystem::createAddedMeshGenerators()
         auto & params = it->second.second;
 
         // Determine now if we need to run this in data only mode
-        const bool data_only = _data_driven_generator_name &&
-                               getDataDrivenGeneratorName() != generator_name &&
-                               resolver.dependsOn(getDataDrivenGeneratorName(), generator_name);
+        const bool data_only =
+            (csg_only ||
+             (_data_driven_generator_name && getDataDrivenGeneratorName() != generator_name &&
+              resolver.dependsOn(getDataDrivenGeneratorName(), generator_name)));
         params.set<bool>(MeshGenerator::data_only_param) = data_only;
 
         createMeshGenerator(generator_name);
+
+        if (csg_only && !getMeshGenerator(generator_name).hasGenerateCSG())
+          mooseError("Mesh generator ",
+                     generator_name,
+                     " cannot be used in csg-only mode since it does not have a generateCSG "
+                     "implementation");
 
         mooseAssert(data_only == getMeshGenerator(generator_name).isDataOnly(),
                     "Inconsistent data only");
@@ -389,6 +403,8 @@ MeshGeneratorSystem::executeMeshGenerators()
         if (_final_generator_name == generator->name())
           generator->paramError("save_with_name",
                                 "Cannot use the save in capability with the final mesh generator");
+        if (getCSGOnly())
+          generator->paramError("save_with_name", "Cannot use in conjunction with --csg-only");
         to_save_in_meshes.emplace(generator->getSavedMeshName(),
                                   &getMeshGeneratorOutput(generator->name()));
       }
@@ -444,6 +460,10 @@ MeshGeneratorSystem::executeMeshGenerators()
       }
     }
   }
+
+  // No save in meshes exist in csg only mode
+  if (getCSGOnly())
+    return;
 
   // Grab all the valid save in meshes from the temporary map to_save_in_meshes
   // and store them in _save_in_meshes
@@ -561,6 +581,11 @@ MeshGeneratorSystem::createMeshGenerator(const std::string & generator_name)
   _mesh_generators.emplace(generator_name, mg);
   mooseAssert(!_mesh_generator_outputs.count(generator_name), "Already exists");
   _mesh_generator_outputs[generator_name];
+  if (getCSGOnly())
+  {
+    mooseAssert(!_csg_base_outputs.count(generator_name), "CSG already exists");
+    _csg_base_outputs[generator_name];
+  }
   _mesh_generator_params.erase(find_params);
 
   return mg;
@@ -666,4 +691,44 @@ MeshGeneratorSystem::dataDrivenError(const MeshGenerator & generator,
                          generator.typeAndName(),
                          " ",
                          message);
+}
+
+void
+MeshGeneratorSystem::setCSGOnly()
+{
+  _csg_only = true;
+}
+
+void
+MeshGeneratorSystem::saveOutputCSGBase(const MeshGeneratorName generator_name,
+                                       std::unique_ptr<CSG::CSGBase> & csg_base)
+{
+  auto & outputs = _csg_base_outputs[generator_name];
+
+  // Store CSGBase instance for any downstream MG's that request it, creating copies
+  // as needed
+  if (outputs.size())
+  {
+    // Set first output to csg_base
+    auto & first_output = *outputs.begin();
+    first_output = std::move(csg_base);
+    const auto & copy_from = *first_output;
+    auto output_it = ++outputs.begin();
+    // For all of the rest we create a clone of csg_base
+    for (; output_it != outputs.end(); ++output_it)
+      (*output_it) = copy_from.clone();
+  }
+}
+
+std::unique_ptr<CSG::CSGBase> &
+MeshGeneratorSystem::getCSGBaseGeneratorOutput(const MeshGeneratorName & name)
+{
+  mooseAssert(_app.constructingMeshGenerators() ||
+                  _app.actionWarehouse().getCurrentTaskName() == "execute_mesh_generators",
+              "Incorrect call time");
+
+  auto it = _csg_base_outputs.find(name);
+  mooseAssert(it != _csg_base_outputs.end(), "CSG mesh not initialized");
+  it->second.push_back(nullptr);
+  return it->second.back();
 }

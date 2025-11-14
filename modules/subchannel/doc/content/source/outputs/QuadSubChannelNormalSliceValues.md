@@ -4,7 +4,7 @@
 
 ## Overview
 
-<!-- -->
+!! Intentional comment to provide extra spacing
 
 This kernel is used to save the solution variables in a file, for the square subchannel problem.
 Imagine a plane perpendicular to the flow direction at a specific [!param](/Outputs/QuadSubChannelNormalSliceValues/height) defined by the user.
@@ -13,7 +13,7 @@ and the subchannel mesh and printed on that [!param](/Outputs/QuadSubChannelNorm
 
 ## Example Input File Syntax
 
-!listing /validation/PNNL_12_pin/steady_state/2X6_ss.i block=Outputs language=cpp
+!listing /validation/PNNL_12_pin/steady_state/2X6_ss.i block=Outputs language=moose
 
 !syntax parameters /Outputs/QuadSubChannelNormalSliceValues
 

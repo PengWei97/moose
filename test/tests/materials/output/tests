@@ -216,7 +216,7 @@
   [missing_outputs]
     type = RunException
     input = output.i
-    expect_err = "Material properties output specified is not created because 'outputs' is not set in the Material, and neither is Outputs/output_material_properties"
+    expect_err = "Material properties output specified is not created because 'outputs' is not set in the Material, and neither is output_material_properties in any of the outputs in the \[Outputs\] block"
     cli_args = "Materials/active='out'
                 Materials/out/type=OutputTestMaterial
                 Materials/out/variable=u
@@ -273,5 +273,20 @@
     absent_out = "The following total 145 aux variables:"
     requirement = "The system shall be able to not show the field variable names for outputting material data added by materials."
     prereq = show_added_aux_vars
+  []
+  [dont_show_unsupported_properties]
+    type = RunApp
+    input = output_warning.i
+    cli_args = 'Outputs/print_unsupported_prop_names=false'
+    allow_warnings = true
+    absent_out = "The types for total 1 material properties:"
+    requirement = "The system shall be able to not show the list of unsupported properties when outputting material data added by materials."
+    prereq = dont_show_added_aux_vars
+  []
+  [long_vector_properties]
+    type = 'Exodiff'
+    input = 'output_vector_props.i'
+    exodiff = 'output_vector_props_out.e'
+    requirement = "The system shall be able to output vector material properties whose size is greater than 10."
   []
 []

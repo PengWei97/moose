@@ -9,11 +9,15 @@
 
 #pragma once
 
+#ifdef MOOSE_KOKKOS_ENABLED
+#include "KokkosAssembly.h"
+#include "KokkosSystem.h"
+#endif
+
 // MOOSE includes
 #include "SubProblem.h"
 #include "GeometricSearchData.h"
 #include "MeshDivision.h"
-#include "MortarData.h"
 #include "ReporterData.h"
 #include "Adaptivity.h"
 #include "InitialConditionWarehouse.h"
@@ -55,10 +59,12 @@ class NonlinearSystem;
 class RandomInterface;
 class RandomData;
 class MeshChangedInterface;
+class MeshDisplacedInterface;
 class MultiMooseEnum;
 class MaterialPropertyStorage;
 class MaterialData;
 class MooseEnum;
+class MortarInterfaceWarehouse;
 class Assembly;
 class JacobianBlock;
 class Control;
@@ -91,6 +97,19 @@ class Convergence;
 class MooseAppCoordTransform;
 class MortarUserObject;
 class SolutionInvalidity;
+
+namespace Moose
+{
+class FunctionBase;
+}
+
+#ifdef MOOSE_KOKKOS_ENABLED
+namespace Moose::Kokkos
+{
+class MaterialPropertyStorage;
+class Function;
+}
+#endif
 
 // libMesh forward declarations
 namespace libMesh
@@ -161,7 +180,7 @@ public:
    */
   void setCoupling(Moose::CouplingType type);
 
-  Moose::CouplingType coupling() { return _coupling; }
+  Moose::CouplingType coupling() const { return _coupling; }
 
   /**
    * Set custom coupling matrix
@@ -208,6 +227,7 @@ public:
   nonlocalCouplingEntries(const THREAD_ID tid, const unsigned int nl_sys_num);
 
   virtual bool hasVariable(const std::string & var_name) const override;
+  // NOTE: hasAuxiliaryVariable defined in parent class
   bool hasSolverVariable(const std::string & var_name) const;
   using SubProblem::getVariable;
   virtual const MooseVariableFieldBase &
@@ -229,6 +249,9 @@ public:
   virtual MooseVariableScalar & getScalarVariable(const THREAD_ID tid,
                                                   const std::string & var_name) override;
   virtual libMesh::System & getSystem(const std::string & var_name) override;
+
+  /// Get the RestartableEquationSystems object
+  const RestartableEquationSystems & getRestartableEquationSystems() const;
 
   /**
    * Set the MOOSE variables to be reinited on each element.
@@ -312,6 +335,11 @@ public:
   virtual Assembly & assembly(const THREAD_ID tid, const unsigned int sys_num) override;
   virtual const Assembly & assembly(const THREAD_ID tid, const unsigned int sys_num) const override;
 
+#ifdef MOOSE_KOKKOS_ENABLED
+  Moose::Kokkos::Assembly & kokkosAssembly() { return _kokkos_assembly; }
+  const Moose::Kokkos::Assembly & kokkosAssembly() const { return _kokkos_assembly; }
+#endif
+
   /**
    * Returns a list of all the variables in the problem (both from the NL and Aux systems.
    */
@@ -387,6 +415,13 @@ public:
 
   virtual void init() override;
   virtual void solve(const unsigned int nl_sys_num);
+
+#ifdef MOOSE_KOKKOS_ENABLED
+  /**
+   * Construct Kokkos assembly and systems and allocate Kokkos material property storages
+   */
+  void initKokkos();
+#endif
 
   /**
    * Build and solve a linear system
@@ -615,6 +650,38 @@ public:
   virtual bool hasFunction(const std::string & name, const THREAD_ID tid = 0);
   virtual Function & getFunction(const std::string & name, const THREAD_ID tid = 0);
 
+#ifdef MOOSE_KOKKOS_ENABLED
+  /**
+   * Add a Kokkos function to the problem
+   * @param type The Kokkos function type
+   * @param name The Kokkos function name
+   * @param parameters The Kokkos function input parameters
+   */
+  virtual void addKokkosFunction(const std::string & type,
+                                 const std::string & name,
+                                 InputParameters & parameters);
+  /**
+   * Get whether a Kokkos function exists
+   * @param name The Kokkos function name
+   * @returns Whether a Kokkos function exists
+   */
+  virtual bool hasKokkosFunction(const std::string & name);
+  /**
+   * Get a Kokkos function in an abstract type
+   * @param name The Kokkos function name
+   * @returns The copy of the Kokkos function in the abstract type
+   */
+  virtual Moose::Kokkos::Function getKokkosFunction(const std::string & name);
+  /**
+   * Get a Kokkos function in a concrete type
+   * @tparam T The Kokkos function type
+   * @param name The Kokkos function name
+   * @returns The reference of the Kokkos function in the concrete type
+   */
+  template <typename T>
+  T & getKokkosFunction(const std::string & name);
+#endif
+
   /// Add a MeshDivision
   virtual void
   addMeshDivision(const std::string & type, const std::string & name, InputParameters & params);
@@ -636,10 +703,40 @@ public:
   {
     return _need_to_add_default_nonlinear_convergence;
   }
+  /// Returns true if the problem needs to add the default fixed point convergence
+  bool needToAddDefaultMultiAppFixedPointConvergence() const
+  {
+    return _need_to_add_default_multiapp_fixed_point_convergence;
+  }
+  /// Returns true if the problem needs to add the default steady-state detection convergence
+  bool needToAddDefaultSteadyStateConvergence() const
+  {
+    return _need_to_add_default_steady_state_convergence;
+  }
   /// Sets _need_to_add_default_nonlinear_convergence to true
   void setNeedToAddDefaultNonlinearConvergence()
   {
     _need_to_add_default_nonlinear_convergence = true;
+  }
+  /// Sets _need_to_add_default_multiapp_fixed_point_convergence to true
+  void setNeedToAddDefaultMultiAppFixedPointConvergence()
+  {
+    _need_to_add_default_multiapp_fixed_point_convergence = true;
+  }
+  /// Sets _need_to_add_default_steady_state_convergence to true
+  void setNeedToAddDefaultSteadyStateConvergence()
+  {
+    _need_to_add_default_steady_state_convergence = true;
+  }
+  /// Returns true if the problem has set the fixed point convergence name
+  bool hasSetMultiAppFixedPointConvergenceName() const
+  {
+    return _multiapp_fixed_point_convergence_name.has_value();
+  }
+  /// Returns true if the problem has set the steady-state detection convergence name
+  bool hasSetSteadyStateConvergenceName() const
+  {
+    return _steady_state_convergence_name.has_value();
   }
   /**
    * Adds the default nonlinear Convergence associated with the problem
@@ -657,6 +754,22 @@ public:
    * would be error-prone.
    */
   virtual bool onlyAllowDefaultNonlinearConvergence() const { return false; }
+  /**
+   * Adds the default fixed point Convergence associated with the problem
+   *
+   * This is called if the user does not supply 'multiapp_fixed_point_convergence'.
+   *
+   * @param[in] params   Parameters to apply to Convergence parameters
+   */
+  void addDefaultMultiAppFixedPointConvergence(const InputParameters & params);
+  /**
+   * Adds the default steady-state detection Convergence
+   *
+   * This is called if the user does not supply 'steady_state_convergence'.
+   *
+   * @param[in] params   Parameters to apply to Convergence parameters
+   */
+  void addDefaultSteadyStateConvergence(const InputParameters & params);
 
   /**
    * add a MOOSE line search
@@ -700,10 +813,37 @@ public:
   virtual const SystemBase & systemBaseNonlinear(const unsigned int sys_num) const override;
   virtual SystemBase & systemBaseNonlinear(const unsigned int sys_num) override;
 
+  virtual const SystemBase & systemBaseSolver(const unsigned int sys_num) const override;
+  virtual SystemBase & systemBaseSolver(const unsigned int sys_num) override;
+
   virtual const SystemBase & systemBaseAuxiliary() const override;
   virtual SystemBase & systemBaseAuxiliary() override;
 
   virtual NonlinearSystem & getNonlinearSystem(const unsigned int sys_num);
+
+#ifdef MOOSE_KOKKOS_ENABLED
+  /**
+   * Get all Kokkos systems that are associated with MOOSE nonlinear and auxiliary systems
+   * @returns The array of Kokkos systems
+   */
+  ///{@
+  Moose::Kokkos::Array<Moose::Kokkos::System> & getKokkosSystems() { return _kokkos_systems; }
+  const Moose::Kokkos::Array<Moose::Kokkos::System> & getKokkosSystems() const
+  {
+    return _kokkos_systems;
+  }
+  ///@}
+  /**
+   * Get the Kokkos system of a specified number that is associated with MOOSE nonlinear and
+   * auxiliary systems
+   * @param sys_num The system number
+   * @returns The Kokkos system
+   */
+  ///{@
+  Moose::Kokkos::System & getKokkosSystem(const unsigned int sys_num);
+  const Moose::Kokkos::System & getKokkosSystem(const unsigned int sys_num) const;
+  ///@}
+#endif
 
   /**
    * Get constant reference to a system in this problem
@@ -716,6 +856,12 @@ public:
    * @param sys_num The number of the system
    */
   virtual SystemBase & getSystemBase(const unsigned int sys_num);
+
+  /**
+   * Get non-constant reference to a system in this problem
+   * @param sys_name The name of the system
+   */
+  SystemBase & getSystemBase(const std::string & sys_name);
 
   /**
    * Get non-constant reference to a linear system
@@ -788,9 +934,19 @@ public:
   virtual void addBoundaryCondition(const std::string & bc_name,
                                     const std::string & name,
                                     InputParameters & parameters);
-  virtual void addHDGIntegratedBC(const std::string & kernel_name,
-                                  const std::string & name,
-                                  InputParameters & parameters);
+
+#ifdef MOOSE_KOKKOS_ENABLED
+  virtual void addKokkosKernel(const std::string & kernel_name,
+                               const std::string & name,
+                               InputParameters & parameters);
+  virtual void addKokkosNodalKernel(const std::string & kernel_name,
+                                    const std::string & name,
+                                    InputParameters & parameters);
+  virtual void addKokkosBoundaryCondition(const std::string & bc_name,
+                                          const std::string & name,
+                                          InputParameters & parameters);
+#endif
+
   virtual void
   addConstraint(const std::string & c_name, const std::string & name, InputParameters & parameters);
 
@@ -828,6 +984,12 @@ public:
   virtual void addAuxScalarKernel(const std::string & kernel_name,
                                   const std::string & name,
                                   InputParameters & parameters);
+
+#ifdef MOOSE_KOKKOS_ENABLED
+  virtual void addKokkosAuxKernel(const std::string & kernel_name,
+                                  const std::string & name,
+                                  InputParameters & parameters);
+#endif
 
   AuxiliarySystem & getAuxiliarySystem() { return *_aux; }
 
@@ -889,11 +1051,42 @@ public:
    * Project initial conditions for custom \p elem_range and \p bnd_node_range
    * This is needed when elements/boundary nodes are added to a specific subdomain
    * at an intermediate step
+   * @param elem_range Element range to project on
+   * @param bnd_node_range Boundary node range to project on
+   * @param target_vars Set of variable names to project ICs
    */
-  void projectInitialConditionOnCustomRange(libMesh::ConstElemRange & elem_range,
-                                            ConstBndNodeRange & bnd_node_range);
+  void projectInitialConditionOnCustomRange(
+      libMesh::ConstElemRange & elem_range,
+      ConstBndNodeRange & bnd_node_range,
+      const std::optional<std::set<VariableName>> & target_vars = std::nullopt);
 
-  // Materials /////
+  /**
+   * Project a function onto a range of elements for a given variable
+   *
+   * @warning The current implementation is not ideal. The projection takes place on all local
+   * active elements, ignoring the specified \p elem_range. After the projection, dof values on the
+   * specified \p elem_range are copied over to the current solution vector. This should be fixed
+   * once the project_vector or project_solution API is modified to take a custom element range.
+   *
+   * \param elem_range          Element range to project on
+   * \param func                Function to project
+   * \param func_grad           Gradient of the function
+   * \param params              Parameters to pass to the function
+   * \param target_var          variable name to project
+   */
+  void projectFunctionOnCustomRange(ConstElemRange & elem_range,
+                                    Number (*func)(const Point &,
+                                                   const libMesh::Parameters &,
+                                                   const std::string &,
+                                                   const std::string &),
+                                    Gradient (*func_grad)(const Point &,
+                                                          const libMesh::Parameters &,
+                                                          const std::string &,
+                                                          const std::string &),
+                                    const libMesh::Parameters & params,
+                                    const VariableName & target_var);
+
+  // Materials
   virtual void addMaterial(const std::string & material_name,
                            const std::string & name,
                            InputParameters & parameters);
@@ -907,6 +1100,12 @@ public:
   virtual void addFunctorMaterial(const std::string & functor_material_name,
                                   const std::string & name,
                                   InputParameters & parameters);
+
+#ifdef MOOSE_KOKKOS_ENABLED
+  virtual void addKokkosMaterial(const std::string & material_name,
+                                 const std::string & name,
+                                 InputParameters & parameters);
+#endif
 
   /**
    * Add the MooseVariables and the material properties that the current materials depend on to the
@@ -931,9 +1130,8 @@ public:
    * @param tid The thread id
    * @param swap_stateful Whether to swap stateful material properties between \p MaterialData and
    * \p MaterialPropertyStorage
-   * @param execute_stateful Whether to execute material objects that have stateful properties. This
-   * should be \p false when for example executing material objects for mortar contexts in which
-   * stateful properties don't make sense
+   * @param reinit_mats specific list of materials to reinit. Used notably in the context of mortar
+   * with stateful elements
    */
   void reinitMaterialsFace(SubdomainID blk_id,
                            const THREAD_ID tid,
@@ -941,14 +1139,49 @@ public:
                            const std::deque<MaterialBase *> * reinit_mats = nullptr);
 
   /**
+   * reinit materials on element faces on a boundary (internal or external)
+   * This specific routine helps us not reinit when don't need to
+   * @param boundary_id The boundary on which the face belongs
+   * @param blk_id The block id to which the element (who owns the face) belong
+   * @param tid The thread id
+   * @param swap_stateful Whether to swap stateful material properties between \p MaterialData and
+   * \p MaterialPropertyStorage
+   * @param reinit_mats specific list of materials to reinit. Used notably in the context of mortar
+   * with stateful elements
+   */
+  void
+  reinitMaterialsFaceOnBoundary(const BoundaryID boundary_id,
+                                const SubdomainID blk_id,
+                                const THREAD_ID tid,
+                                const bool swap_stateful = true,
+                                const std::deque<MaterialBase *> * const reinit_mats = nullptr);
+
+  /**
+   * reinit materials on neighbor element (usually faces) on a boundary (internal or external)
+   * This specific routine helps us not reinit when don't need to
+   * @param boundary_id The boundary on which the face belongs
+   * @param blk_id The block id to which the element (who owns the face) belong
+   * @param tid The thread id
+   * @param swap_stateful Whether to swap stateful material properties between \p MaterialData and
+   * \p MaterialPropertyStorage
+   * @param reinit_mats specific list of materials to reinit. Used notably in the context of mortar
+   * with stateful elements
+   */
+  void
+  reinitMaterialsNeighborOnBoundary(const BoundaryID boundary_id,
+                                    const SubdomainID blk_id,
+                                    const THREAD_ID tid,
+                                    const bool swap_stateful = true,
+                                    const std::deque<MaterialBase *> * const reinit_mats = nullptr);
+
+  /**
    * reinit materials on the neighboring element face
    * @param blk_id The subdomain on which the neighbor element lives
    * @param tid The thread id
    * @param swap_stateful Whether to swap stateful material properties between \p MaterialData and
    * \p MaterialPropertyStorage
-   * @param execute_stateful Whether to execute material objects that have stateful properties. This
-   * should be \p false when for example executing material objects for mortar contexts in which
-   * stateful properties don't make sense
+   * @param reinit_mats specific list of materials to reinit. Used notably in the context of mortar
+   * with stateful elements
    */
   void reinitMaterialsNeighbor(SubdomainID blk_id,
                                const THREAD_ID tid,
@@ -964,6 +1197,8 @@ public:
    * @param execute_stateful Whether to execute material objects that have stateful properties.
    * This should be \p false when for example executing material objects for mortar contexts in
    * which stateful properties don't make sense
+   * @param reinit_mats specific list of materials to reinit. Used notably in the context of mortar
+   * with stateful elements
    */
   void reinitMaterialsBoundary(BoundaryID boundary_id,
                                const THREAD_ID tid,
@@ -972,6 +1207,11 @@ public:
 
   void
   reinitMaterialsInterface(BoundaryID boundary_id, const THREAD_ID tid, bool swap_stateful = true);
+
+#ifdef MOOSE_KOKKOS_ENABLED
+  void prepareKokkosMaterials(const std::unordered_set<unsigned int> & consumer_needed_mat_props);
+  void reinitKokkosMaterials();
+#endif
 
   /*
    * Swap back underlying data storing stateful material properties
@@ -1463,25 +1703,21 @@ public:
    * @param compute_gradients A flag to disable the computation of new gradients during the
    * assembly, can be used to lag gradients
    */
-  void computeLinearSystemSys(libMesh::LinearImplicitSystem & sys,
-                              libMesh::SparseMatrix<libMesh::Number> & system_matrix,
-                              NumericVector<libMesh::Number> & rhs,
-                              const bool compute_gradients = true);
+  virtual void computeLinearSystemSys(libMesh::LinearImplicitSystem & sys,
+                                      libMesh::SparseMatrix<libMesh::Number> & system_matrix,
+                                      NumericVector<libMesh::Number> & rhs,
+                                      const bool compute_gradients = true);
 
   /**
    * Assemble the current linear system given a set of vector and matrix tags.
    *
    * @param soln The solution which should be used for the system assembly
-   * @param system_matrix The sparse matrix which should hold the system matrix
-   * @param rhs The vector which should hold the right hand side
    * @param vector_tags The vector tags for the right hand side
    * @param matrix_tags The matrix tags for the matrix
    * @param compute_gradients A flag to disable the computation of new gradients during the
    * assembly, can be used to lag gradients
    */
   void computeLinearSystemTags(const NumericVector<libMesh::Number> & soln,
-                               libMesh::SparseMatrix<libMesh::Number> & system_matrix,
-                               NumericVector<libMesh::Number> & rhs,
                                const std::set<TagID> & vector_tags,
                                const std::set<TagID> & matrix_tags,
                                const bool compute_gradients = true);
@@ -1620,7 +1856,8 @@ public:
                      bool on_displaced);
   ///@}
 
-  const std::unordered_map<std::pair<BoundaryID, BoundaryID>, AutomaticMortarGeneration> &
+  const std::unordered_map<std::pair<BoundaryID, BoundaryID>,
+                           std::unique_ptr<AutomaticMortarGeneration>> &
   getMortarInterfaces(bool on_displaced) const;
 
   virtual void possiblyRebuildGeomSearchPatches();
@@ -1652,6 +1889,21 @@ public:
   {
     return _neighbor_material_props;
   }
+
+#ifdef MOOSE_KOKKOS_ENABLED
+  Moose::Kokkos::MaterialPropertyStorage & getKokkosMaterialPropertyStorage()
+  {
+    return _kokkos_material_props;
+  }
+  Moose::Kokkos::MaterialPropertyStorage & getKokkosBndMaterialPropertyStorage()
+  {
+    return _kokkos_bnd_material_props;
+  }
+  Moose::Kokkos::MaterialPropertyStorage & getKokkosNeighborMaterialPropertyStorage()
+  {
+    return _kokkos_neighbor_material_props;
+  }
+#endif
   ///@}
 
   /**
@@ -1726,8 +1978,20 @@ public:
 
   /**
    * Update data after a mesh change.
+   * Iff intermediate_change is true, only perform updates as
+   * necessary to prepare for another mesh change
+   * immediately-subsequent. An example of data that is not updated during an intermediate change is
+   * libMesh System matrix data. An example of data that \emph is updated during an intermediate
+   * change is libMesh System vectors. These vectors are projected or restricted based off of
+   * adaptive mesh refinement or the changing of element subdomain IDs. The flags \p contract_mesh
+   * and \p clean_refinement_flags should generally only be set to true when the mesh has changed
+   * due to mesh refinement. \p contract_mesh deletes children of coarsened elements and renumbers
+   * nodes and elements. \p clean_refinement_flags resets refinement flags such that any subsequent
+   * calls to \p System::restrict_vectors or \p System::prolong_vectors before another AMR step do
+   * not mistakenly attempt to re-do the restriction/prolongation which occurred in this method
    */
-  virtual void meshChanged() override;
+  virtual void
+  meshChanged(bool intermediate_change, bool contract_mesh, bool clean_refinement_flags);
 
   /**
    * Register an object that derives from MeshChangedInterface
@@ -1736,11 +2000,21 @@ public:
   void notifyWhenMeshChanges(MeshChangedInterface * mci);
 
   /**
+   * Register an object that derives from MeshDisplacedInterface
+   * to be notified when the displaced mesh gets updated.
+   */
+  void notifyWhenMeshDisplaces(MeshDisplacedInterface * mdi);
+
+  /**
    * Initialize stateful properties for elements in a specific \p elem_range
    * This is needed when elements/boundary nodes are added to a specific subdomain
    * at an intermediate step
    */
   void initElementStatefulProps(const libMesh::ConstElemRange & elem_range, const bool threaded);
+
+#ifdef MOOSE_KOKKOS_ENABLED
+  void initKokkosStatefulProps();
+#endif
 
   /**
    * Method called to perform a series of sanity checks before a simulation is run. This method
@@ -1828,7 +2102,7 @@ public:
    */
   bool needBoundaryMaterialOnSide(BoundaryID bnd_id, const THREAD_ID tid);
   bool needInterfaceMaterialOnSide(BoundaryID bnd_id, const THREAD_ID tid);
-  bool needSubdomainMaterialOnSide(SubdomainID subdomain_id, const THREAD_ID tid);
+  bool needInternalNeighborSideMaterial(SubdomainID subdomain_id, const THREAD_ID tid);
   ///@}
 
   /**
@@ -1855,6 +2129,13 @@ public:
   const MaterialWarehouse & getDiscreteMaterialWarehouse() const { return _discrete_materials; }
   const MaterialWarehouse & getInterfaceMaterialsWarehouse() const { return _interface_materials; }
 
+#ifdef MOOSE_KOKKOS_ENABLED
+  /*
+   * Return a reference to the material warehouse of Kokkos Material objects to be computed.
+   */
+  const MaterialWarehouse & getKokkosMaterialsWarehouse() const { return _kokkos_materials; }
+#endif
+
   /**
    * Return a pointer to a MaterialBase object.  If no_warn is true, suppress
    * warning about retrieving a material reference potentially during the
@@ -1867,10 +2148,39 @@ public:
                                             const THREAD_ID tid = 0,
                                             bool no_warn = false);
 
-  /*
+  /**
    * @return The MaterialData for the type \p type for thread \p tid
    */
-  MaterialData & getMaterialData(Moose::MaterialDataType type, const THREAD_ID tid = 0);
+  MaterialData & getMaterialData(Moose::MaterialDataType type,
+                                 const THREAD_ID tid = 0,
+                                 const MooseObject * object = nullptr) const;
+
+#ifdef MOOSE_KOKKOS_ENABLED
+  /**
+   * @return The Kokkos MaterialData for the type \p type for thread \p tid
+   */
+  MaterialData & getKokkosMaterialData(Moose::MaterialDataType type,
+                                       const MooseObject * object = nullptr) const;
+#endif
+
+  /**
+   * @return The consumers of the MaterialPropertyStorage for the type \p type
+   */
+  const std::set<const MooseObject *> &
+  getMaterialPropertyStorageConsumers(Moose::MaterialDataType type) const;
+
+#ifdef MOOSE_KOKKOS_ENABLED
+  /**
+   * @return The consumers of the Kokkos MaterialPropertyStorage for the type \p type
+   */
+  const std::set<const MooseObject *> &
+  getKokkosMaterialPropertyStorageConsumers(Moose::MaterialDataType type) const;
+#endif
+
+  /**
+   * @returns Whether the original matrix nonzero pattern is restored before each Jacobian assembly
+   */
+  bool restoreOriginalNonzeroPattern() const { return _restore_original_nonzero_pattern; }
 
   /**
    * Will return True if the user wants to get an error when
@@ -2132,8 +2442,8 @@ public:
   /**
    * Returns the mortar data object
    */
-  const MortarData & mortarData() const { return _mortar_data; }
-  MortarData & mortarData() { return _mortar_data; }
+  const MortarInterfaceWarehouse & mortarData() const { return *_mortar_data; }
+  MortarInterfaceWarehouse & mortarData() { return *_mortar_data; }
 
   /**
    * Whether the simulation has neighbor coupling
@@ -2236,15 +2546,41 @@ public:
 
   bool haveDisplaced() const override final { return _displaced_problem.get(); }
 
+  /// Whether we have linear convergence objects
+  bool hasLinearConvergenceObjects() const;
   /**
-   * Sets the nonlinear convergence object name if there is one
+   * Sets the nonlinear convergence object name(s) if there is one
    */
   void setNonlinearConvergenceNames(const std::vector<ConvergenceName> & convergence_names);
+  /**
+   * Sets the linear convergence object name(s) if there is one
+   */
+  void setLinearConvergenceNames(const std::vector<ConvergenceName> & convergence_names);
+  /**
+   * Sets the MultiApp fixed point convergence object name if there is one
+   */
+  void setMultiAppFixedPointConvergenceName(const ConvergenceName & convergence_name);
+  /**
+   * Sets the steady-state detection convergence object name if there is one
+   */
+  void setSteadyStateConvergenceName(const ConvergenceName & convergence_name);
 
   /**
-   * Gets the nonlinear convergence object name(s).
+   * Gets the nonlinear system convergence object name(s).
    */
-  std::vector<ConvergenceName> getNonlinearConvergenceNames() const;
+  const std::vector<ConvergenceName> & getNonlinearConvergenceNames() const;
+  /**
+   * Gets the linear convergence object name(s).
+   */
+  const std::vector<ConvergenceName> & getLinearConvergenceNames() const;
+  /**
+   * Gets the MultiApp fixed point convergence object name.
+   */
+  const ConvergenceName & getMultiAppFixedPointConvergenceName() const;
+  /**
+   * Gets the steady-state detection convergence object name.
+   */
+  const ConvergenceName & getSteadyStateConvergenceName() const;
 
   /**
    * Setter for whether we're computing the scaling jacobian
@@ -2309,23 +2645,21 @@ public:
    */
   unsigned int systemNumForVariable(const VariableName & variable_name) const;
 
-  /**
-   * Whether it will skip further residual evaluations and fail the next nonlinear convergence check
-   */
-  bool getFailNextNonlinearConvergenceCheck() const
-  {
-    return _fail_next_nonlinear_convergence_check;
-  }
+  /// Whether it will skip further residual evaluations and fail the next nonlinear convergence check(s)
+  bool getFailNextNonlinearConvergenceCheck() const { return getFailNextSystemConvergenceCheck(); }
+  /// Whether it will fail the next system convergence check(s), triggering failed step behavior
+  bool getFailNextSystemConvergenceCheck() const { return _fail_next_system_convergence_check; }
 
-  /**
-   * Skip further residual evaluations and fail the next nonlinear convergence check
-   */
-  void setFailNextNonlinearConvergenceCheck() { _fail_next_nonlinear_convergence_check = true; }
+  /// Skip further residual evaluations and fail the next nonlinear convergence check(s)
+  void setFailNextNonlinearConvergenceCheck() { setFailNextSystemConvergenceCheck(); }
+  /// Tell the problem that the system(s) cannot be considered converged next time convergence is checked
+  void setFailNextSystemConvergenceCheck() { _fail_next_system_convergence_check = true; }
 
-  /**
-   * Do not skip further residual evaluations and fail the next nonlinear convergence check
-   */
-  void resetFailNextNonlinearConvergenceCheck() { _fail_next_nonlinear_convergence_check = false; }
+  /// Tell the problem that the nonlinear convergence check(s) may proceed as normal
+  void resetFailNextNonlinearConvergenceCheck() { resetFailNextSystemConvergenceCheck(); }
+  /// Tell the problem that the system convergence check(s) may proceed as normal
+  void resetFailNextSystemConvergenceCheck() { _fail_next_system_convergence_check = false; }
+
   /*
    * Set the status of loop order of execution printing
    * @param print_exec set of execution flags to print on
@@ -2399,12 +2733,49 @@ public:
    */
   const std::vector<SolverSystemName> & getSolverSystemNames() const { return _solver_sys_names; }
 
+  virtual const libMesh::CouplingMatrix & nonlocalCouplingMatrix(const unsigned i) const override;
+
+  virtual bool checkNonlocalCouplingRequirement() const override;
+
+  virtual Moose::FEBackend feBackend() const { return Moose::FEBackend::LibMesh; }
+
+  class CreateTaggedMatrixKey
+  {
+    CreateTaggedMatrixKey() {}
+    CreateTaggedMatrixKey(const CreateTaggedMatrixKey &) {}
+
+    friend class AddTaggedMatricesAction;
+  };
+
+  void createTagMatrices(CreateTaggedMatrixKey);
+
+#ifdef MOOSE_KOKKOS_ENABLED
+  /**
+   * @returns whether any Kokkos object was added in the problem
+   */
+  bool hasKokkosObjects() const { return _has_kokkos_objects; }
+  /**
+   * @returns whether any Kokkos residual object was added in the problem
+   */
+  bool hasKokkosResidualObjects() const { return _has_kokkos_residual_objects; }
+#endif
+
 protected:
+  /**
+   * Deprecated. Users should switch to overriding the meshChanged which takes arguments
+   */
+  virtual void meshChanged() {}
+
   /// Create extra tagged vectors and matrices
   void createTagVectors();
 
   /// Create extra tagged solution vectors
   void createTagSolutions();
+
+  /**
+   * Update data after a mesh displaced.
+   */
+  virtual void meshDisplaced();
 
   /**
    * Do generic system computations
@@ -2430,10 +2801,22 @@ private:
    */
   void setResidualObjectParamsAndLog(const std::string & ro_name,
                                      const std::string & name,
-                                     InputParameters & params,
+                                     InputParameters & parameters,
                                      const unsigned int nl_sys_num,
                                      const std::string & base_name,
                                      bool & reinit_displaced);
+
+  /**
+   * Set the subproblem and system parameters for auxiliary kernels and log their addition
+   * @param ak_name The type of the auxiliary kernel
+   * @param name The name of the auxiliary kernel
+   * @param parameters The auxiliary kernel parameters
+   * @param base_name The base type of the auxiliary kernel, i.e. AuxKernel or KokkosAuxKernel
+   */
+  void setAuxKernelParamsAndLog(const std::string & ak_name,
+                                const std::string & name,
+                                InputParameters & parameters,
+                                const std::string & base_name);
 
   /**
    * Make basic solver params for linear solves
@@ -2444,7 +2827,13 @@ protected:
   bool _initialized;
 
   /// Nonlinear system(s) convergence name(s)
-  std::vector<ConvergenceName> _nonlinear_convergence_names;
+  std::optional<std::vector<ConvergenceName>> _nonlinear_convergence_names;
+  /// Linear system(s) convergence name(s) (if any)
+  std::optional<std::vector<ConvergenceName>> _linear_convergence_names;
+  /// MultiApp fixed point convergence name
+  std::optional<ConvergenceName> _multiapp_fixed_point_convergence_name;
+  /// Steady-state detection convergence name
+  std::optional<ConvergenceName> _steady_state_convergence_name;
 
   std::set<TagID> _fe_vector_tags;
 
@@ -2466,10 +2855,12 @@ protected:
   Real & _dt;
   Real & _dt_old;
 
-  /// Flag that the nonlinear convergence name has been set
-  bool _set_nonlinear_convergence_names;
   /// Flag that the problem needs to add the default nonlinear convergence
   bool _need_to_add_default_nonlinear_convergence;
+  /// Flag that the problem needs to add the default fixed point convergence
+  bool _need_to_add_default_multiapp_fixed_point_convergence;
+  /// Flag that the problem needs to add the default steady convergence
+  bool _need_to_add_default_steady_state_convergence;
 
   /// The linear system names
   const std::vector<LinearSystemName> _linear_sys_names;
@@ -2525,12 +2916,20 @@ protected:
   Moose::CouplingType _coupling;                             ///< Type of variable coupling
   std::vector<std::unique_ptr<libMesh::CouplingMatrix>> _cm; ///< Coupling matrix for variables.
 
+#ifdef MOOSE_KOKKOS_ENABLED
+  Moose::Kokkos::Array<Moose::Kokkos::System> _kokkos_systems;
+#endif
+
   /// Dimension of the subspace spanned by the vectors with a given prefix
   std::map<std::string, unsigned int> _subspace_dim;
 
   /// The Assembly objects. The first index corresponds to the thread ID and the second index
   /// corresponds to the nonlinear system number
   std::vector<std::vector<std::unique_ptr<Assembly>>> _assembly;
+
+#ifdef MOOSE_KOKKOS_ENABLED
+  Moose::Kokkos::Assembly _kokkos_assembly;
+#endif
 
   /// Warehouse to store mesh divisions
   /// NOTE: this could probably be moved to the MooseMesh instead of the Problem
@@ -2539,6 +2938,10 @@ protected:
 
   /// functions
   MooseObjectWarehouse<Function> _functions;
+
+#ifdef MOOSE_KOKKOS_ENABLED
+  MooseObjectWarehouse<Moose::FunctionBase> _kokkos_functions;
+#endif
 
   /// convergence warehouse
   MooseObjectWarehouse<Convergence> _convergences;
@@ -2556,19 +2959,27 @@ protected:
   ScalarInitialConditionWarehouse _scalar_ics; // use base b/c of setup methods
   ///@}
 
-protected:
   // material properties
   MaterialPropertyRegistry _material_prop_registry;
   MaterialPropertyStorage & _material_props;
   MaterialPropertyStorage & _bnd_material_props;
   MaterialPropertyStorage & _neighbor_material_props;
 
+#ifdef MOOSE_KOKKOS_ENABLED
+  Moose::Kokkos::MaterialPropertyStorage & _kokkos_material_props;
+  Moose::Kokkos::MaterialPropertyStorage & _kokkos_bnd_material_props;
+  Moose::Kokkos::MaterialPropertyStorage & _kokkos_neighbor_material_props;
+#endif
   ///@{
   // Material Warehouses
   MaterialWarehouse _materials;           // regular materials
   MaterialWarehouse _interface_materials; // interface materials
   MaterialWarehouse _discrete_materials;  // Materials that the user must compute
   MaterialWarehouse _all_materials; // All materials for error checking and MaterialData storage
+
+#ifdef MOOSE_KOKKOS_ENABLED
+  MaterialWarehouse _kokkos_materials; // Kokkos materials
+#endif
   ///@}
 
   ///@{
@@ -2619,14 +3030,8 @@ protected:
   /// Objects to be notified when the mesh changes
   std::vector<MeshChangedInterface *> _notify_when_mesh_changes;
 
-  /**
-   * Helper method to update some or all data after a mesh change.
-   *
-   * Iff intermediate_change is true, only perform updates as
-   * necessary to prepare for another mesh change
-   * immediately-subsequent.
-   */
-  void meshChangedHelper(bool intermediate_change = false);
+  /// Objects to be notified when the mesh displaces
+  std::vector<MeshDisplacedInterface *> _notify_when_mesh_displaces;
 
   /// Helper to check for duplicate variable names across systems or within a single system
   bool duplicateVariableCheck(const std::string & var_name,
@@ -2683,7 +3088,7 @@ protected:
   MooseMesh * _displaced_mesh;
   std::shared_ptr<DisplacedProblem> _displaced_problem;
   GeometricSearchData _geometric_search_data;
-  MortarData _mortar_data;
+  std::unique_ptr<MortarInterfaceWarehouse> _mortar_data;
 
   /// Whether to call DisplacedProblem::reinitElem when this->reinitElem is called
   bool _reinit_displaced_elem;
@@ -2820,6 +3225,10 @@ protected:
   // loop state during projection of initial conditions
   unsigned short _current_ic_state;
 
+  /// Whether to assemble matrices using hash tables instead of preallocating matrix memory. This
+  /// can be a good option if the sparsity pattern changes throughout the course of the simulation
+  const bool _use_hash_table_matrix_assembly;
+
 private:
   /**
    * Handle exceptions. Note that the result of this call will be a thrown MooseException. The
@@ -2886,6 +3295,11 @@ private:
   // Parameters handling Jacobian sparsity pattern behavior
   /// Whether to error when the Jacobian is re-allocated, usually because the sparsity pattern changed
   bool _error_on_jacobian_nonzero_reallocation;
+  /// Whether we should restore the original nonzero pattern for every Jacobian evaluation. This
+  /// option is useful if the sparsity pattern is constantly changing and you are using hash table
+  /// assembly or if you wish to continually restore the matrix to the originally preallocated
+  /// sparsity pattern computed by relationship managers.
+  const bool _restore_original_nonzero_pattern;
   /// Whether to ignore zeros in the Jacobian, thereby leading to a reduced sparsity pattern
   bool _ignore_zeros_in_jacobian;
   /// Whether to preserve the system matrix / Jacobian sparsity pattern, using 0-valued entries usually
@@ -2894,7 +3308,7 @@ private:
   const bool _force_restart;
   const bool _allow_ics_during_restart;
   const bool _skip_nl_system_check;
-  bool _fail_next_nonlinear_convergence_check;
+  bool _fail_next_system_convergence_check;
   const bool _allow_invalid_solution;
   const bool _show_invalid_solution_console;
   const bool & _immediately_print_invalid_solution;
@@ -2960,6 +3374,20 @@ private:
   /// If we catch an exception during residual/Jacobian evaluaton for which we don't have specific
   /// handling, immediately error instead of allowing the time step to be cut
   const bool _regard_general_exceptions_as_errors;
+
+  /// nonlocal coupling matrix
+  std::vector<libMesh::CouplingMatrix> _nonlocal_cm;
+
+  /// nonlocal coupling requirement flag
+  bool _requires_nonlocal_coupling;
+
+#ifdef MOOSE_KOKKOS_ENABLED
+  /// Whether we have any Kokkos objects
+  bool _has_kokkos_objects = false;
+
+  /// Whether we have any Kokkos residual objects
+  bool _has_kokkos_residual_objects = false;
+#endif
 
   friend void Moose::PetscSupport::setSinglePetscOption(const std::string & name,
                                                         const std::string & value,
@@ -3168,3 +3596,35 @@ FEProblemBase::clearCurrentResidualVectorTags()
 {
   _current_residual_vector_tags.clear();
 }
+
+#ifdef MOOSE_KOKKOS_ENABLED
+template <typename T>
+T &
+FEProblemBase::getKokkosFunction(const std::string & name)
+{
+  if (!hasKokkosFunction(name))
+  {
+    // If we didn't find a function, it might be a default function, attempt to construct one now
+    std::istringstream ss(name);
+    Real real_value;
+
+    // First see if it's just a constant. If it is, build a ConstantFunction
+    if (ss >> real_value && ss.eof())
+    {
+      InputParameters params = _factory.getValidParams("KokkosConstantFunction");
+      params.set<Real>("value") = real_value;
+      addKokkosFunction("KokkosConstantFunction", ss.str(), params);
+    }
+
+    // Try once more
+    if (!hasKokkosFunction(name))
+      mooseError("Unable to find Kokkos function '" + name, "'");
+  }
+
+  auto * const ret = dynamic_cast<T *>(_kokkos_functions.getActiveObject(name).get());
+  if (!ret)
+    mooseError("No Kokkos function named '", name, "' of appropriate type");
+
+  return *ret;
+}
+#endif

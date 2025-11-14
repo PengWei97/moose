@@ -29,7 +29,7 @@ const std::string SubChannelApp::DENSITY = "rho";
 const std::string SubChannelApp::VISCOSITY = "mu";
 const std::string SubChannelApp::WETTED_PERIMETER = "w_perim";
 const std::string SubChannelApp::LINEAR_HEAT_RATE = "q_prime";
-const std::string SubChannelApp::DUCT_LINEAR_HEAT_RATE = "q_prime_duct";
+const std::string SubChannelApp::DUCT_HEAT_FLUX = "duct_heat_flux";
 const std::string SubChannelApp::DUCT_TEMPERATURE = "Tduct";
 const std::string SubChannelApp::DISPLACEMENT = "displacement";
 
@@ -70,26 +70,6 @@ SubChannelApp::registerApps()
   FluidPropertiesApp::registerApps();
   HeatTransferApp::registerApps();
   ReactorApp::registerApps();
-}
-
-void
-SubChannelApp::registerObjects(Factory & factory)
-{
-  mooseDeprecated("use registerAll instead of registerObjects");
-  Registry::registerObjectsTo(factory, {"SubChannelApp"});
-}
-
-void
-SubChannelApp::associateSyntax(Syntax & /*syntax*/, ActionFactory & action_factory)
-{
-  mooseDeprecated("use registerAll instead of associateSyntax");
-  Registry::registerActionsTo(action_factory, {"SubChannelApp"});
-}
-
-void
-SubChannelApp::registerExecFlags(Factory & /*factory*/)
-{
-  mooseDeprecated("Do not use registerExecFlags, apps no longer require flag registration");
 }
 
 /***************************************************************************************************

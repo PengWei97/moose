@@ -2,14 +2,22 @@
 -include $(MOOSE_DIR)/conf_vars.mk
 
 # Whether or not to do a Unity build
-MOOSE_UNITY ?= true
-MOOSE_HEADER_SYMLINKS ?= true
+# If we are making compile_commands.json, default MOOSE_UNITY and MOOSE_HEADER_SYMLINKS to false
+ifeq ($(GENERATING_COMPILE_COMMANDS),true)
+  MOOSE_UNITY ?= false
+  MOOSE_HEADER_SYMLINKS ?= false
+else
+  MOOSE_UNITY ?= true
+  MOOSE_HEADER_SYMLINKS ?= true
+endif
 
 # We ignore this in the contrib folder because we will set up the include
 # directories manually later
-IGNORE_CONTRIB_INC ?= libtorch mfem neml2
+IGNORE_CONTRIB_INC ?= libtorch mfem neml2 kokkos
 ENABLE_LIBTORCH ?= false
 ENABLE_MFEM ?= false
+ENABLE_KOKKOS ?= false
+ENABLE_KOKKOS_GPU ?= true
 
 # this allows us to modify the linked names/rpaths safely later for install targets
 ifneq (,$(findstring darwin,$(libmesh_HOST)))
@@ -102,22 +110,32 @@ libmesh_LDFLAGS   += $(wasp_LDFLAGS)
 #
 include $(FRAMEWORK_DIR)/contrib/neml2.mk
 
+SKIP_EXTERNAL_LIBRARY_CHECK_TARGETS := clean clobber cleanall clobberall echo_include echo_library install_make_dir libmesh_submodule_status
+
+# $(call check_library_should_error,<libname>)
+define check_library_should_error
+ifeq ($(strip $$(MAKECMDGOALS)),)
+  $$(eval $1_should_error := true)
+else
+  $$(eval $1_filtered_goals := $$(filter $$(SKIP_EXTERNAL_LIBRARY_CHECK_TARGETS),$$(MAKECMDGOALS)))
+  ifneq ($$(words $$($1_filtered_goals)),$$(words $$(MAKECMDGOALS)))
+    $$(eval $1_should_error := true)
+  endif
+endif
+endef
+
 #
 # Conditional parts if the user wants to compile MOOSE with torchlib
 #
-SKIP_EXTERNAL_LIBRARY_CHECK_TARGETS := clean clobber cleanall clobberall echo_include echo_library install_make_dir libmesh_submodule_status
 ifeq ($(ENABLE_LIBTORCH),true)
 	LIBTORCH_LIB := libtorch.$(lib_suffix)
 
   ifneq ($(wildcard $(LIBTORCH_DIR)/lib/$(LIBTORCH_LIB)),)
-    # Enabling parts that have pytorch dependencies
-    libmesh_CXXFLAGS += -DLIBTORCH_ENABLED
-
     # Adding the include directories, we use -isystem to silence the warning coming from
     # libtorch (which would cause errors in the testing phase)
-    libmesh_CXXFLAGS += -isystem $(LIBTORCH_DIR)/include/torch/csrc/api/include
-    libmesh_CXXFLAGS += -isystem $(LIBTORCH_DIR)/include
-		libmesh_CXXFLAGS += -isystem $(LIBTORCH_DIR)/include/c10
+    libmesh_CPPFLAGS += -isystem $(LIBTORCH_DIR)/include/torch/csrc/api/include
+    libmesh_CPPFLAGS += -isystem $(LIBTORCH_DIR)/include
+		libmesh_CPPFLAGS += -isystem $(LIBTORCH_DIR)/include/c10
 
     # Dynamically linking with the available pytorch library
 		ifeq ($(shell uname -s),Darwin)
@@ -129,12 +147,15 @@ ifeq ($(ENABLE_LIBTORCH),true)
     libmesh_LDFLAGS += -L$(LIBTORCH_DIR)/lib -ltorch
 
   else
-    filtered_goals := $(filter $(SKIP_EXTERNAL_LIBRARY_CHECK_TARGETS),$(MAKECMDGOALS))
-    ifeq ($(words $(filtered_goals)), $(words $(MAKECMDGOALS)))
-      $(info Skipping libtorch error check for targets that don't involve compilation!)
-    else
+		# No libtorch library found
+    $(eval $(call check_library_should_error,libtorch))
+
+    ifeq ($(libtorch_should_error),true)
       $(error ERROR! MOOSE was configured with libtorch but we cannot locate any dynamic libraries of libtorch. Make sure to install libtorch using the instructions provided here: https://mooseframework.inl.gov/getting_started/installation/install_libtorch.html !)
+    else
+      $(info Skipping libtorch error check for targets that don't involve compilation!)
     endif
+
   endif
 endif
 
@@ -142,34 +163,33 @@ endif
 # Conditional parts if the user wants to compile MOOSE with mfem
 #
 ifeq ($(ENABLE_MFEM),true)
-	MFEM_LIB := libmfem.$(lib_suffix)
-	MFEM_COMMON_LIB := libmfem-common.$(lib_suffix)
+  MFEM_LIB := libmfem-$(METHOD).$(lib_suffix)
+  MFEM_COMMON_LIB := libmfem-common-$(METHOD).$(lib_suffix)
 
   ifneq ($(and $(wildcard $(MFEM_DIR)/lib/$(MFEM_LIB)), $(wildcard $(MFEM_DIR)/lib/$(MFEM_COMMON_LIB))),)
-    # Enabling parts that have MFEM dependencies
-    libmesh_CXXFLAGS += -DMFEM_ENABLED
-
     # Adding the include directories
-	  include $(MFEM_DIR)/share/mfem/config.mk
-	  libmesh_CXXFLAGS += $(MFEM_INCFLAGS)
+    include $(MFEM_DIR)/share/mfem/config.mk
+    libmesh_CPPFLAGS += $(MFEM_INCFLAGS) -DMFEM_CONFIG_FILE=\"_config-$(METHOD).hpp\"
 
     # Dynamically linking with the available MFEM library
-	  ifeq ($(shell uname -s),Darwin)
-	  	libmesh_LDFLAGS += -Wl,-rpath,$(MFEM_DIR)/lib
-	  else
-	    libmesh_LDFLAGS += -Wl,--copy-dt-needed-entries,-rpath,$(MFEM_DIR)/lib
-	  endif
+    ifeq ($(shell uname -s),Darwin)
+      libmesh_LDFLAGS += -Wl,-rpath,$(MFEM_DIR)/lib
+    else
+      libmesh_LDFLAGS += -Wl,--copy-dt-needed-entries,-rpath,$(MFEM_DIR)/lib
+    endif
 
-    libmesh_LDFLAGS += -L$(MFEM_DIR)/lib -lmfem -lmfem-common
+    libmesh_LDFLAGS += -L$(MFEM_DIR)/lib -lmfem-$(METHOD) -lmfem-common-$(METHOD)
 
   else
-    filtered_goals := $(filter $(SKIP_EXTERNAL_LIBRARY_CHECK_TARGETS),$(MAKECMDGOALS))
-    ifeq ($(words $(filtered_goals)), $(words $(MAKECMDGOALS)))
-      $(info Skipping libmfem error check for targets that don't involve compilation!)
+    # No mfem library found
+    $(eval $(call check_library_should_error,mfem))
+
+    ifeq ($(mfem_should_error),true)
+      $(error ERROR! Cannot locate libmfem-$(METHOD) and libmfem-common-$(METHOD). Make sure to install mfem before compiling MOOSE!)
     else
-      $(error ERROR! Cannot locate libmfem and libmfem-common. Make sure to install mfem before compiling MOOSE!)
+      $(info Skipping libmfem error check for targets that don't involve compilation!)
     endif
-	endif
+  endif
 endif
 
 #
@@ -186,8 +206,10 @@ endif
 UNAME := $(shell uname)
 ifeq ($(UNAME), Darwin)
 	DYNAMIC_LOOKUP := -undefined dynamic_lookup
+	hit_pad_LDFLAGS := -Wl,-headerpad_max_install_names
 else
 	DYNAMIC_LOOKUP :=
+	hit_pad_LDFLAGS :=
 endif
 
 # windows (msys2) specific settings (we need to cut the version number off)
@@ -198,7 +220,7 @@ ifeq ($(UNAME10), MINGW64_NT)
 	PYMOD_COMPILEFLAGS := $(shell $(pyconfig) --cflags --ldflags --libs)
 else
 	PYMOD_EXTENSION    := so
-	PYMOD_COMPILEFLAGS := -L$(shell $(pyconfig) --prefix)/lib $(shell $(pyconfig) --includes)
+	PYMOD_COMPILEFLAGS := -L$(shell $(pyconfig) --prefix)/lib -Wl,-rpath,$(shell $(pyconfig) --prefix)/lib $(shell $(pyconfig) --includes)
 endif
 
 $(pyhit_srcfiles) $(hit_CLI_srcfiles): | prebuild
@@ -208,7 +230,7 @@ pyhit_COMPILEFLAGS += $(PYMOD_COMPILEFLAGS) $(wasp_CXXFLAGS) $(wasp_LDFLAGS)
 
 hit $(pyhit_LIB) $(hit_CLI): $(pyhit_srcfiles) $(hit_CLI_srcfiles)
 	@echo "Building and linking $(pyhit_LIB)..."
-	@bash -c '(cd "$(HIT_DIR)" && $(libmesh_CXX) -I$(HIT_DIR)/include -std=c++17 -w -fPIC -lstdc++ -shared $^ $(pyhit_COMPILEFLAGS) $(DYNAMIC_LOOKUP) -o $(pyhit_LIB))'
+	@bash -c '(cd "$(HIT_DIR)" && $(libmesh_CXX) $(CXXFLAGS) -I$(HIT_DIR)/include -std=c++17 -w -fPIC -lstdc++ -shared $^ $(pyhit_COMPILEFLAGS) $(DYNAMIC_LOOKUP) -o $(pyhit_LIB) $(hit_pad_LDFLAGS))'
 	@bash -c '(cd "$(HIT_DIR)" && $(MAKE))'
 
 capabilities_LIBNAME      := capabilities.$(PYMOD_EXTENSION)
@@ -218,7 +240,7 @@ capabilities_LDFLAGS      := $(DYNAMIC_LOOKUP)
 
 capabilities $(capabilities_LIB) : $(capabilities_srcfiles)
 	@echo "Building and linking $(capabilities_LIB)..."
-	@bash -c '(cd "$(CAPABILITIES_DIR)" && $(libmesh_CXX) -std=c++17 -w -fPIC -lstdc++ -shared $(capabilities_srcfiles) $(capabilities_COMPILEFLAGS) $(capabilities_LDFLAGS) -o $(capabilities_LIB))'
+	@bash -c '(cd "$(CAPABILITIES_DIR)" && $(libmesh_UNDERLYING_CXX) -DMOOSESTRINGUTILS_NO_LIBMESH -std=c++17 -w -fPIC -lstdc++ -shared $(capabilities_srcfiles) $(capabilities_COMPILEFLAGS) $(capabilities_LDFLAGS) $(LDFLAGS) -o $(capabilities_LIB))'
 
 #
 # gtest
@@ -238,9 +260,11 @@ gtest_INCLUDE := -I$(gtest_DIR)
 moose_config := $(FRAMEWORK_DIR)/include/base/MooseConfig.h
 moose_default_config := $(FRAMEWORK_DIR)/include/base/MooseDefaultConfig.h
 
-$(moose_config): | prebuild
+$(moose_config):
 	@echo "Copying default MOOSE configuration to: "$@"..."
 	@cp $(moose_default_config) $(moose_config)
+
+libmesh_CPPFLAGS += -include $(moose_config)
 
 #
 # header symlinks
@@ -248,7 +272,6 @@ $(moose_config): | prebuild
 ifeq ($(MOOSE_HEADER_SYMLINKS),true)
 
 all_header_dir := $(FRAMEWORK_DIR)/build/header_symlinks
-moose_all_header_dir := $(all_header_dir)
 
 define all_header_dir_rule
 $(1): | prebuild
@@ -281,8 +304,8 @@ endef
 $(eval $(call all_header_dir_rule, $(all_header_dir)))
 $(call symlink_rules, $(all_header_dir), $(include_files))
 
-moose_config_symlink := $(moose_all_header_dir)/MooseConfig.h
-$(moose_config_symlink): $(moose_config) | $(moose_all_header_dir) prebuild
+moose_config_symlink := $(all_header_dir)/MooseConfig.h
+$(moose_config_symlink): $(moose_config) | $(all_header_dir) prebuild
 	@echo "Symlinking MOOSE configure "$(moose_config_symlink)
 	@ln -sf $(moose_config) $(moose_config_symlink)
 
@@ -318,8 +341,8 @@ ifeq ($(MOOSE_UNITY),true)
 srcsubdirs := $(shell find $(FRAMEWORK_DIR)/src -mindepth 1 -maxdepth 1 -type d -not -path '*/.libs*')
 allsrcsubdirs := $(shell find $(FRAMEWORK_DIR)/src -type d -not -path '*/.libs*')
 
-# This folder does not build with unity
-moose_non_unity := %/utils_nonunity
+# These folders do not build with unity
+moose_non_unity := %/utils_nonunity %/kokkos
 
 # Add additional non-unity directories if libtorch is enabled
 ifeq ($(ENABLE_LIBTORCH),true)
@@ -364,14 +387,15 @@ endif
 # 1: The directory where the unity source files will go
 # 2: The application directory
 # 3: A subdir that will be unity built
-# The output: is the unique .C file name for the unity file
+# 4: The source file extension
+# The output: is the unique .C or .K file name for the unity file
 # Here's what this does:
 # For each explicit path we're going to create a unique unity filename by:
 # 1. Stripping off $(FRAMEWORK_DIR)/src
 # 2. For the special case of src itself strip off $(FRAMEWORK_DIR)
 # 3. Turn every remaining '/' into an '_'
-# 4. Add '_Unity.C'
-unity_unique_name = $(1)/$(subst /,_,$(patsubst $(2)/%,%,$(patsubst $(2)/src/%,%,$(3))))_Unity.C
+# 4. Add '_Unity.C' or '_Unity.K'
+unity_unique_name = $(1)/$(subst /,_,$(patsubst $(2)/%,%,$(patsubst $(2)/src/%,%,$(3))))_Unity.$(4)
 
 # Here's what this does:
 # 1. Defines a rule to build a unity file from each subdirectory under src
@@ -380,9 +404,9 @@ unity_unique_name = $(1)/$(subst /,_,$(patsubst $(2)/%,%,$(patsubst $(2)/src/%,%
 # 4. Now that we have the name of the Unity file we need to find all of the .C files that should be #included in it
 # 4a. Use find to pick up all .C files
 # 4b. Make sure we don't pick up any _Unity.C files (we shouldn't have any anyway)
-$(foreach srcsubdir,$(unity_srcsubdirs),$(eval $(call unity_file_rule,$(call unity_unique_name,$(unity_src_dir),$(FRAMEWORK_DIR),$(srcsubdir)),$(shell find $(srcsubdir) \( -type f -o -type l \) -name "*.C"),$(srcsubdir),$(unity_src_dir))))
+$(foreach srcsubdir,$(unity_srcsubdirs),$(eval $(call unity_file_rule,$(call unity_unique_name,$(unity_src_dir),$(FRAMEWORK_DIR),$(srcsubdir),C),$(shell find $(srcsubdir) \( -type f -o -type l \) -name "*.C"),$(srcsubdir),$(unity_src_dir))))
 
-app_unity_srcfiles := $(foreach srcsubdir,$(unity_srcsubdirs),$(call unity_unique_name,$(unity_src_dir),$(FRAMEWORK_DIR),$(srcsubdir)))
+app_unity_srcfiles := $(foreach srcsubdir,$(unity_srcsubdirs),$(call unity_unique_name,$(unity_src_dir),$(FRAMEWORK_DIR),$(srcsubdir),C))
 
 unity_srcfiles += $(app_unity_srcfiles)
 
@@ -432,7 +456,8 @@ ifeq (x$(moose_HEADER_deps),x)
   moose_HEADER_deps := $(realpath $(moose_GIT_DIR)/HEAD $(moose_GIT_DIR)/index)
 endif
 
-$(moose_revision_header): $(moose_HEADER_deps) | $(moose_all_header_dir)
+.SECONDEXPANSION:
+$(moose_revision_header): $(moose_HEADER_deps) | $$(all_header_dir)
 	@echo "Checking if header needs updating: "$@"..."
 	$(shell REPO_LOCATION="$(FRAMEWORK_DIR)" \
 	        HEADER_FILE="$(moose_revision_header)" \
@@ -443,8 +468,8 @@ $(moose_revision_header): $(moose_HEADER_deps) | $(moose_all_header_dir)
 	@if [ $(.SHELLSTATUS) -ne 0 ]; then \
 	echo "\nFailed to generate MooseRevision.h\n"; exit $(.SHELLSTATUS); \
 	fi
-	@if [ ! -e "$(moose_all_header_dir)/MooseRevision.h" ]; then \
-		ln -sf $(moose_revision_header) $(moose_all_header_dir); \
+	@if [ ! -e "$(all_header_dir)/MooseRevision.h" ]; then \
+		ln -sf $(moose_revision_header) $(all_header_dir); \
 	fi
 
 # libmesh submodule status
@@ -463,51 +488,125 @@ endif
 wasp_submodule_status:
 	@if [ x$(wasp_submodule_message) != "x" ]; then printf $(wasp_submodule_message); exit 1; fi
 
+# Kokkos for MOOSE
+
+app_KOKKOS_LIBS :=
+
+ifeq ($(ENABLE_KOKKOS),true)
+
+ifeq ($(MOOSE_UNITY),true)
+
+kokkos_unity_srcsubdirs := $(shell find $(FRAMEWORK_DIR)/src/kokkos -mindepth 1 -maxdepth 1 -type d -not -path '*/.libs*')
+$(foreach srcsubdir,$(kokkos_unity_srcsubdirs),$(eval $(call unity_file_rule,$(call unity_unique_name,$(unity_src_dir),$(FRAMEWORK_DIR),$(srcsubdir),K),$(shell find $(srcsubdir) \( -type f -o -type l \) -name "*.K"),$(srcsubdir),$(unity_src_dir))))
+
+app_KOKKOS_UNITY_SRC_FILES := $(foreach srcsubdir,$(kokkos_unity_srcsubdirs),$(call unity_unique_name,$(unity_src_dir),$(FRAMEWORK_DIR),$(srcsubdir),K))
+MOOSE_KOKKOS_SRC_FILES     := $(app_KOKKOS_UNITY_SRC_FILES)
+
+else
+
+MOOSE_KOKKOS_SRC_FILES := $(shell find $(FRAMEWORK_DIR) -name "*.K")
+
+endif
+
+MOOSE_KOKKOS_OBJECTS := $(patsubst %.K, %.$(KOKKOS_OBJ_SUFFIX), $(MOOSE_KOKKOS_SRC_FILES))
+MOOSE_KOKKOS_DEPS    := $(patsubst %.$(KOKKOS_OBJ_SUFFIX), %.$(KOKKOS_OBJ_SUFFIX).d, $(MOOSE_KOKKOS_OBJECTS))
+MOOSE_KOKKOS_LIB     := $(FRAMEWORK_DIR)/libmoose$(KOKKOS_LIB_SUFFIX)
+
+KOKKOS_OBJECTS := $(MOOSE_KOKKOS_OBJECTS)
+KOKKOS_DEPS    := $(MOOSE_KOKKOS_DEPS)
+
+-include $(MOOSE_KOKKOS_DEPS)
+
+ifeq ($(MOOSE_HEADER_SYMLINKS),true)
+  $(KOKKOS_OBJECTS): $(moose_config_symlink) | moose_header_symlinks
+else
+  $(KOKKOS_OBJECTS): $(moose_config)
+endif
+
+ifeq ($(KOKKOS_COMPILER),CPU)
+
+$(MOOSE_KOKKOS_LIB): $(MOOSE_KOKKOS_OBJECTS)
+	@echo "Linking Kokkos Library "$@"..."
+	@$(libmesh_LIBTOOL) --tag=CXX $(LIBTOOLFLAGS) --mode=link --quiet \
+		$(KOKKOS_CXX) -o $@ $(MOOSE_KOKKOS_OBJECTS) $(KOKKOS_LDFLAGS) $(KOKKOS_LIBS) -rpath $(FRAMEWORK_DIR)
+	@$(libmesh_LIBTOOL) --mode=install --quiet install -c $(MOOSE_KOKKOS_LIB) $(FRAMEWORK_DIR)
+
+else
+
+# libtool ignores nvcc and just uses mpicxx to link, so cannot be used
+$(MOOSE_KOKKOS_LIB): $(MOOSE_KOKKOS_OBJECTS)
+	@echo "Linking Kokkos Library "$@"..."
+	@$(KOKKOS_CXX) --shared -o $@ $(MOOSE_KOKKOS_OBJECTS) $(KOKKOS_LDFLAGS) $(KOKKOS_LIBS)
+
+endif
+
+endif
+
 # Pre-make for checking current dependency versions and showing useful warnings
-# if things like conda packages are out of date. The "-" in "@-" means that
-# it is allowed to not exit 0. "::" means that the rule can be appended by
-# applications that require prebuild steps.
-prebuild::
+# if things like conda packages are out of date. The variable is such that
+# rules can use $$(prebuild), instead of prebuild, as a prerequisite. In those
+# cases, if this file, moose.mk, is not included, the variable expands to the
+# empty string, establishing no dependency, and keeping the rule valid. The
+# order-only prerequisite $(moose_config), guarantees _some_ configuration file
+# exists prior to execution of any recipe whose rule depends on prebuild. The
+# responsibility to trigger a rebuild on an update of the configuration file,
+# e.g. via the configure command, lies with normal prerequisites for the rules
+# of targets that actually depend on the contents of the configuration file.
+# The "-" in "@-" means that it is allowed to not exit 0. "::" means that
+# the rule can be appended by applications that require prebuild steps.
+prebuild = prebuild
+prebuild:: | $(moose_config)
 	@-python3 $(FRAMEWORK_DIR)/../scripts/premake.py
 
 wasp_submodule_status $(moose_revision_header) $(moose_LIB): | prebuild
 moose: wasp_submodule_status $(moose_revision_header) $(moose_LIB) $(capabilities_LIB)
 
+# Check for support for process substitution, and if supported, we delete a known warning on MacOS from
+# the output because it is printed thousands of times
+CHECK_PROCESS_SUBSTITUTION := $(shell bash -c 'echo hello > >(cat)')
+ifeq ($(CHECK_PROCESS_SUBSTITUTION),hello)
+  SILENCE_SOME_WARNINGS = 1> >(cat >&1) 2> >(grep -v "could not create compact unwind for" >&2)
+endif
+
 # [JWP] With libtool, there is only one link command, it should work whether you are creating
 # shared or static libraries, and it should be portable across Linux and Mac...
 $(pcre_LIB): $(pcre_objects)
 	@echo "Linking Library "$@"..."
-	@$(libmesh_LIBTOOL) --tag=CC $(LIBTOOLFLAGS) --mode=link --quiet \
-	  $(libmesh_CC) $(libmesh_CFLAGS) -o $@ $(pcre_objects) $(libmesh_LDFLAGS) $(libmesh_LIBS) $(EXTERNAL_FLAGS) -rpath $(pcre_DIR)
+	@bash -c '$(libmesh_LIBTOOL) --tag=CC $(LIBTOOLFLAGS) --mode=link --quiet \
+	  $(libmesh_CC) $(libmesh_CFLAGS) -o $@ $(pcre_objects) $(libmesh_LDFLAGS) $(libmesh_LIBS) $(EXTERNAL_FLAGS) -rpath $(pcre_DIR) ${SILENCE_SOME_WARNINGS}'
 	@$(libmesh_LIBTOOL) --mode=install --quiet install -c $(pcre_LIB) $(pcre_DIR)
 
 $(gtest_LIB): $(gtest_objects)
 	@echo "Linking Library "$@"..."
-	@$(libmesh_LIBTOOL) --tag=CC $(LIBTOOLFLAGS) --mode=link --quiet \
-	  $(libmesh_CC) -o $@ $(gtest_objects) $(EXTERNAL_FLAGS) -rpath $(gtest_DIR)
+	@bash -c '$(libmesh_LIBTOOL) --tag=CC $(LIBTOOLFLAGS) --mode=link --quiet \
+	  $(libmesh_CC) -o $@ $(gtest_objects) $(EXTERNAL_FLAGS) -rpath $(gtest_DIR) ${SILENCE_SOME_WARNINGS}'
 	@$(libmesh_LIBTOOL) --mode=install --quiet install -c $(gtest_LIB) $(gtest_DIR)
 
 $(hit_LIB): $(hit_objects)
 	@echo "Linking Library "$@"..."
-	@$(libmesh_LIBTOOL) --tag=CC $(LIBTOOLFLAGS) --mode=link --quiet \
-	  $(libmesh_CXX) $(CXXFLAGS) $(libmesh_CXXFLAGS) -o $@ $(hit_objects) $(libmesh_LDFLAGS) $(libmesh_LIBS) $(EXTERNAL_FLAGS) -rpath $(HIT_DIR)
+	@bash -c '$(libmesh_LIBTOOL) --tag=CC $(LIBTOOLFLAGS) --mode=link --quiet \
+	  $(libmesh_CXX) $(libmesh_CXXFLAGS) -o $@ $(hit_objects) $(LDFLAGS) $(libmesh_LDFLAGS) $(libmesh_LIBS) $(EXTERNAL_FLAGS) -rpath $(HIT_DIR) ${SILENCE_SOME_WARNINGS}'
 	@$(libmesh_LIBTOOL) --mode=install --quiet install -c $(hit_LIB) $(HIT_DIR)
 
-$(moose_LIB): $(moose_objects) $(pcre_LIB) $(gtest_LIB) $(hit_LIB) $(pyhit_LIB) $(moose_revision_header)
+ifeq ($(MOOSE_UNITY),true)
+$(moose_LIB): $(moose_objects) $(pcre_LIB) $(gtest_LIB) $(hit_LIB) $(pyhit_LIB) $(moose_revision_header) $(MOOSE_KOKKOS_LIB)
+	@echo "Linking Library "$@"..."
+	@bash -c '$(libmesh_LIBTOOL) --tag=CXX $(LIBTOOLFLAGS) --mode=link --quiet \
+	  $(libmesh_CXX) $(libmesh_CXXFLAGS) -o $@ $(moose_objects) $(pcre_LIB) $(png_LIB) $(LDFLAGS) $(libmesh_LDFLAGS) $(libmesh_LIBS) $(EXTERNAL_FLAGS) -rpath $(FRAMEWORK_DIR) ${SILENCE_SOME_WARNINGS}'
+	@$(libmesh_LIBTOOL) --mode=install --quiet install -c $(moose_LIB) $(FRAMEWORK_DIR)
+else
+# We avoid bash -c outside unity build mode because there would be too many arguments and it triggers an error
+$(moose_LIB): $(moose_objects) $(pcre_LIB) $(gtest_LIB) $(hit_LIB) $(pyhit_LIB) $(moose_revision_header) $(MOOSE_KOKKOS_LIB)
 	@echo "Linking Library "$@"..."
 	@$(libmesh_LIBTOOL) --tag=CXX $(LIBTOOLFLAGS) --mode=link --quiet \
-	  $(libmesh_CXX) $(CXXFLAGS) $(libmesh_CXXFLAGS) -o $@ $(moose_objects) $(pcre_LIB) $(png_LIB) $(libmesh_LDFLAGS) $(libmesh_LIBS) $(EXTERNAL_FLAGS) -rpath $(FRAMEWORK_DIR)
+	  $(libmesh_CXX) $(libmesh_CXXFLAGS) -o $@ $(moose_objects) $(pcre_LIB) $(png_LIB) $(LDFLAGS) $(libmesh_LDFLAGS) $(libmesh_LIBS) $(EXTERNAL_FLAGS) -rpath $(FRAMEWORK_DIR)
 	@$(libmesh_LIBTOOL) --mode=install --quiet install -c $(moose_LIB) $(FRAMEWORK_DIR)
+endif
 
 ifeq ($(MOOSE_HEADER_SYMLINKS),true)
-
-
 $(moose_objects): $(moose_config_symlink) | moose_header_symlinks
-
 else
-
 $(moose_objects): $(moose_config)
-
 endif
 
 ## Clang static analyzer
@@ -540,13 +639,13 @@ all: exodiff
 
 # Target-specific Variable Values (See GNU-make manual)
 exodiff: app_INCLUDES := $(exodiff_includes)
-exodiff: libmesh_CXXFLAGS := -std=gnu++11 -O2 -felide-constructors -w
+exodiff: libmesh_CXXFLAGS := -std=c++14 -O2 -felide-constructors -w
 exodiff: $(exodiff_APP)
 $(exodiff_objects): | prebuild
 $(exodiff_APP): $(exodiff_objects)
 	@echo "Linking Executable "$@"..."
-	@$(libmesh_LIBTOOL) --tag=CXX $(LIBTOOLFLAGS) --mode=link --quiet \
-	  $(libmesh_CXX) $(libmesh_CPPFLAGS) $(CXXFLAGS) $(libmesh_CXXFLAGS) $(libmesh_INCLUDE) $(exodiff_objects) -o $@ $(libmesh_LDFLAGS) $(libmesh_LIBS) $(EXTERNAL_FLAGS)
+	@bash -c '$(libmesh_LIBTOOL) --tag=CXX $(LIBTOOLFLAGS) --mode=link --quiet \
+	  $(libmesh_CXX) $(libmesh_CPPFLAGS) $(libmesh_CXXFLAGS) $(libmesh_INCLUDE) $(exodiff_objects) -o $@ $(LDFLAGS) $(libmesh_LDFLAGS) $(libmesh_LIBS) $(EXTERNAL_FLAGS) ${SILENCE_SOME_WARNINGS}'
 
 -include $(wildcard $(exodiff_DIR)/*.d)
 
@@ -566,7 +665,7 @@ libpath_pcre = $(MOOSE_DIR)/framework/contrib/pcre/$(libname_pcre)
 libname_hit = $(shell grep "dlname='.*'" $(MOOSE_DIR)/framework/contrib/hit/libhit-$(METHOD).la 2>/dev/null | sed -E "s/dlname='(.*)'/\1/g")
 libpath_hit = $(MOOSE_DIR)/framework/contrib/hit/$(libname_hit)
 
-install: all install_all_libs install_bin install_harness install_exodiff install_adreal_monolith install_hit install_data install_testers
+install: all install_all_libs install_bin install_harness install_exodiff install_adreal_monolith install_hit install_data install_python install_testers
 
 install_data::
 	@mkdir -p $(moose_share_dir)
@@ -584,7 +683,7 @@ install_exodiff: all
 	@mkdir -p $(bin_install_dir)
 	@cp $(MOOSE_DIR)/framework/contrib/exodiff/exodiff $(bin_install_dir)/
 
-install_python: $(pyhit_LIB) $(capabilities_LIB)
+install_python:: $(pyhit_LIB) $(capabilities_LIB)
 	@echo "Installing python utilities"
 	@rm -rf $(python_install_dir)
 	@mkdir -p $(python_install_dir)
@@ -633,13 +732,16 @@ libpath_pcre = $(MOOSE_DIR)/framework/contrib/pcre/$(libname_pcre)
 #
 # Clean targets
 #
-.PHONY: clean clobber cleanall echo_include echo_library install_make_dir libmesh_submodule_status hit capabilities
+.PHONY: clean clobber cleanall echo_include echo_library install_make_dir libmesh_submodule_status hit capabilities compile_commands.json
 
 # Set up app-specific variables for MOOSE, so that it can use the same clean target as the apps
 app_EXEC := $(exodiff_APP)
 app_LIB  := $(moose_LIBS) $(gtest_LIB) $(pyhit_LIB)
 app_objects := $(moose_objects) $(exodiff_objects) $(pcre_objects) $(gtest_objects) $(hit_objects)
 app_deps := $(moose_deps) $(exodiff_deps) $(pcre_deps) $(gtest_deps) $(hit_deps)
+app_KOKKOS_OBJECTS := $(MOOSE_KOKKOS_OBJECTS)
+app_KOKKOS_DEPS := $(MOOSE_KOKKOS_DEPS)
+app_KOKKOS_LIB := $(MOOSE_KOKKOS_LIB)
 
 # The clean target removes everything we can remove "easily",
 # i.e. stuff which we have Makefile variables for.  Notes:
@@ -652,6 +754,7 @@ app_deps := $(moose_deps) $(exodiff_deps) $(pcre_deps) $(gtest_deps) $(hit_deps)
 clean:
 	@$(libmesh_LIBTOOL) --mode=uninstall --quiet rm -f $(app_LIB) $(app_test_LIB)
 	@rm -rf $(app_EXEC) $(app_objects) $(main_object) $(app_deps) $(app_HEADER) $(app_test_objects) $(app_unity_srcfiles)
+	@rm -rf $(app_KOKKOS_LIB) $(app_KOKKOS_OBJECTS) $(app_KOKKOS_DEPS) $(app_KOKKOS_UNITY_SRC_FILES)
 	@rm -rf $(APPLICATION_DIR)/build
 
 # The clobber target does 'make clean' and then uses 'find' to clean a
@@ -700,17 +803,34 @@ ADRealMonolithic.h: $(MOOSE_DIR)/framework/include/utils/ADReal.h
 	@$(libmesh_CXX) -E $(libmesh_CPPFLAGS) $(CXXFLAGS) $(libmesh_CXXFLAGS) $(app_INCLUDES) $(libmesh_INCLUDE) -imacros cmath -x c++-header $< > $@
 
 compile_commands_all_srcfiles := $(moose_srcfiles) $(srcfiles)
+compile_commands_all_kokkos_srcfiles := $(MOOSE_KOKKOS_SRC_FILES)
 compile_commands.json:
 ifeq (4.0,$(firstword $(sort $(MAKE_VERSION) 4.0)))
+# Standard C++ sources
 	$(file > .compile_commands.json,$(CURDIR))
 	$(file >> .compile_commands.json,$(libmesh_CXX))
 	$(file >> .compile_commands.json,$(libmesh_CPPFLAGS) $(ADDITIONAL_CPPFLAGS) $(CXXFLAGS) $(libmesh_CXXFLAGS) $(app_INCLUDES) $(libmesh_INCLUDE) $(ADDITIONAL_INCLUDES))
 	$(file >> .compile_commands.json,$(compile_commands_all_srcfiles))
+ifeq ($(ENABLE_KOKKOS),true)
+# Kokkos sources
+	$(file >> .compile_commands.json,$(CURDIR))
+	$(file >> .compile_commands.json,$(KOKKOS_CXX))
+	$(file >> .compile_commands.json,$(KOKKOS_CXXFLAGS) $(KOKKOS_CPPFLAGS) $(KOKKOS_INCLUDE) $(app_INCLUDES))
+	$(file >> .compile_commands.json,$(compile_commands_all_kokkos_srcfiles))
+endif
 else
+# Standard C++ sources
 	@echo $(CURDIR) > .compile_commands.json
 	@echo $(libmesh_CXX) >> .compile_commands.json
 	@echo $(libmesh_CPPFLAGS) $(ADDITIONAL_CPPFLAGS) $(CXXFLAGS) $(libmesh_CXXFLAGS) $(app_INCLUDES) $(libmesh_INCLUDE) $(ADDITIONAL_INCLUDES) >> .compile_commands.json
 	@echo $(compile_commands_all_srcfiles) >> .compile_commands.json
+ifeq ($(ENABLE_KOKKOS),true)
+# Kokkos sources
+	@echo $(CURDIR) >> .compile_commands.json
+	@echo $(KOKKOS_CXX) >> .compile_commands.json
+	@echo $(KOKKOS_CXXFLAGS) $(KOKKOS_CPPFLAGS) $(KOKKOS_INCLUDE) $(app_INCLUDES) >> .compile_commands.json
+	@echo $(compile_commands_all_kokkos_srcfiles) >> .compile_commands.json
+endif
 endif
 	@$(FRAMEWORK_DIR)/scripts/compile_commands.py < .compile_commands.json > compile_commands.json
 	@rm .compile_commands.json
@@ -733,3 +853,9 @@ echo_app_objects:
 
 echo_app_deps:
 	@echo $(app_deps)
+
+echo_kokkos_objects:
+	@echo $(KOKKOS_OBJECTS)
+
+echo_kokkos_deps:
+	@echo $(KOKKOS_DEPS)

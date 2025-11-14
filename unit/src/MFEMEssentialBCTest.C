@@ -1,17 +1,22 @@
-#ifdef MFEM_ENABLED
+//* This file is part of the MOOSE framework
+//* https://mooseframework.inl.gov
+//*
+//* All rights reserved, see COPYRIGHT for full restrictions
+//* https://github.com/idaholab/moose/blob/master/COPYRIGHT
+//*
+//* Licensed under LGPL 2.1, please see LICENSE for details
+//* https://www.gnu.org/licenses/lgpl-2.1.html
+
+#ifdef MOOSE_MFEM_ENABLED
 
 #include "libmesh/ignore_warnings.h"
 #include "mfem/miniapps/common/mfem-common.hpp"
 #include "libmesh/restore_warnings.h"
 #include "MFEMObjectUnitTest.h"
 #include "MFEMScalarDirichletBC.h"
-#include "MFEMScalarFunctorDirichletBC.h"
 #include "MFEMVectorDirichletBC.h"
-#include "MFEMVectorFunctorDirichletBC.h"
 #include "MFEMVectorNormalDirichletBC.h"
-#include "MFEMVectorFunctorNormalDirichletBC.h"
 #include "MFEMVectorTangentialDirichletBC.h"
-#include "MFEMVectorFunctorTangentialDirichletBC.h"
 
 class MFEMEssentialBCTest : public MFEMObjectUnitTest
 {
@@ -53,13 +58,17 @@ public:
     _vector_h1_gridfunc.ProjectCoefficient(_vector_zero);
     _vector_hcurl_gridfunc.ProjectCoefficient(_vector_zero);
     _vector_hdiv_gridfunc.ProjectCoefficient(_vector_zero);
+    // Register a dummy (Par)GridFunction for the variable the BCs apply to
+    auto pm = _mfem_mesh_ptr->getMFEMParMeshPtr().get();
+    auto pgf = std::make_shared<mfem::ParGridFunction>(pm, &_scalar_gridfunc);
+    _mfem_problem->getProblemData().gridfunctions.Register("test_variable_name", pgf);
   }
 
   void check_boundary(int /*bound*/,
                       mfem::FiniteElementSpace & fespace,
-                      std::function<double(mfem::ElementTransformation *,
-                                           const mfem::IntegrationPoint &)> error_func,
-                      double tolerance)
+                      std::function<mfem::real_t(mfem::ElementTransformation *,
+                                                 const mfem::IntegrationPoint &)> error_func,
+                      mfem::real_t tolerance)
   {
     for (int be = 0; be < _mfem_mesh_ptr->getMFEMParMeshPtr()->GetNBE(); be++)
     {
@@ -71,12 +80,12 @@ public:
       const mfem::FiniteElement * fe = fespace.GetBE(be);
       const mfem::IntegrationRule & ir =
           mfem::IntRules.Get(fe->GetGeomType(), 2 * fe->GetOrder() + 2);
-      double total_error = 0.0;
+      mfem::real_t total_error = 0.0;
       for (int j = 0; j < ir.GetNPoints(); j++)
       {
         const mfem::IntegrationPoint point = ir.IntPoint(j);
         transform->SetIntPoint(&point);
-        const double error = error_func(transform, point);
+        const mfem::real_t error = error_func(transform, point);
         total_error += error * error;
       }
       EXPECT_LT(total_error, tolerance);
@@ -92,14 +101,14 @@ public:
 };
 
 /**
- * Test MFEMScalarDirichletBC can be constructed and applied successfully
+ * Test MFEMScalarDirichletBC can be constructed from a constant and applied successfully
  */
-TEST_F(MFEMEssentialBCTest, MFEMScalarDirichletBC)
+TEST_F(MFEMEssentialBCTest, MFEMScalarDirichletConstantBC)
 {
   // Construct boundary condition
   InputParameters bc_params = _factory.getValidParams("MFEMScalarDirichletBC");
   bc_params.set<VariableName>("variable") = "test_variable_name";
-  bc_params.set<Real>("value") = 1.;
+  bc_params.set<MFEMScalarCoefficientName>("coefficient") = "1.";
   bc_params.set<std::vector<BoundaryName>>("boundary") = {"1"};
   auto & essential_bc = addObject<MFEMScalarDirichletBC>("MFEMScalarDirichletBC", "bc1", bc_params);
 
@@ -107,7 +116,7 @@ TEST_F(MFEMEssentialBCTest, MFEMScalarDirichletBC)
   EXPECT_EQ(essential_bc.getTestVariableName(), "test_variable_name");
 
   // Test applying the BC
-  essential_bc.ApplyBC(_scalar_gridfunc, *_mfem_mesh_ptr->getMFEMParMeshPtr().get());
+  essential_bc.ApplyBC(_scalar_gridfunc);
 
   // Check the correct boundary values have been applied
   mfem::GridFunctionCoefficient scalar_variable(&_scalar_gridfunc);
@@ -121,23 +130,22 @@ TEST_F(MFEMEssentialBCTest, MFEMScalarDirichletBC)
 }
 
 /**
- * Test MFEMScalarFunctorDirichletBC can be constructed and applied successfully
+ * Test MFEMScalarDirichletBC can be constructed and applied successfully
  */
-TEST_F(MFEMEssentialBCTest, MFEMScalarFunctorDirichletBC)
+TEST_F(MFEMEssentialBCTest, MFEMScalarDirichletBC)
 {
   // Construct boundary condition
-  InputParameters bc_params = _factory.getValidParams("MFEMScalarFunctorDirichletBC");
+  InputParameters bc_params = _factory.getValidParams("MFEMScalarDirichletBC");
   bc_params.set<VariableName>("variable") = "test_variable_name";
   bc_params.set<MFEMScalarCoefficientName>("coefficient") = "func1";
   bc_params.set<std::vector<BoundaryName>>("boundary") = {"1"};
-  auto & essential_bc =
-      addObject<MFEMScalarFunctorDirichletBC>("MFEMScalarFunctorDirichletBC", "bc1", bc_params);
+  auto & essential_bc = addObject<MFEMScalarDirichletBC>("MFEMScalarDirichletBC", "bc1", bc_params);
 
   EXPECT_EQ(essential_bc.getTrialVariableName(), "test_variable_name");
   EXPECT_EQ(essential_bc.getTestVariableName(), "test_variable_name");
 
   // Test applying the BC
-  essential_bc.ApplyBC(_scalar_gridfunc, *_mfem_mesh_ptr->getMFEMParMeshPtr().get());
+  essential_bc.ApplyBC(_scalar_gridfunc);
 
   // Check the correct boundary values have been applied
   mfem::GridFunctionCoefficient scalar_variable(&_scalar_gridfunc);
@@ -152,14 +160,14 @@ TEST_F(MFEMEssentialBCTest, MFEMScalarFunctorDirichletBC)
 }
 
 /**
- * Test MFEMVectorDirichletBC can be constructed and applied successfully
+ * Test MFEMVectorDirichletBC can be constructed from a constant and applied successfully
  */
-TEST_F(MFEMEssentialBCTest, MFEMVectorDirichletBC)
+TEST_F(MFEMEssentialBCTest, MFEMVectorDirichletConstantBC)
 {
   // Construct boundary condition
   InputParameters bc_params = _factory.getValidParams("MFEMVectorDirichletBC");
   bc_params.set<VariableName>("variable") = "test_variable_name";
-  bc_params.set<std::vector<Real>>("values") = {1., 2., 3.};
+  bc_params.set<MFEMVectorCoefficientName>("vector_coefficient") = "1. 2. 3.";
   bc_params.set<std::vector<BoundaryName>>("boundary") = {"1"};
   auto & essential_bc = addObject<MFEMVectorDirichletBC>("MFEMVectorDirichletBC", "bc1", bc_params);
 
@@ -167,7 +175,7 @@ TEST_F(MFEMEssentialBCTest, MFEMVectorDirichletBC)
   EXPECT_EQ(essential_bc.getTestVariableName(), "test_variable_name");
 
   // Test applying the BC
-  essential_bc.ApplyBC(_vector_h1_gridfunc, *_mfem_mesh_ptr->getMFEMParMeshPtr().get());
+  essential_bc.ApplyBC(_vector_h1_gridfunc);
 
   // Check the correct boundary values have been applied
   mfem::VectorGridFunctionCoefficient variable(&_vector_h1_gridfunc);
@@ -187,23 +195,22 @@ TEST_F(MFEMEssentialBCTest, MFEMVectorDirichletBC)
 }
 
 /**
- * Test MFEMVectorFunctorDirichletBC can be constructed and applied successfully
+ * Test MFEMVectorDirichletBC can be constructed and applied successfully
  */
-TEST_F(MFEMEssentialBCTest, MFEMVectorFunctorDirichletBC)
+TEST_F(MFEMEssentialBCTest, MFEMVectorDirichletBC)
 {
   // Construct boundary condition
-  InputParameters bc_params = _factory.getValidParams("MFEMVectorFunctorDirichletBC");
+  InputParameters bc_params = _factory.getValidParams("MFEMVectorDirichletBC");
   bc_params.set<VariableName>("variable") = "test_variable_name";
   bc_params.set<MFEMVectorCoefficientName>("vector_coefficient") = "func2";
   bc_params.set<std::vector<BoundaryName>>("boundary") = {"1"};
-  auto & essential_bc =
-      addObject<MFEMVectorFunctorDirichletBC>("MFEMVectorFunctorDirichletBC", "bc1", bc_params);
+  auto & essential_bc = addObject<MFEMVectorDirichletBC>("MFEMVectorDirichletBC", "bc1", bc_params);
 
   EXPECT_EQ(essential_bc.getTrialVariableName(), "test_variable_name");
   EXPECT_EQ(essential_bc.getTestVariableName(), "test_variable_name");
 
   // Test applying the BC
-  essential_bc.ApplyBC(_vector_h1_gridfunc, *_mfem_mesh_ptr->getMFEMParMeshPtr().get());
+  essential_bc.ApplyBC(_vector_h1_gridfunc);
 
   // Check the correct boundary values have been applied
   mfem::VectorGridFunctionCoefficient variable(&_vector_h1_gridfunc);
@@ -225,14 +232,15 @@ TEST_F(MFEMEssentialBCTest, MFEMVectorFunctorDirichletBC)
 }
 
 /**
- * Test MFEMVectorNormalDirichletBC can be constructed and applied successfully
+ * Test MFEMVectorNormalDirichletBC can be constructed from a constant and applied
+ * successfully
  */
-TEST_F(MFEMEssentialBCTest, MFEMVectorNormalDirichletBC)
+TEST_F(MFEMEssentialBCTest, MFEMVectorNormalDirichletConstantBC)
 {
   // Construct boundary condition
   InputParameters bc_params = _factory.getValidParams("MFEMVectorNormalDirichletBC");
   bc_params.set<VariableName>("variable") = "test_variable_name";
-  bc_params.set<std::vector<Real>>("values") = {1., 2., 3.};
+  bc_params.set<MFEMVectorCoefficientName>("vector_coefficient") = "1. 2. 3.";
   bc_params.set<std::vector<BoundaryName>>("boundary") = {"1"};
   auto & essential_bc =
       addObject<MFEMVectorNormalDirichletBC>("MFEMVectorNormalDirichletBC", "bc1", bc_params);
@@ -241,7 +249,7 @@ TEST_F(MFEMEssentialBCTest, MFEMVectorNormalDirichletBC)
   EXPECT_EQ(essential_bc.getTestVariableName(), "test_variable_name");
 
   // Test applying the BC
-  essential_bc.ApplyBC(_vector_hdiv_gridfunc, *_mfem_mesh_ptr->getMFEMParMeshPtr().get());
+  essential_bc.ApplyBC(_vector_hdiv_gridfunc);
 
   // Check the correct boundary values have been applied
   mfem::VectorGridFunctionCoefficient variable(&_vector_hdiv_gridfunc);
@@ -263,23 +271,23 @@ TEST_F(MFEMEssentialBCTest, MFEMVectorNormalDirichletBC)
 }
 
 /**
- * Test MFEMVectorFunctorNormalDirichletBC can be constructed and applied successfully
+ * Test MFEMVectorNormalDirichletBC can be constructed and applied successfully
  */
-TEST_F(MFEMEssentialBCTest, MFEMVectorFunctorNormalDirichletBC)
+TEST_F(MFEMEssentialBCTest, MFEMVectorNormalDirichletBC)
 {
   // Construct boundary condition
-  InputParameters bc_params = _factory.getValidParams("MFEMVectorFunctorNormalDirichletBC");
+  InputParameters bc_params = _factory.getValidParams("MFEMVectorNormalDirichletBC");
   bc_params.set<VariableName>("variable") = "test_variable_name";
   bc_params.set<MFEMVectorCoefficientName>("vector_coefficient") = "func2";
   bc_params.set<std::vector<BoundaryName>>("boundary") = {"1"};
-  auto & essential_bc = addObject<MFEMVectorFunctorNormalDirichletBC>(
-      "MFEMVectorFunctorNormalDirichletBC", "bc1", bc_params);
+  auto & essential_bc =
+      addObject<MFEMVectorNormalDirichletBC>("MFEMVectorNormalDirichletBC", "bc1", bc_params);
 
   EXPECT_EQ(essential_bc.getTrialVariableName(), "test_variable_name");
   EXPECT_EQ(essential_bc.getTestVariableName(), "test_variable_name");
 
   // Test applying the BC
-  essential_bc.ApplyBC(_vector_hdiv_gridfunc, *_mfem_mesh_ptr->getMFEMParMeshPtr().get());
+  essential_bc.ApplyBC(_vector_hdiv_gridfunc);
 
   // Check the correct boundary values have been applied
   mfem::VectorGridFunctionCoefficient variable(&_vector_hdiv_gridfunc);
@@ -302,14 +310,15 @@ TEST_F(MFEMEssentialBCTest, MFEMVectorFunctorNormalDirichletBC)
 }
 
 /**
- * Test MFEMVectorTangentialDirichletBC can be constructed and applied successfully
+ * Test MFEMVectorTangentialDirichletBC can be constructed from a constant and applied
+ * successfully
  */
-TEST_F(MFEMEssentialBCTest, MFEMVectorTangentialDirichletBC)
+TEST_F(MFEMEssentialBCTest, MFEMVectorTangentialDirichletConstantBC)
 {
   // Construct boundary condition
   InputParameters bc_params = _factory.getValidParams("MFEMVectorTangentialDirichletBC");
   bc_params.set<VariableName>("variable") = "test_variable_name";
-  bc_params.set<std::vector<Real>>("values") = {1., 2., 3.};
+  bc_params.set<MFEMVectorCoefficientName>("vector_coefficient") = "1. 2. 3.";
   bc_params.set<std::vector<BoundaryName>>("boundary") = {"1"};
   auto & essential_bc = addObject<MFEMVectorTangentialDirichletBC>(
       "MFEMVectorTangentialDirichletBC", "bc1", bc_params);
@@ -318,7 +327,7 @@ TEST_F(MFEMEssentialBCTest, MFEMVectorTangentialDirichletBC)
   EXPECT_EQ(essential_bc.getTestVariableName(), "test_variable_name");
 
   // Test applying the BC
-  essential_bc.ApplyBC(_vector_hcurl_gridfunc, *_mfem_mesh_ptr->getMFEMParMeshPtr().get());
+  essential_bc.ApplyBC(_vector_hcurl_gridfunc);
   // Check the correct boundary values have been applied
   mfem::VectorGridFunctionCoefficient variable(&_vector_hcurl_gridfunc);
   mfem::Vector expected({1., 2., 3.});
@@ -341,23 +350,23 @@ TEST_F(MFEMEssentialBCTest, MFEMVectorTangentialDirichletBC)
 }
 
 /**
- * Test MFEMVectorFunctorTangentialDirichletBC can be constructed and applied successfully
+ * Test MFEMVectorTangentialDirichletBC can be constructed and applied successfully
  */
-TEST_F(MFEMEssentialBCTest, MFEMVectorFunctorTangentialDirichletBC)
+TEST_F(MFEMEssentialBCTest, MFEMVectorTangentialDirichletBC)
 {
   // Construct boundary condition
-  InputParameters bc_params = _factory.getValidParams("MFEMVectorFunctorTangentialDirichletBC");
+  InputParameters bc_params = _factory.getValidParams("MFEMVectorTangentialDirichletBC");
   bc_params.set<VariableName>("variable") = "test_variable_name";
   bc_params.set<MFEMVectorCoefficientName>("vector_coefficient") = "func2";
   bc_params.set<std::vector<BoundaryName>>("boundary") = {"1"};
-  auto & essential_bc = addObject<MFEMVectorFunctorTangentialDirichletBC>(
-      "MFEMVectorFunctorTangentialDirichletBC", "bc1", bc_params);
+  auto & essential_bc = addObject<MFEMVectorTangentialDirichletBC>(
+      "MFEMVectorTangentialDirichletBC", "bc1", bc_params);
 
   EXPECT_EQ(essential_bc.getTrialVariableName(), "test_variable_name");
   EXPECT_EQ(essential_bc.getTestVariableName(), "test_variable_name");
 
   // Test applying the BC
-  essential_bc.ApplyBC(_vector_hcurl_gridfunc, *_mfem_mesh_ptr->getMFEMParMeshPtr().get());
+  essential_bc.ApplyBC(_vector_hcurl_gridfunc);
 
   // Check the correct boundary values have been applied
   mfem::VectorGridFunctionCoefficient variable(&_vector_hcurl_gridfunc);

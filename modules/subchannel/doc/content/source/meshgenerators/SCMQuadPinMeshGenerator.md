@@ -4,7 +4,7 @@
 
 ## Overview
 
-<!-- -->
+!! Intentional comment to provide extra spacing
 
 This mesh generator creates the mesh were the `SCM` solution variables associated with the fuel pins live.
 The user needs to provide the number of subchannels [!param](/Mesh/SCMQuadPinMeshGenerator/nx) in the -x direction and [!param](/Mesh/SCMQuadPinMeshGenerator/ny) in the -y direction.
@@ -12,7 +12,7 @@ The number of cells in the -z direction is given by [!param](/Mesh/SCMQuadPinMes
 
 ## Example Input File Syntax
 
-!listing /validation/psbt/psbt_ss/psbt.i block=QuadSubChannelMesh language=cpp
+!listing /validation/psbt/psbt_ss/psbt.i block=QuadSubChannelMesh language=moose
 
 !syntax parameters /Mesh/SCMQuadPinMeshGenerator
 

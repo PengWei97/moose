@@ -1,7 +1,7 @@
 [Mesh]
   type = MFEMMesh
   file = ../../mesh/square.msh
-  dim = 3
+  dim = 2
 []
 
 [Problem]
@@ -26,7 +26,6 @@
 
 [Executioner]
   type = MFEMSteady
-  device = cpu
 []
 
 [MultiApps]

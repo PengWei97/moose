@@ -30,13 +30,10 @@ P_out = 2.0e5 # Pa
     pitch = 7.2644e-3
     dwire = 0.0014224
     hwire = 0.3048
-    spacer_z = '0.0'
-    spacer_k = '0.0'
     z_blockage = '0.49 0.52'
     index_blockage = '29 31 30 32 34 33 35 15 16 8 17 18 9 19'
-    reduction_blockage = '0.2 0.2 0.2 0.2 0.2 0.2 0.2 0.2 0.2 0.2 0.2 0.2 0.2 0.2'
-    k_blockage = '1.2 1.2 1.2 1.2 1.2 1.2 1.2 1.2 1.2 1.2 1.2 1.2 1.2 1.2 '
-
+    reduction_blockage = '0.08 0.08 0.08 0.08 0.08 0.08 0.08 0.08 0.08 0.08 0.08 0.08 0.08 0.08'
+    k_blockage = '4 4 4 4 4 4 4 4 4 4 4 4 4 4 '
   []
 []
 
@@ -90,7 +87,7 @@ P_out = 2.0e5 # Pa
   fp = sodium
   n_blocks = 1
   P_out = 2.0e5
-  CT = 2.2
+  CT = 2
   compute_density = true
   compute_viscosity = true
   compute_power = true
@@ -98,7 +95,8 @@ P_out = 2.0e5 # Pa
   T_tol = 1.0e-4
   implicit = true
   segregated = false
-  interpolation_scheme = 'upwind'
+  verbose_subchannel = true
+  interpolation_scheme = exponential
 []
 
 [ICs]
@@ -110,13 +108,6 @@ P_out = 2.0e5 # Pa
   [w_perim_IC]
     type = SCMTriWettedPerimIC
     variable = w_perim
-  []
-
-  [q_prime_IC]
-    type = SCMTriPowerIC
-    variable = q_prime
-    power = 52800 #W, low flow case
-    filename = "pin_power_profile_19.txt"
   []
 
   [T_ic]
@@ -183,6 +174,13 @@ P_out = 2.0e5 # Pa
     area = S
     mass_flux = ${mass_flux_in}
     execute_on = 'timestep_begin'
+  []
+  [q_prime_Aux]
+    type = SCMTriPowerAux
+    variable = q_prime
+    power = 52800 #W, low flow case
+    filename = "pin_power_profile_19.txt"
+    execute_on = 'initial timestep_begin'
   []
 []
 

@@ -9,7 +9,6 @@
 
 import os
 import re
-import subprocess
 import shutil
 import tempfile
 
@@ -42,10 +41,10 @@ class TestHarnessTester(TestHarnessTestCase):
     def testReplay(self):
         """ Test ability to replay back previous run results """
         with tempfile.TemporaryDirectory() as output_dir:
-            base_args = ['--verbose', '-c', '--timing', '--results-file', 'unittest_Replay', '-o', output_dir]
+            base_args = ['--verbose', '-c', '--results-file', 'unittest_Replay', '-o', output_dir]
             base_kwargs = {'tmp_output': False}
-            output_a = self.runTests(*base_args, '-i', 'always_ok', **base_kwargs)
-            output_b = self.runTests(*base_args, '--show-last-run', **base_kwargs)
+            output_a = self.runTests(*base_args, '-i', 'always_ok_simple', **base_kwargs).output
+            output_b = self.runTests(*base_args, '--show-last-run', **base_kwargs).output
 
         # The only difference should be the total run time, so replace the run time
         # from the first with the run time from the second
@@ -65,16 +64,15 @@ class TestHarnessTester(TestHarnessTestCase):
         with tempfile.TemporaryDirectory() as output_dir:
             base_args = ['--verbose', '--timing', '--results-file', 'unittest_Replay', '-o', output_dir]
             base_kwargs = {'tmp_output': False}
-            output_a = self.runTests(*base_args, '-i', 'always_ok', **base_kwargs)
+            output_a = self.runTests(*base_args, '-i', 'always_ok_simple', **base_kwargs).output
             # --re=doesenotexist will produce no output (or rather different output than the above)
-            output_b = self.runTests(*base_args, '--show-last-run', '--re=doesnotexist', **base_kwargs)
+            output_b = self.runTests(*base_args, '--show-last-run', '--re=doesnotexist', **base_kwargs).output
         self.assertIn('Ran 1 tests in', output_a)
         self.assertIn('Ran 0 tests in', output_b)
 
     def testNoResultsFile(self):
         """ Verify the TestHarness errors correctly when there is no results file to work with """
         with tempfile.TemporaryDirectory() as output_dir:
-            with self.assertRaises(subprocess.CalledProcessError) as cm:
-                self.runTests('--show-last-run', '--results-file', 'non_existent', '-o', output_dir, tmp_output=False)
-            e = cm.exception
-            self.assertIn(f'The previous run {output_dir}/non_existent does not exist', e.output)
+            with self.assertRaisesRegex(SystemExit, f'The previous run {output_dir}/non_existent does not exist'):
+                self.runTests('--show-last-run', '--results-file', 'non_existent', '-o', output_dir,
+                              tmp_output=False, capture_results=False, exit_code=1)

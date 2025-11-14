@@ -17,6 +17,10 @@ do
     help=1;
   fi
 
+  if [ "$i" == "--fast" ]; then
+    go_fast=1;
+  fi
+
   if [ "$i" == "--skip-submodule-update" ]; then
     skip_sub_update=1
   else # Remove everything else before passing to cmake
@@ -29,6 +33,7 @@ if [ -n "$help" ]; then
   echo "Usage: $0 [-h | --help | --fast | --skip-submodule-update | <mfem cmake options> ]"
   echo
   echo "-h | --help              Display this message and list of available libmesh options"
+  echo "--fast                   Run MFEM 'make' only, do NOT run CMake"
   echo "--skip-submodule-update  Do not update the MFEM submodule, use the current version"
   echo
   echo "Influential variables"
@@ -42,6 +47,12 @@ if [ -n "$help" ]; then
   exit 0
 fi
 
+if [[ -n "$go_fast" && $# != 1 ]]; then
+  echo "Error: --fast can only be used by itself or with --skip-submodule-update."
+  echo "Try again, removing either --fast or all other conflicting arguments!"
+  exit 1;
+fi
+
 set -e
 
 get_realpath() {
@@ -53,7 +64,7 @@ if [ -n "$MFEM_SRC_DIR" ]; then
 else
   MFEM_SRC_DIR="$(get_realpath "${SCRIPT_DIR}"/../framework/contrib/mfem)"
 fi
-MFEM_BUILD_DIR="${MFEM_SRC_DIR}/build"
+MFEM_BUILD_DIR_BASE="${MFEM_SRC_DIR}/build"
 if [ -n "$MFEM_DIR" ]; then
   echo "INFO: MFEM_DIR set - overriding default installed path"
   echo "INFO: No cleaning will be done in specified path"
@@ -82,40 +93,77 @@ if [ -z "$skip_sub_update" ]; then
   git submodule update --init --checkout framework/contrib/mfem
 fi
 
-# Build and install mfem
-mkdir -p "$MFEM_BUILD_DIR"
-cd "$MFEM_BUILD_DIR"
-cmake .. \
-    -DCMAKE_POSITION_INDEPENDENT_CODE=YES \
-    -DMFEM_USE_OPENMP=NO \
-    -DMFEM_THREAD_SAFE=NO \
-    -DHYPRE_DIR="$PETSC_DIR/$PETSC_ARCH" \
-    -DMFEM_USE_MPI=YES \
-    -DMFEM_USE_METIS=YES \
-    -DMFEM_USE_METIS_5=YES \
-    -DMETIS_DIR="$PETSC_DIR/$PETSC_ARCH" \
-    -DParMETIS_DIR="$PETSC_DIR/$PETSC_ARCH" \
-    -DMFEM_USE_SUPERLU=YES \
-    -DSuperLUDist_DIR="$PETSC_DIR/$PETSC_ARCH" \
-    -DBUILD_SHARED_LIBS=ON \
-    -DHDF5_DIR="$HDF5_DIR" \
-    -DBLAS_DIR="$PETSC_DIR/$PETSC_ARCH" \
-    -DMFEM_ENABLE_EXAMPLES=yes \
-    -DMFEM_ENABLE_MINIAPPS=yes \
-    -DBLAS_LIBRARIES="$PETSC_DIR//$PETSC_ARCH/lib/libfblas.a" \
-    -DLAPACK_LIBRARIES="$PETSC_DIR//$PETSC_ARCH/lib/libflapack.a" \
-    -DBLAS_INCLUDE_DIRS="$PETSC_DIR//$PETSC_ARCH/include" \
-    -DLAPACK_INCLUDE_DIRS="$PETSC_DIR//$PETSC_ARCH/include" \
-    -DCMAKE_INSTALL_PREFIX="$MFEM_DIR" \
-    -DMFEM_USE_PETSC=YES \
-    -DPETSC_DIR="$PETSC_DIR" \
-    -DPETSC_ARCH="$PETSC_ARCH" \
-    -DCMAKE_C_COMPILER=mpicc \
-    -DMFEM_USE_NETCDF=YES \
-    -DNETCDF_DIR="$LIBMESH_DIR" \
-    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-    -DMFEM_USE_CONDUIT=YES \
-    -DCONDUIT_DIR="$CONDUIT_DIR" \
-    "$@"
-make -j ${MOOSE_JOBS:-4}
-make -j ${MOOSE_JOBS:-4} install
+# Set of supported build methods
+SUPPORTED_METHODS="oprof devel dbg opt"
+
+# If METHODS is not set by the user, set it to METHOD if set by the user,
+# otherwise default to building all supported methods listed above
+: ${METHODS:=${METHOD:-$SUPPORTED_METHODS}}
+
+# Map from the supported libMesh-like methods to CMake's build types
+typeset -A METHOD_TO_CMAKE_BUILD_TYPE_MAP
+METHOD_TO_CMAKE_BUILD_TYPE_MAP=([oprof]=PROFILE [devel]=RELWITHDEBINFO [dbg]=DEBUG [opt]=RELEASE)
+
+# The order here, i.e. in METHODS, _is_ important: the libraries for the last
+# of the requested methods will be available for external use (see below)
+for METHOD in $METHODS
+do
+  [[ $SUPPORTED_METHODS =~ $METHOD ]] ||
+  { echo "Error: Build method $METHOD is not recognised, choose from $SUPPORTED_METHODS."; exit 1; }
+
+  CMAKE_BUILD_TYPE=${METHOD_TO_CMAKE_BUILD_TYPE_MAP[$METHOD]}
+
+  # If we're not going fast, remove the build directory and reconfigure
+  if [ -z "$go_fast" ]; then
+    rm -rf "$MFEM_BUILD_DIR_BASE-$METHOD"
+    mkdir -p "$MFEM_BUILD_DIR_BASE-$METHOD"
+    cd "$MFEM_BUILD_DIR_BASE-$METHOD"
+
+    cmake .. \
+      -DBUILD_SHARED_LIBS=YES \
+      -DCMAKE_BUILD_TYPE=$CMAKE_BUILD_TYPE \
+      -DCMAKE_${CMAKE_BUILD_TYPE}_POSTFIX=-$METHOD \
+      -DCMAKE_EXPORT_COMPILE_COMMANDS=YES \
+      -DCMAKE_INSTALL_PREFIX="$MFEM_DIR" \
+      -DCMAKE_CXX_FLAGS_PROFILE="-O2 -g -DNDEBUG -fno-omit-frame-pointer" \
+      -DCMAKE_CUDA_FLAGS_PROFILE="-O2 -g -DNDEBUG -fno-omit-frame-pointer" \
+      \
+      -DMFEM_ENABLE_MINIAPPS=YES \
+      \
+      -DMFEM_USE_CEED=YES \
+      -DMFEM_USE_CONDUIT=YES \
+      -DMFEM_USE_MPI=YES \
+      -DMFEM_USE_NETCDF=YES \
+      -DMFEM_USE_PETSC=YES \
+      -DMFEM_USE_SUPERLU=YES \
+      \
+      -DCEED_DIR="$PETSC_DIR/$PETSC_ARCH" \
+      -DCONDUIT_DIR="$CONDUIT_DIR" \
+      -DHDF5_DIR="$HDF5_DIR" \
+      -DHYPRE_DIR="$PETSC_DIR/$PETSC_ARCH" \
+      -DMETIS_DIR="$PETSC_DIR/$PETSC_ARCH" \
+      -DNETCDF_DIR="$LIBMESH_DIR" \
+      -DParMETIS_DIR="$PETSC_DIR/$PETSC_ARCH" \
+      -DPETSC_ARCH="$PETSC_ARCH" \
+      -DPETSC_DIR="$PETSC_DIR" \
+      -DSuperLUDist_DIR="$PETSC_DIR/$PETSC_ARCH" \
+      \
+      -DBLAS_LIBRARIES="$PETSC_DIR/$PETSC_ARCH/lib/libfblas.a" \
+      -DLAPACK_LIBRARIES="$PETSC_DIR/$PETSC_ARCH/lib/libflapack.a" \
+      "$@"
+  fi
+
+  cd "$MFEM_BUILD_DIR_BASE-$METHOD" ||
+  { echo "Error: Need to run this script without --fast at least once."; exit 1; }
+
+  make -j ${MOOSE_JOBS:-4}
+  make -j ${MOOSE_JOBS:-4} install
+
+  # Save the configuration file for this build method
+  mv "$MFEM_DIR/include/mfem/config/_config.hpp" "$MFEM_DIR/include/mfem/config/_config-$METHOD.hpp"
+
+  # These symlinks, though unused by MOOSE apps, guarantee the installed config
+  # file works for one, the last one, of the MFEM builds, enabling external use
+  ln -sf _config-$METHOD.hpp "$MFEM_DIR/include/mfem/config/_config.hpp"
+  for lib in "$MFEM_DIR"/lib/libmfem*-$METHOD*; do ln -sf $(basename "$lib") "${lib/-$METHOD/}"; done
+done

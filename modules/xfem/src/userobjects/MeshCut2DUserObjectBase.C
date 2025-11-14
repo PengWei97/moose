@@ -21,10 +21,7 @@
 InputParameters
 MeshCut2DUserObjectBase::validParams()
 {
-  InputParameters params = GeometricCutUserObject::validParams();
-  params.addRequiredParam<MeshFileName>(
-      "mesh_file",
-      "Mesh file for the XFEM geometric cut; currently only the Exodus type is supported");
+  InputParameters params = MeshCutUserObjectBase::validParams();
   params.addParam<UserObjectName>("nucleate_uo", "The MeshCutNucleation UO for nucleating cracks.");
   params.addParam<UserObjectName>("crack_front_definition",
                                   "crackFrontDefinition",
@@ -34,7 +31,7 @@ MeshCut2DUserObjectBase::validParams()
 }
 
 MeshCut2DUserObjectBase::MeshCut2DUserObjectBase(const InputParameters & parameters)
-  : GeometricCutUserObject(parameters, true),
+  : MeshCutUserObjectBase(parameters),
     _mesh(_subproblem.mesh()),
     _nucleate_uo(isParamValid("nucleate_uo")
                      ? &getUserObject<MeshCut2DNucleationBase>("nucleate_uo")
@@ -43,10 +40,6 @@ MeshCut2DUserObjectBase::MeshCut2DUserObjectBase(const InputParameters & paramet
 {
   _depend_uo.insert(getParam<UserObjectName>("crack_front_definition"));
 
-  // only the Exodus type is currently supported
-  MeshFileName cutterMeshFileName = getParam<MeshFileName>("mesh_file");
-  _cutter_mesh = std::make_unique<ReplicatedMesh>(_communicator);
-  _cutter_mesh->read(cutterMeshFileName);
   // test element type; only line elements are allowed
   for (const auto & cut_elem : _cutter_mesh->element_ptr_range())
   {
@@ -165,13 +158,6 @@ MeshCut2DUserObjectBase::cutFragmentByGeometry(std::vector<std::vector<Point>> &
   return false;
 }
 
-MeshBase &
-MeshCut2DUserObjectBase::getCutterMesh() const
-{
-  mooseAssert(_cutter_mesh, "MeshCut2DUserObjectBase::getCutterMesh _cutter_mesh is nullptr");
-  return *_cutter_mesh;
-}
-
 const std::vector<Point>
 MeshCut2DUserObjectBase::getCrackFrontPoints(unsigned int number_crack_front_points) const
 {
@@ -179,10 +165,9 @@ MeshCut2DUserObjectBase::getCrackFrontPoints(unsigned int number_crack_front_poi
   // number_crack_front_points is updated via
   // _crack_front_definition->updateNumberOfCrackFrontPoints(_crack_front_points.size())
   if (number_crack_front_points != _original_and_current_front_node_ids.size())
-    mooseError("MeshCut2DFractureUserObject::getCrackFrontPoints:  number_crack_front_points=" +
-               Moose::stringify(number_crack_front_points) +
-               " does not match the number of nodes given in "
-               "_original_and_current_front_node_ids=" +
+    mooseError("Number of nodes in CrackFrontDefinition does not match the number of nodes in the "
+               "cutter_mesh.\nCrackFrontDefinition nodes = " +
+               Moose::stringify(number_crack_front_points) + "\ncutter_mesh nodes = " +
                Moose::stringify(_original_and_current_front_node_ids.size()));
 
   for (unsigned int i = 0; i < number_crack_front_points; ++i)

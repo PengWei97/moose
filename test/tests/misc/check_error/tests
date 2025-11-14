@@ -3,9 +3,9 @@
   parallel_scheduling = True
 
   [steady_no_converge]
-    type = 'RunApp'
+    type = 'RunException'
     input = 'steady_no_converge.i'
-    expect_out = 'Aborting as solve did not converge'
+    expect_err = 'Aborting as solve did not converge'
 
     requirement = 'The system shall report an error when the system solver is unable to find a converged solution.'
     design = 'Executioner/index.md'
@@ -16,7 +16,7 @@
   [range_check_param]
     type = 'RunException'
     input = 'range_check_param.i'
-    expect_err = 'Range check failed for parameter \S'
+    expect_err = "range_check_param.i:6.3: Range check failed for parameter Mesh/bias_x; expression = 'bias_x>=0.5 & bias_x<=2', value = 0.1"
 
     requirement = 'The system shall report an error message when a range-checked parameter is out of range.'
     issues = '#2777'
@@ -26,7 +26,7 @@
   [checked_pointer_param_test]
     type = 'RunException'
     input = 'checked_pointer_param_test.i'
-    expect_err = "checked_pointer_param_test.i:3.2: syntax error, unexpected invalid token, expecting ="
+    expect_err = "checked_pointer_param_test.i:3.2-3.3: syntax error, unexpected invalid token, expecting ="
     requirement = 'The system shall report an error when a null pointer-checked parameter is retrieved from the InputParameters object.'
     issues = '#10356'
   []
@@ -594,10 +594,10 @@
   []
 
   [nan_no_trap_fpe_test]
-    type = 'RunApp'
+    type = 'RunException'
     input = 'nan_test.i'
     cli_args = '--no-trap-fpe'
-    expect_out = 'Solve Did NOT Converge'
+    expect_err = 'Solve Did NOT Converge'
 
     requirement = 'The system shall abort the solve and report a floating point error when a NaN is produced during user computation with the Steady executioner.'
     issues = '#374 #3614'
@@ -712,7 +712,7 @@
   [uo_pps_name_collision_test]
     type = 'RunException'
     input = 'uo_pps_name_collision_test.i'
-    expect_err = 'A UserObject with the name "\w+" already exists'
+    expect_err = 'A MTUserObject "\w+" already exists'
 
     requirement = 'The system shall report an error when a UserObject and a Postprocessor are added with the same names.'
     issues = '#1405'
@@ -721,10 +721,19 @@
   [uo_vector_pps_name_collision_test]
     type = 'RunException'
     input = 'uo_vector_pps_name_collision_test.i'
-    expect_err = 'A UserObject with the name "\w+" already exists'
+    expect_err = 'A MTUserObject "\w+" already exists'
 
     requirement = 'The system shall report and error when a UserObject and a VectorPostprocessor are added with the same names.'
     issues = '#1405'
+  []
+
+  [uo_reporter_name_collision_test]
+    type = 'RunException'
+    input = 'uo_reporter_name_collision_test.i'
+    expect_err = 'A MTUserObject "\w+" already exists'
+
+    requirement = 'The system shall report an error when a UserObject and a Reporter are added with the same names.'
+    issues = '#31231'
   []
 
   [wrong_object_test]
@@ -741,7 +750,7 @@
     type = 'RunException'
     input = 'wrong_moose_object_test.i'
     cli_args = "AAAKErnels/type=Diffusion BCs/active=''"
-    expect_err = "section '\[AAAKErnels\]' does not have an associated \"Action\""
+    expect_err = "CLI_ARGS: section '\[AAAKErnels]\' does not have an associated Action; you likely misspelled the Action/section name or the app you are running does not support this Action/syntax"
 
     requirement = 'The system shall report an error when an input file block associated with a pluggable system is misspelled.'
     issues = '#20062'
@@ -890,20 +899,11 @@
     # Check to see if a warning is produced when a function name could evaluate to a ParsedFunction
     type = 'RunApp'
     input = 'function_conflict.i'
-    expect_out = "Function name 'x' could evaluate as a ParsedFunction"
+    expect_out = "Function name 'x' can be interpreted as a parsed function expression. This can be problematic."
     allow_warnings = true
 
     requirement = 'The system shall report an error when the name of a function could be misinterpreted because it could also be evaluated (e.g. a function name of "x").'
     issues = '#8412'
-  []
-
-  [bad_number]
-    type = 'RunException'
-    input = 'bad_number.i'
-    expect_err = "invalid float syntax for parameter: BCs/right/value"
-
-    requirement = 'The system shall report an error when floating point input parameter types fail to parse as floating point numbers.'
-    issues = '#10310'
   []
 
   [coupling_field_into_scalar]

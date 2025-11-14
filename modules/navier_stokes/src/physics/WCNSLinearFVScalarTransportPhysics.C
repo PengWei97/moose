@@ -25,8 +25,9 @@ WCNSLinearFVScalarTransportPhysics::validParams()
                         "If the nonorthogonal correction should be used when computing the normal "
                         "gradient, notably in the diffusion term.");
 
-  // Not needed
-  params.suppressParameter<bool>("add_scalar_equation");
+  // Not supported
+  params.suppressParameter<MooseEnum>("preconditioning");
+
   return params;
 }
 
@@ -52,11 +53,10 @@ WCNSLinearFVScalarTransportPhysics::addSolverVariables()
   for (const auto name_i : index_range(_passive_scalar_names))
   {
     // Dont add if the user already defined the variable
-    if (variableExists(_passive_scalar_names[name_i], /*error_if_aux=*/true))
+    if (!shouldCreateVariable(_passive_scalar_names[name_i], _blocks, /*error if aux*/ true))
     {
-      checkBlockRestrictionIdentical(
-          _passive_scalar_names[name_i],
-          getProblem().getVariable(0, _passive_scalar_names[name_i]).blocks());
+      reportPotentiallyMissedParameters({"system_names", "passive_scalar_scaling"},
+                                        "MooseLinearVariableFVReal");
       continue;
     }
 
@@ -79,7 +79,8 @@ WCNSLinearFVScalarTransportPhysics::addScalarTimeKernels()
   for (const auto & vname : _passive_scalar_names)
   {
     params.set<LinearVariableName>("variable") = vname;
-    getProblem().addLinearFVKernel(kernel_type, prefix() + "ins_" + vname + "_time", params);
+    if (shouldCreateTimeDerivative(vname, _blocks, /*error if already defined */ false))
+      getProblem().addLinearFVKernel(kernel_type, prefix() + "ins_" + vname + "_time", params);
   }
 }
 
@@ -141,7 +142,7 @@ WCNSLinearFVScalarTransportPhysics::addScalarSourceKernels()
     {
       // Added for backward compatibility with former Modules/NavierStokesFV syntax
       params.set<MooseFunctorName>("source_density") = _passive_scalar_sources[scalar_i];
-      getProblem().addFVKernel(
+      getProblem().addLinearFVKernel(
           kernel_type, prefix() + "ins_" + _passive_scalar_names[scalar_i] + "_source", params);
     }
 

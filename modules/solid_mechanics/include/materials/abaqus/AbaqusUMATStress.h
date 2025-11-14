@@ -13,14 +13,14 @@
 #include "DynamicLibraryLoader.h"
 #include "ComputeFiniteStrain.h"
 #include "RotationTensor.h"
-#include "StepUOInterface.h"
+#include "AnalysisStepUOInterface.h"
 
-class StepUserObject;
+class AnalysisStepUserObject;
 
 /**
  * Coupling material to use Abaqus UMAT models in MOOSE
  */
-class AbaqusUMATStress : public ComputeGeneralStressBase, public StepUOInterface
+class AbaqusUMATStress : public ComputeGeneralStressBase, public AnalysisStepUOInterface
 {
 public:
   static InputParameters validParams();
@@ -81,13 +81,6 @@ protected:
 
   // Function pointer to the dynamically loaded function
   umat_t _umat;
-
-  /// specific elastic strain energy
-  Real _aqSSE;
-  /// plastic dissipation
-  Real _aqSPD;
-  /// creep dissipation
-  Real _aqSCD;
 
   /**
    * Volumetric heat generation per unit time at the end of the increment caused by mechanical
@@ -215,9 +208,13 @@ protected:
   MaterialProperty<std::vector<Real>> & _state_var;
   const MaterialProperty<std::vector<Real>> & _state_var_old;
 
+  // energy quantities
   MaterialProperty<Real> & _elastic_strain_energy;
+  const MaterialProperty<Real> & _elastic_strain_energy_old;
   MaterialProperty<Real> & _plastic_dissipation;
+  const MaterialProperty<Real> & _plastic_dissipation_old;
   MaterialProperty<Real> & _creep_dissipation;
+  const MaterialProperty<Real> & _creep_dissipation_old;
 
   /// recommended maximum timestep for this model under the current conditions
   MaterialProperty<Real> & _material_timestep;
@@ -259,5 +256,5 @@ private:
   const ComputeFiniteStrain::DecompMethod _decomposition_method;
 
   /// User object that determines step number
-  const StepUserObject * _step_user_object;
+  const AnalysisStepUserObject * _step_user_object;
 };

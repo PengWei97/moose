@@ -91,6 +91,7 @@ EigenProblem::EigenProblem(const InputParameters & parameters)
     _nl_eigen = std::dynamic_pointer_cast<NonlinearEigenSystem>(nl);
     _current_nl_sys = nl.get();
     _solver_systems[i] = std::dynamic_pointer_cast<SolverSystem>(nl);
+    nl->system().prefer_hash_table_matrix_assembly(_use_hash_table_matrix_assembly);
   }
 
   _aux = std::make_shared<AuxiliarySystem>(*this, "aux0");
@@ -109,7 +110,7 @@ EigenProblem::EigenProblem(const InputParameters & parameters)
   mooseDeprecated(
       "Please use SLEPc-3.13.0 or higher. Old versions of SLEPc likely produce bad convergence");
 #endif
-  // Create extra vectors and matrices if any
+  // Create extra vectors if any
   createTagVectors();
 
   // Create extra solution vectors if any

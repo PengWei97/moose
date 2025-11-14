@@ -86,12 +86,16 @@ findTestRoot()
 }
 
 bool
-parsesToReal(const std::string & input)
+parsesToReal(const std::string & input, Real * parsed_real)
 {
   std::istringstream ss(input);
   Real real_value;
   if (ss >> real_value && ss.eof())
+  {
+    if (parsed_real)
+      (*parsed_real) = real_value;
     return true;
+  }
   return false;
 }
 
@@ -947,105 +951,6 @@ globCompare(const std::string & candidate,
   return globCompare(candidate, pattern, c + 1, p + 1);
 }
 
-template <typename T>
-T
-convertStringToInt(const std::string & str, bool throw_on_failure)
-{
-  T val;
-
-  // Let's try to read a double and see if we can cast it to an int
-  // This would be the case for scientific notation
-  long double double_val;
-  std::stringstream double_ss(str);
-  double_ss >> double_val;
-
-  // on arm64 the long double does not have sufficient precission
-  bool use_int = false;
-  std::stringstream int_ss(str);
-  if (!(int_ss >> val).fail() && int_ss.eof())
-    use_int = true;
-
-  if (double_ss.fail() || !double_ss.eof())
-  {
-    std::string msg =
-        std::string("Unable to convert '") + str + "' to type " + demangle(typeid(T).name());
-
-    if (throw_on_failure)
-      throw std::invalid_argument(msg);
-    else
-      mooseError(msg);
-  }
-
-  // Check to see if it's an integer (and within range of an integer)
-  if (double_val == static_cast<long double>(static_cast<T>(double_val)))
-    return use_int ? val : static_cast<T>(double_val);
-
-  // Still failure
-  std::string msg =
-      std::string("Unable to convert '") + str + "' to type " + demangle(typeid(T).name());
-
-  if (throw_on_failure)
-    throw std::invalid_argument(msg);
-  else
-    mooseError(msg);
-}
-
-template <>
-short int
-convert<short int>(const std::string & str, bool throw_on_failure)
-{
-  return convertStringToInt<short int>(str, throw_on_failure);
-}
-
-template <>
-unsigned short int
-convert<unsigned short int>(const std::string & str, bool throw_on_failure)
-{
-  return convertStringToInt<unsigned short int>(str, throw_on_failure);
-}
-
-template <>
-int
-convert<int>(const std::string & str, bool throw_on_failure)
-{
-  return convertStringToInt<int>(str, throw_on_failure);
-}
-
-template <>
-unsigned int
-convert<unsigned int>(const std::string & str, bool throw_on_failure)
-{
-  return convertStringToInt<unsigned int>(str, throw_on_failure);
-}
-
-template <>
-long int
-convert<long int>(const std::string & str, bool throw_on_failure)
-{
-  return convertStringToInt<long int>(str, throw_on_failure);
-}
-
-template <>
-unsigned long int
-convert<unsigned long int>(const std::string & str, bool throw_on_failure)
-{
-  return convertStringToInt<unsigned long int>(str, throw_on_failure);
-}
-
-template <>
-long long int
-convert<long long int>(const std::string & str, bool throw_on_failure)
-{
-  return convertStringToInt<long long int>(str, throw_on_failure);
-}
-
-template <>
-unsigned long long int
-convert<unsigned long long int>(const std::string & str, bool throw_on_failure)
-{
-  return convertStringToInt<unsigned long long int>(str, throw_on_failure);
-}
-
 std::string
 stringJoin(const std::vector<std::string> & values, const std::string & separator)
 {
@@ -1268,6 +1173,28 @@ canonicalPath(const std::string & path)
   return std::filesystem::weakly_canonical(path).c_str();
 }
 
+bool
+startsWith(const std::string & string1, const std::string & string2)
+{
+  if (string2.size() > string1.size())
+    return false;
+  return string1.compare(0, string2.size(), string2) == 0;
+}
+
+void
+replaceStart(std::string & string1, const std::string & string2, const std::string & string3)
+{
+  mooseAssert(startsWith(string1, string2),
+              "Cannot replace the start because it doesn't match the start string");
+  string1.replace(0, string2.size(), string3);
+}
+
+bool
+isAllLowercase(const std::string & str)
+{
+  return std::all_of(
+      str.begin(), str.end(), [](unsigned char c) { return !std::isalpha(c) || std::islower(c); });
+}
 } // MooseUtils namespace
 
 void

@@ -11,364 +11,173 @@ import platform, os, re
 import subprocess
 from mooseutils import colorText
 from collections import OrderedDict
+from dataclasses import dataclass
 import json
 import yaml
 import sys
-
-MOOSE_OPTIONS = {
-    'ad_size' : { 're_option' : r'#define\s+MOOSE_AD_MAX_DOFS_PER_ELEM\s+(\d+)',
-                           'default'   : '64'
-    },
-
-    'libpng' :    { 're_option' : r'#define\s+MOOSE_HAVE_LIBPNG\s+(\d+)',
-                    'default'   : 'FALSE',
-                    'options'   :
-                    { 'TRUE'    : '1',
-                      'FALSE'   : '0'
-                    }
-    },
-
-    'libtorch' :    { 're_option' : r'#define\s+MOOSE_LIBTORCH_ENABLED\s+(\d+)',
-                    'default'   : 'FALSE',
-                    'options'   :
-                    { 'TRUE'    : '1',
-                      'FALSE'   : '0'
-                    }
-    },
-
-    'libtorch_dir' : { 're_option' : r'#define\s+MOOSE_LIBTORCH_DIR\s+(.*)',
-                       'default'  : '/framework/contrib/libtorch'},
-
-    'mfem' :    { 're_option' : r'#define\s+MOOSE_MFEM_ENABLED\s+(\d+)',
-                    'default'   : 'FALSE',
-                    'options'   :
-                    { 'TRUE'    : '1',
-                      'FALSE'   : '0'
-                    }
-    },
-
-    'mfem_dir' : { 're_option' : r'#define\s+MOOSE_MFEM_DIR\s+(.*)',
-                       'default'  : '/framework/contrib/mfem'}
-}
-
-
-LIBMESH_OPTIONS = {
-  'mesh_mode' :    { 're_option' : r'#define\s+LIBMESH_ENABLE_PARMESH\s+(\d+)',
-                     'default'   : 'REPLICATED',
-                     'options'   :
-                       {
-      'DISTRIBUTED' : '1',
-      'REPLICATED'  : '0'
-      }
-                     },
-  'unique_ids' :   { 're_option' : r'#define\s+LIBMESH_ENABLE_UNIQUE_ID\s+(\d+)',
-                     'default'   : 'FALSE',
-                     'options'   :
-                       {
-      'TRUE'  : '1',
-      'FALSE' : '0'
-      }
-                     },
-  'dtk' :          { 're_option' : r'#define\s+LIBMESH_TRILINOS_HAVE_DTK\s+(\d+)',
-                     'default'   : 'FALSE',
-                     'options'   :
-                       {
-      'TRUE'  : '1',
-      'FALSE' : '0'
-      }
-                     },
-  'boost' :        { 're_option' : r'#define\s+LIBMESH_HAVE_EXTERNAL_BOOST\s+(\d+)',
-                     'default'   : 'FALSE',
-                     'options'   :
-                       {
-      'TRUE'  : '1',
-      'FALSE' : '0'
-      }
-                     },
-  'vtk' :          { 're_option' : r'#define\s+LIBMESH_HAVE_VTK\s+(\d+)',
-                     'default'   : 'FALSE',
-                     'options'   :
-                       {
-      'TRUE'  : '1',
-      'FALSE' : '0'
-      }
-                     },
-  'tecplot' :      { 're_option' : r'#define\s+LIBMESH_HAVE_TECPLOT_API\s+(\d+)',
-                     'default'   : 'FALSE',
-                     'options'   :
-                       {
-      'TRUE'  : '1',
-      'FALSE' : '0'
-      }
-                     },
-  'petsc_major' :  { 're_option' : r'#define\s+LIBMESH_DETECTED_PETSC_VERSION_MAJOR\s+(\d+)',
-                     'default'   : '1'
-                   },
-  'petsc_minor' :  { 're_option' : r'#define\s+LIBMESH_DETECTED_PETSC_VERSION_MINOR\s+(\d+)',
-                     'default'   : '1'
-                   },
-  'petsc_subminor' :  { 're_option' : r'#define\s+LIBMESH_DETECTED_PETSC_VERSION_SUBMINOR\s+(\d+)',
-                     'default'   : '1'
-                   },
-  'petsc_version_release' :  { 're_option' : r'#define\s+LIBMESH_DETECTED_PETSC_VERSION_RELEASE\s+(\d+)',
-                     'default'   : 'TRUE',
-                     'options'   : {'TRUE'  : '1', 'FALSE' : '0'}
-                   },
-  'slepc_major' :  { 're_option' : r'#define\s+LIBMESH_DETECTED_SLEPC_VERSION_MAJOR\s+(\d+)',
-                     'default'   : '1'
-                   },
-  'slepc_minor' :  { 're_option' : r'#define\s+LIBMESH_DETECTED_SLEPC_VERSION_MINOR\s+(\d+)',
-                     'default'   : '1'
-                   },
-  'slepc_subminor' :  { 're_option' : r'#define\s+LIBMESH_DETECTED_SLEPC_VERSION_SUBMINOR\s+(\d+)',
-                     'default'   : '1'
-                   },
-  'exodus_major' :  { 're_option' : r'#define\s+LIBMESH_DETECTED_EXODUS_VERSION_MAJOR\s+(\d+)',
-                     'default'   : '1'
-                   },
-  'exodus_minor' :  { 're_option' : r'#define\s+LIBMESH_DETECTED_EXODUS_VERSION_MINOR\s+(\d+)',
-                     'default'   : '1'
-                   },
-  'vtk_major' :  { 're_option' : r'#define\s+LIBMESH_DETECTED_VTK_VERSION_MAJOR\s+(\d+)',
-                   'default'   : '1'
-                 },
-  'vtk_minor' :  { 're_option' : r'#define\s+LIBMESH_DETECTED_VTK_VERSION_MINOR\s+(\d+)',
-                   'default'   : '1'
-                 },
-  'vtk_subminor' :  { 're_option' : r'#define\s+LIBMESH_DETECTED_VTK_VERSION_SUBMINOR\s+(\d+)',
-                      'default'   : '1'
-                    },
-  'dof_id_bytes' : { 're_option' : r'#define\s+LIBMESH_DOF_ID_BYTES\s+(\d+)',
-                     'default'   : '4'
-                   },
-  'petsc_debug'  : { 're_option' : r'#define\s+LIBMESH_PETSC_USE_DEBUG\s+(\d+)',
-                     'default'   : 'FALSE',
-                     'options'   : {'TRUE'  : '1', 'FALSE' : '0'}
-                   },
-  'curl' :         { 're_option' : r'#define\s+LIBMESH_HAVE_CURL\s+(\d+)',
-                     'default'   : 'FALSE',
-                     'options'   : {'TRUE' : '1', 'FALSE' : '0'}
-                   },
-  'threads' :      { 're_option' : r'#define\s+LIBMESH_USING_THREADS\s+(\d+)',
-                     'default'   : 'FALSE',
-                     'options'   : {'TRUE' : '1', 'FALSE' : '0'}
-                   },
-  'tbb' :          { 're_option' : r'#define\s+LIBMESH_HAVE_TBB_API\s+(\d+)',
-                     'default'   : 'FALSE',
-                     'options'   : {'TRUE' : '1', 'FALSE' : '0'}
-                   },
-  'openmp' :       { 're_option' : r'#define\s+LIBMESH_HAVE_OPENMP\s+(\d+)',
-                     'default'   : 'FALSE',
-                     'options'   : {'TRUE' : '1', 'FALSE' : '0'}
-                   },
-  'superlu' :      { 're_option' : r'#define\s+LIBMESH_PETSC_HAVE_SUPERLU_DIST\s+(\d+)',
-                     'default'   : 'FALSE',
-                     'options'   : {'TRUE' : '1', 'FALSE' : '0'}
-                   },
-  'mumps' :        { 're_option' : r'#define\s+LIBMESH_PETSC_HAVE_MUMPS\s+(\d+)',
-                     'default'   : 'FALSE',
-                     'options'   : {'TRUE' : '1', 'FALSE' : '0'}
-                   },
-  'strumpack' :        { 're_option' : r'#define\s+LIBMESH_PETSC_HAVE_STRUMPACK\s+(\d+)',
-                     'default'   : 'FALSE',
-                     'options'   : {'TRUE' : '1', 'FALSE' : '0'}
-                   },
-  'parmetis' :      { 're_option' : r'#define\s+LIBMESH_(?:PETSC_){0,1}HAVE_PARMETIS\s+(\d+)',
-                     'default'   : 'FALSE',
-                     'options'   : {'TRUE' : '1', 'FALSE' : '0'}
-                   },
-  'chaco' :      { 're_option' : r'#define\s+LIBMESH_PETSC_HAVE_CHACO\s+(\d+)',
-                     'default'   : 'FALSE',
-                     'options'   : {'TRUE' : '1', 'FALSE' : '0'}
-                   },
-  'party' :      { 're_option' : r'#define\s+LIBMESH_PETSC_HAVE_PARTY\s+(\d+)',
-                     'default'   : 'FALSE',
-                     'options'   : {'TRUE' : '1', 'FALSE' : '0'}
-                   },
-  'ptscotch' :      { 're_option' : r'#define\s+LIBMESH_PETSC_HAVE_PTSCOTCH\s+(\d+)',
-                     'default'   : 'FALSE',
-                     'options'   : {'TRUE' : '1', 'FALSE' : '0'}
-                   },
-  'slepc' :        { 're_option' : r'#define\s+LIBMESH_HAVE_SLEPC\s+(\d+)',
-                     'default'   : 'FALSE',
-                     'options'   : {'TRUE' : '1', 'FALSE' : '0'}
-                   },
-  'cxx11' :        { 're_option' : r'#define\s+LIBMESH_HAVE_CXX11\s+(\d+)',
-                     'default'   : 'FALSE',
-                     'options'   : {'TRUE' : '1', 'FALSE' : '0'}
-                   },
-  'unique_id' :    { 're_option' : r'#define\s+LIBMESH_ENABLE_UNIQUE_ID\s+(\d+)',
-                     'default'   : 'FALSE',
-                     'options'   : {'TRUE' : '1', 'FALSE' : '0'}
-                   },
-  'fparser_jit' :  { 're_option' : r'#define\s+LIBMESH_HAVE_FPARSER_JIT\s+(\d+)',
-                     'default'   : 'FALSE',
-                     'options'   : {'TRUE' : '1', 'FALSE' : '0'}
-                   },
-}
-
-LIBTORCH_OPTIONS = {
-      'libtorch_major' :  { 're_option' : r'#define\s+TORCH_VERSION_MAJOR\s+(\d+)',
-                   'default'   : '1'
-                 },
-      'libtorch_minor' :  { 're_option' : r'#define\s+TORCH_VERSION_MINOR\s+(\d+)',
-                   'default'   : '10'
-                 }
-}
+import threading
+import typing
+from typing import Optional
+import time
 
 ## Run a command and return the output, or ERROR: + output if retcode != 0
-def runCommand(cmd, cwd=None, force_mpi_command=False):
+def runCommand(cmd, force_mpi_command=False, **kwargs):
     # On Windows it is not allowed to close fds while redirecting output
     should_close = platform.system() != "Windows"
     if force_mpi_command:
         mpi_command = os.environ.get('MOOSE_MPI_COMMAND')
         if mpi_command is not None:
             cmd = f'{mpi_command} -n 1 {cmd}'
-    p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, close_fds=should_close, shell=True)
-    output = p.communicate()[0].decode('utf-8')
+    p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                       close_fds=should_close, shell=True, text=True, **kwargs)
+    output = p.stdout
     if (p.returncode != 0):
         output = 'ERROR: ' + output
     return output
 
+@dataclass(kw_only=True)
+class FormatResultEntry:
+    """
+    Structure for a formatted result to be printed in formatResult()
+    """
+    # Name of the entry
+    name: str
+    # Timing for the entry
+    timing: float = None
+    # JointStatus object for the entry, optional
+    joint_status: str = None
+    # Detailed status message for the entry, optional
+    status_message: str = None
+    # Caveats for the entry, optional
+    caveats: Optional[list[str]] = None
+    # Coloring for the caveats, optional
+    caveat_color: Optional[str] = None
 
-## method to return current character count with given results_dictionary
-def resultCharacterCount(results_dict):
-    # { formatted_result_key : ( text, color ) }
-    printable_items = []
-    for result_key, printable in results_dict.items():
-        if printable:
-            printable_items.append(printable[0])
-    return len(' '.join(printable_items))
+def formatResult(entry: FormatResultEntry, options, timing: Optional[bool] = None) -> str:
+    """
+    Helper for prenting a one-line result for something.
 
-## convert the incoming message tuple to the same case, as the case of format_key
-## store this information to the same cased key in formatted_results dict.
-def formatCase(format_key, message, formatted_results):
-    if message and format_key.isupper():
-        formatted_results[format_key] = (message[0].upper(), message[1])
-    elif message:
-        formatted_results[format_key] = (message[0], message[1])
-
-def formatStatusMessage(job, status, message, options):
-    # If there is no message, use status as message
-    if not message:
-        message = status
-
-    # Add caveats if requested
-    if job.isPass() and options.extra_info:
-        for check in options._checks.keys():
-            if job.specs.isValid(check) and not 'ALL' in job.specs[check]:
-                job.addCaveats(check)
-
-    # Format the failed message to list a big fat FAILED in front of the status
-    elif job.isFail():
-        return 'FAILED (%s)' % (message)
-
-    return message
-
-## print an optionally colorified test result
-#
-# The test will not be colored if
-# 1) options.colored is False,
-# 2) the color parameter is False.
-def formatResult(job, options, result='', color=True, **kwargs):
+    The entry will not be colored if options.colored = false.
+    """
     # Support only one instance of a format identifier, but obey the order
-    terminal_format = list(OrderedDict.fromkeys(list(options.term_format)))
-    joint_status = job.getJointStatus()
+    term_format = [str(v) for v in list(OrderedDict.fromkeys(list(options.term_format)))]
+    # container for every printable item (message and color)
+    result = dict.fromkeys(term_format, (None, None))
 
-    color_opts = {'code' : options.code, 'colored' : options.colored}
+    # Helper for adding a formatted entry
+    def add(key: str, message: str, color: str = None) -> None:
+        assert key in result
+        if message:
+            if key.isupper():
+                message = message.upper()
+            result[key] = (message, color)
 
-    # container for every printable item
-    formatted_results = dict.fromkeys(terminal_format)
+    # Populate formatted for those we support, with requested items
+    # specified by the user
+    caveat_key, justification_key = None, None # filled separately
+    for key in term_format:
+        key_lower, message, color = key.lower(), None, None
 
-    # Populate formatted_results for those we support, with requested items
-    # specified by the user. Caveats and justifications are parsed outside of
-    # loop as these two items change based on character count consumed by others.
-    caveat_index = None
-    justification_index = None
-    for i, f_key in enumerate(terminal_format):
-        # Store the caveat request. We will use this later.
-        if str(f_key).lower() == 'c':
-            caveat_index = terminal_format[i]
-
-        # Store the justification request. We will use this later.
-        if str(f_key).lower() == 'j':
-            justification_index = terminal_format[i]
-
-        if str(f_key).lower() == 'p':
-            pre_result = ' '*(8-len(joint_status.status)) + joint_status.status
-            formatCase(f_key, (pre_result, joint_status.color), formatted_results)
-
-        if str(f_key).lower() == 's':
-            if not result:
-                result = formatStatusMessage(job, joint_status.status, joint_status.message, options)
-
-            # refrain from printing a duplicate pre_result if it will match result
-            if 'p' in [x.lower() for x in terminal_format] and result == joint_status.status:
-                formatCase(f_key, None, formatted_results)
-            else:
-                formatCase(f_key, (result, joint_status.color), formatted_results)
-
-        if str(f_key).lower() == 'n':
-            formatCase(f_key, (job.getTestName(), None), formatted_results)
-
-        # Adjust the precision of time, so we can justify the length. The higher the
-        # seconds, the lower the decimal point, ie: [0.000s] - [100.0s]. Max: [99999s]
-        if str(f_key).lower() == 't' and options.timing:
-            actual = float(job.getTiming())
+        # Store caveat for later
+        if key_lower == 'c':
+            caveat_key = key
+        # Store justification for later
+        elif key_lower == 'j':
+            justification_key = key
+        # Pre status (not the message, the status type)
+        elif key_lower == 'p' and entry.joint_status is not None:
+            message, color = entry.joint_status.status.rjust(8, ' '), entry.joint_status.color
+        # Status message; only print if the pre status above is not in the result
+        # or is in the result and the message above is not the same as this one
+        elif key_lower == 's' and entry.status_message is not None and \
+            ('p' not in term_format or entry.joint_status is not None and \
+             entry.status_message != entry.joint_status.status):
+            message = entry.status_message
+            color = entry.joint_status.color if entry.joint_status else None
+        # Name
+        elif key_lower == 'n':
+            message = entry.name
+        # Time; adjust the precision of time, so we can justify the length.
+        # The higher the seconds, the lower the decimal point, ie:
+        # [0.000s] - [100.0s]. Max: [99999s]
+        elif key_lower == 't' and entry.timing is not None and (options.timing or timing):
+            actual = float(entry.timing)
             int_len = len(str(int(actual)))
             precision = min(3, max(0,(4-int_len)))
-            f_time = '[' + '{0: <6}'.format('%0.*fs' % (precision, actual)) + ']'
-            formatCase(f_key, (f_time, None), formatted_results)
+            message = '[' + '{0: <6}'.format('%0.*fs' % (precision, actual)) + ']'
+
+        add(key, message, color)
+
+    # Helper for the length of the result string so far, removing any color
+    def len_result() -> int:
+        strip = lambda v: re.sub(r'\033\[\d+m', '', v)
+        return len(' '.join([strip(message) for message, _ in result.values() if message]))
 
     # Decorate Caveats
-    if job.getCaveats() and caveat_index is not None and 'caveats' in kwargs and kwargs['caveats']:
-        caveats = ','.join(job.getCaveats())
-        caveat_color = joint_status.color
-        if not job.isFail():
-            caveat_color = 'CYAN'
-
-        f_caveats = '[' + caveats + ']'
-        # +1 space created later by join
-        character_count = resultCharacterCount(formatted_results) + len(f_caveats) + 1
+    if entry.caveats and caveat_key is not None:
+        caveats = ','.join(entry.caveats)
+        f_caveats = '[' + caveats + ']' # +1 space created later by join
+        character_count = len_result() + len(f_caveats) + 1
 
         # If caveats are the last items the user wants printed, or -e (extra_info) is
         # called, allow caveats to consume available character count beyond options.term_cols.
         # Else, we trim caveats:
-        if terminal_format[-1].lower() != 'c' \
-           and not options.extra_info \
-           and character_count > options.term_cols:
+        if term_format[-1] != 'c' and not options.extra_info and character_count > options.term_cols:
             over_by_amount = character_count - options.term_cols
             f_caveats = '[' + caveats[:len(caveats) - (over_by_amount + 3)] + '...]'
 
-        formatCase(caveat_index, (f_caveats, caveat_color), formatted_results)
+        add(caveat_key, f_caveats, entry.caveat_color)
 
     # Fill the available space left, with dots
-    if justification_index is not None:
-        j_dot = None
-        # +1 space created later by join
-        character_count = resultCharacterCount(formatted_results) + 1
-        if character_count < options.term_cols:
-            j_dot = ('.'*max(0, (options.term_cols - character_count)), 'GREY')
-        elif character_count == options.term_cols:
-            j_dot = ('', 'GREY')
+    if justification_key is not None:
+        character_count = len_result() + 1 # +1 space created later by join
+        j_dot = '.' * max(0, (options.term_cols - character_count))
+        add(justification_key, j_dot, 'GREY')
 
-        formatCase(justification_index, j_dot, formatted_results)
+    # Accumulate values
+    values = []
+    for message, color in result.values():
+        if message:
+            if color and options.colored:
+                message = colorText(message, color)
+            values.append(message)
+    return ' '.join(values)
 
-    # If color, decorate those items which support it
-    if color:
-        for format_rule, printable in formatted_results.items():
-            if printable and (printable[0] and printable[1]):
-                formatted_results[format_rule] = (colorText(printable[0], printable[1], **color_opts), printable[1])
+def formatJobResult(job, options, status_message: bool = True, timing: Optional[bool] = None,
+                    caveats: bool = False) -> str:
+    name = job.getTestName()
+    joint_status = job.getJointStatus()
 
-            # Do special coloring for first directory
-            if format_rule == 'n' and options.color_first_directory:
-                formatted_results[format_rule] = (colorText(job.specs['first_directory'], 'CYAN', **color_opts) +\
-                                         formatted_results[format_rule][0].replace(job.specs['first_directory'], '', 1), 'CYAN') # Strip out first occurence only
+    # Determine status message if requested
+    if status_message:
+        status_message = joint_status.message if joint_status.message else joint_status.status
 
-    # join printable results in the order in which the user asked
-    final_results = ' '.join([formatted_results[x][0] for x in terminal_format if formatted_results[x]])
+        # Add caveats with extra info
+        if job.isPass() and options.extra_info:
+            for check in options._checks.keys():
+                if job.specs.isValid(check) and not 'ALL' in job.specs[check]:
+                    job.addCaveats(check)
+        # Format failed messages
+        elif job.isFail():
+            status_message = f'FAILED ({status_message})'
+    # Otherwise, just use the status itself
+    else:
+        status_message = joint_status.status
 
-    return final_results
+    # Color first directory if appropriate
+    if options.color_first_directory and options.colored:
+        first_directory = job.specs['first_directory']
+        prefix = colorText(first_directory, 'CYAN')
+        suffix = name.replace(first_directory, '', 1)
+        name = prefix + suffix
+
+    entry = FormatResultEntry(name=name,
+                              timing=job.getTiming(),
+                              joint_status=job.getJointStatus(),
+                              status_message=status_message,
+                              caveats=job.getCaveats() if caveats else [],
+                              caveat_color=joint_status.color if job.isFail() else 'CYAN')
+    return formatResult(entry, options, timing=timing)
 
 ## Color the error messages if the options permit, also do not color in bitten scripts because
 # it messes up the trac output.
@@ -390,34 +199,6 @@ def getMachine():
     machine = set(['ALL'])
     machine.add(platform.machine().upper())
     return machine
-
-def runExecutable(libmesh_dir, location, bin, args):
-    # Installed location of libmesh executable
-    libmesh_installed   = libmesh_dir + '/' + location + '/' + bin
-
-    # Uninstalled location of libmesh executable
-    libmesh_uninstalled = libmesh_dir + '/' + bin
-
-    # Uninstalled location of libmesh executable
-    libmesh_uninstalled2 = libmesh_dir + '/contrib/bin/' + bin
-
-    # The eventual variable we will use to refer to libmesh's executable
-    libmesh_exe = ''
-
-    if os.path.exists(libmesh_installed):
-        libmesh_exe = libmesh_installed
-
-    elif os.path.exists(libmesh_uninstalled):
-        libmesh_exe = libmesh_uninstalled
-
-    elif os.path.exists(libmesh_uninstalled2):
-        libmesh_exe = libmesh_uninstalled2
-
-    else:
-        print(("Error! Could not find '" + bin + "' in any of the usual libmesh's locations!"))
-        exit(1)
-
-    return runCommand(libmesh_exe + " " + args).rstrip()
 
 def checkLogicVersionSingle(checks, iversion, package):
     logic, version = re.search(r'(.*?)\s*(\d\S+)', iversion).groups()
@@ -527,12 +308,31 @@ def checkLibtorchVersion(checks, test):
 
     return (checkVersion(checks, version_string, 'libtorch_version'), version_string)
 
+def outputHeader(header, ending=True):
+    """
+    Returns text for output with a visual separator, i.e.:
+    ##############################...
+    <header>
+    ##############################...
+    """
+    begin_sep = '#' * 80
+    end_sep = f'{begin_sep}\n' if ending else ''
+    return f'{begin_sep}\n{header}\n{end_sep}'
+
 def getCapabilities(exe):
     """
     Get capabilities JSON and compare it to the required capabilities
     """
     assert exe
-    output = runCommand(f"{exe} --show-capabilities", force_mpi_command=True)
+    try:
+        cmd = f'{exe} --show-capabilities'
+        output = runCommand(cmd, force_mpi_command=True, check=True)
+    except subprocess.CalledProcessError as e:
+        print(f'ERROR: Failed to parse the application capabilities!')
+        print(f'Command ran: {cmd}\n')
+        print(outputHeader(f'Failed command output'))
+        print(e.stdout)
+        sys.exit(1)
     return parseMOOSEJSON(output, '--show-capabilities')
 
 def getCapability(exe, name):
@@ -586,45 +386,6 @@ def checkCapabilities(supported: dict, requested: str, certain):
     [status, message, doc] = pycapabilities.check(requested, supported)
     success = status == pycapabilities.CERTAIN_PASS or (status == pycapabilities.POSSIBLE_PASS and not certain)
     return success, message
-
-def getConfigOption(config_files, option, options):
-    # Some tests work differently with parallel mesh enabled
-    # We need to detect this condition
-    option_set = set(['ALL'])
-
-    success = 0
-    for config_file in config_files:
-        if success == 1:
-            break
-
-        try:
-            f = open(config_file)
-            contents = f.read()
-            f.close()
-
-            info = options[option]
-            m = re.search(info['re_option'], contents)
-            if m != None:
-                if 'options' in info:
-                    for value, option in info['options'].items():
-                        if m.group(1) == option:
-                            option_set.add(value)
-                else:
-                    option_set.clear()
-                    option_set.add(m.group(1))
-            else:
-                option_set.add(info['default'])
-
-            success = 1
-
-        except IOError:
-            pass
-
-    if success == 0:
-        print("Error! Could not find libmesh_config.h in any of the usual locations!")
-        exit(1)
-
-    return option_set
 
 def getSharedOption(libmesh_dir):
     # Some tests may only run properly with shared libraries on/off
@@ -687,32 +448,6 @@ def checkInstalled(executable, app_name):
     option_set.add(resource_content.get('installation_type', 'ALL').upper())
     return option_set
 
-def addObjectsFromBlock(objs, node, block_name):
-    """
-    Utility function that iterates over a dictionary and adds keys
-    to the executable object name set.
-    """
-    data = node.get(block_name, {})
-    if data: # could be None so we can't just iterate over items
-        for name, block in data.items():
-            objs.add(name)
-            addObjectNames(objs, block)
-
-def addObjectNames(objs, node):
-    """
-    Add object names that reside in this node.
-    """
-    if not node:
-        return
-
-    addObjectsFromBlock(objs, node, "subblocks")
-    addObjectsFromBlock(objs, node, "subblock_types")
-    addObjectsFromBlock(objs, node, "types")
-
-    star = node.get("star")
-    if star:
-        addObjectNames(objs, star)
-
 def parseMOOSEJSON(output: str, context: str) -> dict:
     try:
         output = output.split('**START JSON DATA**\n')[1]
@@ -722,20 +457,6 @@ def parseMOOSEJSON(output: str, context: str) -> dict:
         raise Exception(f'Failed to find JSON header and footer from {context}')
     except json.decoder.JSONDecodeError:
         raise Exception(f'Failed to parse JSON from {context}')
-
-def getExeJSON(exe: str) -> str:
-    """
-    Calls --json on the given executable
-    """
-    return runCommand(f"{exe} --json", force_mpi_command=True)
-
-def getExeObjects(json: dict) -> set[str]:
-    """
-    Gets a set of object names that are in the executable JSON dump.
-    """
-    obj_names = set()
-    addObjectsFromBlock(obj_names, json, "blocks")
-    return obj_names
 
 def readResourceFile(exe, app_name):
     resource_path = os.path.join(os.path.dirname(os.path.abspath(exe)),
@@ -824,13 +545,30 @@ def trimOutput(output, max_size=None):
     trimmed += f'\n{sep}\nOutput trimmed\n{sep}\n{output[-second_part:]}'
     return trimmed
 
-def outputHeader(header, ending=True):
+class ScopedTimer:
     """
-    Returns text for output with a visual separator, i.e.:
-    ##############################...
-    <header>
-    ##############################...
+    Helper class that will print out a message if a certain amount
+    of time has passed
     """
-    begin_sep = '#' * 80
-    end_sep = f'{begin_sep}\n' if ending else ''
-    return f'{begin_sep}\n{header}\n{end_sep}'
+    def __init__(self, timeout: typing.Union[int, float], message: str):
+        self.timeout = timeout
+        self.message = message
+        self._stop_event = threading.Event()
+        self._printed = False
+
+    def _check_timeout(self):
+        if not self._stop_event.wait(self.timeout):
+            print(self.message + '...', end='', flush=True)
+            self._printed = True
+
+    def __enter__(self):
+        self._thread = threading.Thread(target=self._check_timeout)
+        self._thread.start()
+        self.start_time = time.time()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self._stop_event.set()
+        self._thread.join()
+        if self._printed:
+            elapsed_time = time.time() - self.start_time
+            print(f' {elapsed_time:.2f} seconds', flush=True)

@@ -39,15 +39,20 @@ public:
    * Over-writing to avoid abstract template definition in this class
    */
   ///@{
-  virtual Node * getChanNodeFromDuct(Node *) override { return nullptr; }
   virtual Node * getDuctNodeFromChannel(Node *) override { return nullptr; }
   virtual Node * getChannelNodeFromDuct(Node *) override { return nullptr; }
   virtual const std::vector<Node *> getDuctNodes() const override { return std::vector<Node *>(); }
   ///@}
 
-  virtual const unsigned int & getNumOfChannels() const override { return _n_channels; }
-  virtual const unsigned int & getNumOfGapsPerLayer() const override { return _n_gaps; }
-  virtual const unsigned int & getNumOfPins() const override { return _n_pins; }
+  virtual unsigned int getNumOfChannels() const override
+  {
+    return processor_id() == 0 ? _n_channels : 0;
+  }
+  virtual unsigned int getNumOfGapsPerLayer() const override
+  {
+    return processor_id() == 0 ? _n_gaps : 0;
+  }
+  virtual unsigned int getNumOfPins() const override { return processor_id() == 0 ? _n_pins : 0; }
   virtual bool pinMeshExist() const override { return _pin_mesh_exist; }
   virtual bool ductMeshExist() const override { return false; }
   virtual const std::pair<unsigned int, unsigned int> &
@@ -82,10 +87,10 @@ public:
   /// Number of subchannels in the -y direction
   virtual const unsigned int & getNy() const { return _ny; }
   /**
-   * Returns the gap, not to be confused with the gap between pins, this refers to the gap
+   * Returns the side gap, not to be confused with the gap between pins, this refers to the gap
    * next to the duct. Edge Pitch W = (pitch/2 - pin_diameter/2 + gap) [m]
    */
-  const Real & getGap() const { return _gap; }
+  const Real & getSideGap() const { return _side_gap; }
 
   unsigned int getSubchannelIndexFromPoint(const Point & p) const override;
   virtual unsigned int channelIndex(const Point & point) const override;
@@ -115,10 +120,11 @@ protected:
   /// Number of pins
   unsigned int _n_pins;
   /**
-   * The gap, not to be confused with the gap between pins, this refers to the gap
-   * next to the duct. Edge Pitch W = (pitch/2 - pin_diameter/2 + gap) [m]
+   * The side gap, not to be confused with the gap between pins, this refers to the gap
+   * next to the duct or else the distance between the subchannel centroid to the duct wall.
+   * Edge Pitch W = (pitch/2 - pin_diameter/2 + gap) [m]
    */
-  Real _gap;
+  Real _side_gap;
   /// vector of subchannel nodes
   std::vector<std::vector<Node *>> _nodes;
   /// vector of fuel pin nodes

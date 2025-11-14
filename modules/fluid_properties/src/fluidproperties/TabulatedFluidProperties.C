@@ -1453,6 +1453,7 @@ TabulatedFluidProperties::T_from_p_h(Real pressure, Real enthalpy) const
 ADReal
 TabulatedFluidProperties::T_from_p_h(const ADReal & pressure, const ADReal & enthalpy) const
 {
+  using std::isnan;
   if (_fp)
     return _fp->T_from_p_h(pressure, enthalpy);
   else
@@ -1470,7 +1471,7 @@ TabulatedFluidProperties::T_from_p_h(const ADReal & pressure, const ADReal & ent
             pressure, enthalpy, _T_initial_guess, _tolerance, lambda, name() + "::T_from_p_h")
             .first;
     // check for nans
-    if (std::isnan(T))
+    if (isnan(T))
       mooseError("Conversion from enthalpy (h = ",
                  enthalpy,
                  ") and pressure (p = ",
@@ -1782,6 +1783,8 @@ template <typename T>
 void
 TabulatedFluidProperties::checkInputVariables(T & pressure, T & temperature) const
 {
+  using std::max, std::min;
+
   if (_OOBBehavior == Ignore)
     return;
   else if (MooseUtils::absoluteFuzzyGreaterThan(_pressure_min, pressure, libMesh::TOLERANCE) ||
@@ -1795,7 +1798,7 @@ TabulatedFluidProperties::checkInputVariables(T & pressure, T & temperature) con
 
     else
     {
-      pressure = std::max(_pressure_min, std::min(pressure, _pressure_max));
+      pressure = max(_pressure_min, min(pressure, _pressure_max));
       if (_OOBBehavior == DeclareInvalid)
         flagInvalidSolution("Pressure out of bounds");
       else if (_OOBBehavior == WarnInvalid)
@@ -1807,13 +1810,13 @@ TabulatedFluidProperties::checkInputVariables(T & pressure, T & temperature) con
       MooseUtils::absoluteFuzzyGreaterThan(temperature, _temperature_max, libMesh::TOLERANCE))
   {
     if (_OOBBehavior == Throw)
-      mooseError("Temperature " + Moose::stringify(temperature) +
-                 " is outside the range of tabulated temperature (" +
-                 Moose::stringify(_temperature_min) + ", " + Moose::stringify(_temperature_max) +
-                 ").");
+      throw MooseException("Temperature " + Moose::stringify(temperature) +
+                           " is outside the range of tabulated temperature (" +
+                           Moose::stringify(_temperature_min) + ", " +
+                           Moose::stringify(_temperature_max) + ").");
     else
     {
-      temperature = std::max(T(_temperature_min), std::min(temperature, T(_temperature_max)));
+      temperature = max(T(_temperature_min), min(temperature, T(_temperature_max)));
       if (_OOBBehavior == DeclareInvalid)
         flagInvalidSolution("Temperature out of bounds");
       else if (_OOBBehavior == WarnInvalid)
@@ -1826,6 +1829,8 @@ template <typename T>
 void
 TabulatedFluidProperties::checkInputVariablesVE(T & v, T & e) const
 {
+  using std::max, std::min;
+
   if (_OOBBehavior == Ignore)
     return;
   else if (e < _e_min || e > _e_max)
@@ -1836,7 +1841,7 @@ TabulatedFluidProperties::checkInputVariablesVE(T & v, T & e) const
                            Moose::stringify(_e_min) + ", " + Moose::stringify(_e_max) + ").");
     else
     {
-      e = std::max(_e_min, std::min(e, _e_max));
+      e = max(_e_min, min(e, _e_max));
       if (_OOBBehavior == DeclareInvalid)
         flagInvalidSolution("Specific internal energy out of bounds");
       else if (_OOBBehavior == WarnInvalid)
@@ -1847,12 +1852,12 @@ TabulatedFluidProperties::checkInputVariablesVE(T & v, T & e) const
   if (v < _v_min || v > _v_max)
   {
     if (_OOBBehavior == Throw)
-      mooseError("Specific volume " + Moose::stringify(v) +
-                 " is outside the range of tabulated specific volumes (" +
-                 Moose::stringify(_v_min) + ", " + Moose::stringify(_v_max) + ").");
+      throw MooseException("Specific volume " + Moose::stringify(v) +
+                           " is outside the range of tabulated specific volumes (" +
+                           Moose::stringify(_v_min) + ", " + Moose::stringify(_v_max) + ").");
     else
     {
-      v = std::max(T(_v_min), std::min(v, T(_v_max)));
+      v = max(T(_v_min), min(v, T(_v_max)));
       if (_OOBBehavior == DeclareInvalid)
         flagInvalidSolution("Specific volume out of bounds");
       else if (_OOBBehavior == WarnInvalid)

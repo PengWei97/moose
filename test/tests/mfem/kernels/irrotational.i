@@ -64,18 +64,10 @@ centre_y = 0.1
 
 [BCs]
   [potential_velocity_boundary]
-    type = MFEMScalarFunctorDirichletBC
+    type = MFEMScalarDirichletBC
     variable = velocity_potential
     boundary = '1'
     coefficient = theta
-  []
-[]
-
-[FunctorMaterials]
-  [Substance]
-    type = MFEMGenericConstantFunctorMaterial
-    prop_names = one
-    prop_values = 1.0
   []
 []
 
@@ -83,7 +75,6 @@ centre_y = 0.1
   [laplacian]
     type = MFEMDiffusionKernel
     variable = velocity_potential
-    coefficient = one
   []
 []
 
@@ -119,7 +110,6 @@ centre_y = 0.1
     type = MFEML2Error
     variable = velocity_potential
     function = theta
-    execution_order_group = 1
   []
   [velocity_error]
     type = MFEMVectorL2Error

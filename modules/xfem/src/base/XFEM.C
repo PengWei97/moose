@@ -34,7 +34,10 @@
 #include "libmesh/partitioner.h"
 
 XFEM::XFEM(const InputParameters & params)
-  : XFEMInterface(params), _efa_mesh(Moose::out), _debug_output_level(1)
+  : XFEMInterface(params),
+    _efa_mesh(Moose::out),
+    _debug_output_level(1),
+    _min_weight_multiplier(0.0)
 {
 #ifndef LIBMESH_ENABLE_UNIQUE_ID
   mooseError("MOOSE requires unique ids to be enabled in libmesh (configure with "
@@ -1163,7 +1166,7 @@ XFEM::cutMeshWithEFA(const std::vector<std::shared_ptr<NonlinearSystemBase>> & n
     unsigned int parent_id = new_nodes[i]->parent()->id();
 
     Node * parent_node = _mesh->node_ptr(parent_id);
-    Node * new_node = Node::build(*parent_node, _mesh->n_nodes()).release();
+    Node * new_node = Node::build(*parent_node, _mesh->max_node_id()).release();
     _mesh->add_node(new_node);
 
     new_nodes_to_parents[new_node] = parent_node;
@@ -1175,7 +1178,7 @@ XFEM::cutMeshWithEFA(const std::vector<std::shared_ptr<NonlinearSystemBase>> & n
     if (_displaced_mesh)
     {
       const Node * parent_node2 = _displaced_mesh->node_ptr(parent_id);
-      Node * new_node2 = Node::build(*parent_node2, _displaced_mesh->n_nodes()).release();
+      Node * new_node2 = Node::build(*parent_node2, _displaced_mesh->max_node_id()).release();
       _displaced_mesh->add_node(new_node2);
 
       new_node2->set_n_systems(parent_node2->n_systems());
@@ -1839,6 +1842,12 @@ XFEM::setDebugOutputLevel(unsigned int debug_output_level)
   _debug_output_level = debug_output_level;
 }
 
+void
+XFEM::setMinWeightMultiplier(Real min_weight_multiplier)
+{
+  _min_weight_multiplier = min_weight_multiplier;
+}
+
 bool
 XFEM::getXFEMWeights(MooseArray<Real> & weights,
                      const Elem * elem,
@@ -1852,6 +1861,18 @@ XFEM::getXFEMWeights(MooseArray<Real> & weights,
     mooseAssert(xfce != nullptr, "Must have valid XFEMCutElem object here");
     xfce->getWeightMultipliers(weights, qrule, getXFEMQRule(), q_points);
     have_weights = true;
+
+    Real ave_weight_multiplier = 0;
+    for (unsigned int i = 0; i < weights.size(); ++i)
+      ave_weight_multiplier += weights[i];
+    ave_weight_multiplier /= weights.size();
+
+    if (ave_weight_multiplier < _min_weight_multiplier)
+    {
+      const Real amount_to_add = _min_weight_multiplier - ave_weight_multiplier;
+      for (unsigned int i = 0; i < weights.size(); ++i)
+        weights[i] += amount_to_add;
+    }
   }
   return have_weights;
 }

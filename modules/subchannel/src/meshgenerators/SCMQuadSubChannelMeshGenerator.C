@@ -28,10 +28,10 @@ SCMQuadSubChannelMeshGenerator::validParams()
   params.addParam<Real>("unheated_length_entry", 0.0, "Unheated length at entry [m]");
   params.addRequiredParam<Real>("heated_length", "Heated length [m]");
   params.addParam<Real>("unheated_length_exit", 0.0, "Unheated length at exit [m]");
-  params.addRequiredParam<std::vector<Real>>("spacer_z",
-                                             "Axial location of spacers/vanes/mixing_vanes [m]");
-  params.addRequiredParam<std::vector<Real>>(
-      "spacer_k", "K-loss coefficient of spacers/vanes/mixing_vanes [-]");
+  params.addParam<std::vector<Real>>(
+      "spacer_z", {}, "Axial location of spacers/vanes/mixing_vanes [m]");
+  params.addParam<std::vector<Real>>(
+      "spacer_k", {}, "K-loss coefficient of spacers/vanes/mixing_vanes [-]");
   params.addParam<std::vector<Real>>("z_blockage",
                                      std::vector<Real>({0.0, 0.0}),
                                      "axial location of blockage (inlet, outlet) [m]");
@@ -50,9 +50,12 @@ SCMQuadSubChannelMeshGenerator::validParams()
   params.addRequiredParam<unsigned int>("n_cells", "The number of cells in the axial direction");
   params.addRequiredParam<unsigned int>("nx", "Number of channels in the x direction [-]");
   params.addRequiredParam<unsigned int>("ny", "Number of channels in the y direction [-]");
-  params.addRequiredParam<Real>("gap",
-                                "(Its an added distance between a perimetric pin and the duct: "
-                                "Edge Pitch W = (pitch/2 - pin_diameter/2 + gap) [m]");
+  params.addRequiredParam<Real>(
+      "gap",
+      "The side gap, not to be confused with the gap between pins, this refers to the gap "
+      "next to the duct or else the distance between the subchannel centroid to the duct wall."
+      "distance(edge pin center, duct wall) = pitch / 2 + side_gap [m]");
+  params.deprecateParam("gap", "side_gap", "08/06/2026");
   params.addParam<unsigned int>("block_id", 0, "Domain Index");
   return params;
 }
@@ -77,13 +80,14 @@ SCMQuadSubChannelMeshGenerator::SCMQuadSubChannelMeshGenerator(const InputParame
     _n_channels(_nx * _ny),
     _n_gaps((_nx - 1) * _ny + (_ny - 1) * _nx),
     _n_pins((_nx - 1) * (_ny - 1)),
-    _gap(getParam<Real>("gap")),
+    _side_gap(getParam<Real>("side_gap")),
     _block_id(getParam<unsigned int>("block_id"))
 {
   if (_spacer_z.size() != _spacer_k.size())
     mooseError(name(), ": Size of vector spacer_z should be equal to size of vector spacer_k");
 
-  if (_spacer_z.back() > _unheated_length_entry + _heated_length + _unheated_length_exit)
+  if (_spacer_z.size() &&
+      _spacer_z.back() > _unheated_length_entry + _heated_length + _unheated_length_exit)
     mooseError(name(), ": Location of spacers should be less than the total bundle length");
 
   if (_z_blockage.size() != 2)
@@ -230,7 +234,7 @@ SCMQuadSubChannelMeshGenerator::SCMQuadSubChannelMeshGenerator(const InputParame
 
       // make a gap size map
       if (iy == 0 || iy == _ny - 1)
-        _gij_map[0].push_back((_pitch - _pin_diameter) / 2 + _gap);
+        _gij_map[0].push_back((_pitch - _pin_diameter) / 2 + _side_gap);
       else
         _gij_map[0].push_back(_pitch - _pin_diameter);
       ++i_gap;
@@ -252,7 +256,7 @@ SCMQuadSubChannelMeshGenerator::SCMQuadSubChannelMeshGenerator(const InputParame
 
       // make a gap size map
       if (ix == 0 || ix == _nx - 1)
-        _gij_map[0].push_back((_pitch - _pin_diameter) / 2 + _gap);
+        _gij_map[0].push_back((_pitch - _pin_diameter) / 2 + _side_gap);
       else
         _gij_map[0].push_back(_pitch - _pin_diameter);
       ++i_gap;
@@ -468,7 +472,7 @@ SCMQuadSubChannelMeshGenerator::generate()
   sch_mesh._n_channels = _n_channels;
   sch_mesh._n_gaps = _n_gaps;
   sch_mesh._n_pins = _n_pins;
-  sch_mesh._gap = _gap;
+  sch_mesh._side_gap = _side_gap;
   sch_mesh._nodes = _nodes;
   sch_mesh._gapnodes = _gapnodes;
   sch_mesh._gap_to_chan_map = _gap_to_chan_map;

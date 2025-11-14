@@ -1,7 +1,15 @@
-#ifdef MFEM_ENABLED
+//* This file is part of the MOOSE framework
+//* https://mooseframework.inl.gov
+//*
+//* All rights reserved, see COPYRIGHT for full restrictions
+//* https://github.com/idaholab/moose/blob/master/COPYRIGHT
+//*
+//* Licensed under LGPL 2.1, please see LICENSE for details
+//* https://www.gnu.org/licenses/lgpl-2.1.html
+
+#ifdef MOOSE_MFEM_ENABLED
 
 #include "MFEMVectorBoundaryIntegratedBC.h"
-#include "MFEMProblem.h"
 
 registerMooseObject("MooseApp", MFEMVectorBoundaryIntegratedBC);
 
@@ -11,17 +19,13 @@ MFEMVectorBoundaryIntegratedBC::validParams()
   InputParameters params = MFEMIntegratedBC::validParams();
   params.addClassDescription("Adds the boundary integrator to an MFEM problem for the linear form "
                              "$(\\vec f, \\vec v)_{\\partial\\Omega}$");
-  params.addRequiredParam<std::vector<Real>>(
-      "values", "The vector whose components will be used in the integrated BC");
+  params.addParam<MFEMVectorCoefficientName>(
+      "vector_coefficient", "1. 1. 1.", "Vector coefficient used in the boundary integrator");
   return params;
 }
 
 MFEMVectorBoundaryIntegratedBC::MFEMVectorBoundaryIntegratedBC(const InputParameters & parameters)
-  : MFEMIntegratedBC(parameters),
-    _vec_value(getParam<std::vector<Real>>("values")),
-    _vec_coef(getMFEMProblem().getCoefficients().declareVector<mfem::VectorConstantCoefficient>(
-        "__VectorBoundaryIntegratedBC_" + parameters.get<std::string>("_unique_name"),
-        mfem::Vector(_vec_value.data(), _vec_value.size())))
+  : MFEMIntegratedBC(parameters), _vec_coef(getVectorCoefficient("vector_coefficient"))
 {
 }
 

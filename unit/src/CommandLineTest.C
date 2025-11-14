@@ -867,10 +867,12 @@ TEST(CommandLineTest, optionalValuedParam)
     // Because --mesh-only is optional, we shouldn't associate
     // the value foo=bar with it because it could be seen as
     // a hit parameter (this preserves old behavior)
+    const std::vector<std::string> hit_args{"foo=bar"};
     CommandLine cl;
     cl.addArgument("/path/to/exe");
     cl.addArgument("--mesh-only");
-    cl.addArgument("foo=bar");
+    for (const auto & arg : hit_args)
+      cl.addArgument(arg);
     cl.parse();
 
     InputParameters params = emptyInputParameters();
@@ -879,7 +881,7 @@ TEST(CommandLineTest, optionalValuedParam)
 
     ASSERT_TRUE(params.isParamSetByUser("mesh_only"));
     ASSERT_TRUE(params.get<std::string>("mesh_only").empty());
-    ASSERT_EQ(cl.buildHitParams(), "foo=bar");
+    ASSERT_EQ(cl.buildHitParams(), hit_args);
   }
 
   {
@@ -901,16 +903,17 @@ TEST(CommandLineTest, optionalValuedParam)
 
 TEST(CommandLineTest, mergeHIT)
 {
+  const std::vector<std::string> args{"Foo/bar=baz", "Foo/bar=bang"};
   CommandLine cl;
   cl.addArgument("/path/to/exe");
-  cl.addArgument("Foo/bar=baz");
-  cl.addArgument("Foo/bar=bang");
+  for (const auto & arg : args)
+    cl.addArgument(arg);
   cl.parse();
 
   InputParameters params = emptyInputParameters();
   cl.populateCommandLineParams(params);
 
-  ASSERT_EQ(cl.buildHitParams(), "Foo/bar=baz Foo/bar=bang");
+  ASSERT_EQ(cl.buildHitParams(), args);
 }
 
 TEST(CommandLineTest, removeArgument)
@@ -959,4 +962,37 @@ TEST(CommandLineTest, formatEntry)
 
   test({"-foo", "--foo", "bar", "foo=bar"}, {"-foo", "--foo bar", "foo=bar"});
   test({"-foo", "bar baz", "foo=bar baz"}, {"-foo 'bar baz'", "foo='bar baz'"});
+}
+
+TEST(CommandLineTest, combinedKeyValueParamKnownArg)
+{
+  // Helper for checking if a command line name is registered
+  const auto have_cl_name = [](const std::string & var) -> bool
+  {
+    const auto names = libMesh::command_line_names();
+    return std::find(names.begin(), names.end(), var) != names.end();
+  };
+
+  // Build an argument that is explicitly of the form "--key=value",
+  // which requires special treatment. Due to how PETSc manages known
+  // arguments, we need to explicitly mark the argument as known, and
+  // marking just "--key" is not sufficient. This needs to be a unique
+  // name because the libMesh command line is shared across all unit tests
+  const std::string cl_switch = "--cltest_combinedkeyvalueparamknownarg";
+  const std::string arg = cl_switch + "=bar";
+
+  // Should not be recognized
+  ASSERT_FALSE(have_cl_name(arg));
+
+  auto params = emptyInputParameters();
+  params.addCommandLineParam<std::string>("unused", cl_switch, "unused", "unused");
+
+  // Population of the command line params should then explicitly
+  // add our "--key=value" style as a known command line name
+  CommandLine cl;
+  cl.addArgument(arg);
+  cl.parse();
+  cl.populateCommandLineParams(params);
+
+  ASSERT_TRUE(have_cl_name(arg));
 }

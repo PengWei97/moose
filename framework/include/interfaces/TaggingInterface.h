@@ -27,13 +27,43 @@ class MooseObject;
 class SubProblem;
 class Assembly;
 
+#ifdef MOOSE_KOKKOS_ENABLED
+namespace Moose::Kokkos
+{
+class ResidualObject;
+}
+#endif
+
 template <typename T>
 InputParameters validParams();
+
+/**
+ * Utility structure for packaging up all of the residual object's information needed to add into
+ * the system residual and Jacobian in the context of automatic differentiation. The necessary
+ * information includes the vector of residuals and Jacobians represented by dual numbers, the
+ * vector of degrees of freedom (this should be the same length as the vector of dual numbers), and
+ * a scaling factor that will multiply the dual numbers before their addition into the global
+ * residual and Jacobian
+ */
+struct ADResidualsPacket
+{
+  const DenseVector<ADReal> & residuals;
+  const std::vector<dof_id_type> & dof_indices;
+  const Real scaling_factor;
+};
 
 class TaggingInterface
 {
 public:
   TaggingInterface(const MooseObject * moose_object);
+
+#ifdef MOOSE_KOKKOS_ENABLED
+  /**
+   * Special constructor used for Kokkos functor copy during parallel dispatch
+   */
+  TaggingInterface(const TaggingInterface & object, const Moose::Kokkos::FunctorCopy & key);
+#endif
+
   virtual ~TaggingInterface();
 
   static InputParameters validParams();
@@ -46,8 +76,12 @@ public:
   {
     friend class AttribVectorTags;
     friend class NonlinearEigenSystem;
+    friend class LinearSystemContributionObject;
     template <typename>
     friend class MooseObjectTagWarehouse;
+#ifdef MOOSE_KOKKOS_ENABLED
+    friend class Moose::Kokkos::ResidualObject;
+#endif
 
     VectorTagsKey() {}
     VectorTagsKey(const VectorTagsKey &) {}
@@ -61,8 +95,12 @@ public:
   {
     friend class AttribMatrixTags;
     friend class NonlinearEigenSystem;
+    friend class LinearSystemContributionObject;
     template <typename>
     friend class MooseObjectTagWarehouse;
+#ifdef MOOSE_KOKKOS_ENABLED
+    friend class Moose::Kokkos::ResidualObject;
+#endif
 
     MatrixTagsKey() {}
     MatrixTagsKey(const MatrixTagsKey &) {}
@@ -228,6 +266,12 @@ protected:
                     const Indices & dof_indices,
                     Real scaling_factor);
 
+  template <typename Residuals, typename Indices>
+  void addResiduals(Assembly & assembly,
+                    const Residuals & residuals,
+                    const Indices & dof_indices,
+                    const std::vector<Real> & scaling_factors);
+
   /**
    * Add the provided incoming residuals corresponding to the provided dof indices
    */
@@ -255,6 +299,32 @@ protected:
                    const Residuals & residuals,
                    const Indices & dof_indices,
                    Real scaling_factor);
+
+  /**
+   * Add the provided residual derivatives into the Jacobian for the provided dof indices. This
+   * overload is meant for array variables because it takes an array of scaling factors
+   */
+  template <typename Residuals, typename Indices>
+  void addJacobian(Assembly & assembly,
+                   const Residuals & residuals,
+                   const Indices & dof_indices,
+                   const std::vector<Real> & scaling_factors);
+
+  /**
+   * Add the provided incoming residuals corresponding to the provided dof indices
+   */
+  void addResiduals(Assembly & assembly, const ADResidualsPacket & packet);
+
+  /**
+   * Add the provided incoming residuals and derivatives for the Jacobian, corresponding to the
+   * provided dof indices
+   */
+  void addResidualsAndJacobian(Assembly & assembly, const ADResidualsPacket & packet);
+
+  /**
+   * Add the provided residual derivatives into the Jacobian for the provided dof indices
+   */
+  void addJacobian(Assembly & assembly, const ADResidualsPacket & packet);
 
   /**
    * Add the provided incoming residuals corresponding to the provided dof indices. This API should
@@ -348,7 +418,7 @@ private:
                                 const std::set<TagID> & vector_tags,
                                 const std::set<TagID> & absolute_value_vector_tags);
 
-  /// The residual tag ids this Kernel will contribute to
+  /// The vector tag ids this Kernel will contribute to
   std::set<TagID> _vector_tags;
 
   /// The absolute value residual tag ids
@@ -433,6 +503,27 @@ TaggingInterface::addResiduals(Assembly & assembly,
   }
 }
 
+template <typename Residuals, typename Indices>
+void
+TaggingInterface::addResiduals(Assembly & assembly,
+                               const Residuals & residuals,
+                               const Indices & dof_indices,
+                               const std::vector<Real> & scaling_factors)
+{
+  const auto count = scaling_factors.size();
+  mooseAssert(dof_indices.size() % count == 0,
+              "The number of dof indices should be divided cleanly by the variable count");
+  const auto nshapes = dof_indices.size() / count;
+
+  for (const auto j : make_range(count))
+    // The Residuals type may not offer operator[] (e.g. eigen vectors) but more commonly it
+    // should offer data()
+    addResiduals(assembly,
+                 Moose::makeSpan(residuals, j * nshapes, nshapes),
+                 Moose::makeSpan(dof_indices, j * nshapes, nshapes),
+                 scaling_factors[j]);
+}
+
 template <typename T, typename Indices>
 void
 TaggingInterface::addResiduals(Assembly & assembly,
@@ -486,6 +577,27 @@ TaggingInterface::addJacobian(Assembly & assembly,
 {
   assembly.cacheJacobian(
       residuals, dof_indices, scaling_factor, Assembly::LocalDataKey{}, _matrix_tags);
+}
+
+template <typename Residuals, typename Indices>
+void
+TaggingInterface::addJacobian(Assembly & assembly,
+                              const Residuals & residuals,
+                              const Indices & dof_indices,
+                              const std::vector<Real> & scaling_factors)
+{
+  const auto count = scaling_factors.size();
+  mooseAssert(dof_indices.size() % count == 0,
+              "The number of dof indices should be divided cleanly by the variable count");
+  const auto nshapes = dof_indices.size() / count;
+
+  for (const auto j : make_range(count))
+    // The Residuals type may not offer operator[] (e.g. eigen vectors) but more commonly it
+    // should offer data()
+    addJacobian(assembly,
+                Moose::makeSpan(residuals, j * nshapes, nshapes),
+                Moose::makeSpan(dof_indices, j * nshapes, nshapes),
+                scaling_factors[j]);
 }
 
 template <typename Residuals, typename Indices>
@@ -557,4 +669,22 @@ TaggingInterface::setResidual(SystemBase & sys, const SetResidualFunctor set_res
   for (const auto tag_id : _vector_tags)
     if (sys.hasVector(tag_id))
       set_residual_functor(sys.getVector(tag_id));
+}
+
+inline void
+TaggingInterface::addResiduals(Assembly & assembly, const ADResidualsPacket & packet)
+{
+  addResiduals(assembly, packet.residuals, packet.dof_indices, packet.scaling_factor);
+}
+
+inline void
+TaggingInterface::addResidualsAndJacobian(Assembly & assembly, const ADResidualsPacket & packet)
+{
+  addResidualsAndJacobian(assembly, packet.residuals, packet.dof_indices, packet.scaling_factor);
+}
+
+inline void
+TaggingInterface::addJacobian(Assembly & assembly, const ADResidualsPacket & packet)
+{
+  addJacobian(assembly, packet.residuals, packet.dof_indices, packet.scaling_factor);
 }

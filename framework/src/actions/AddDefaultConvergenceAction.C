@@ -11,15 +11,25 @@
 #include "FEProblem.h"
 #include "Executioner.h"
 #include "FEProblemSolve.h"
+#include "FixedPointSolve.h"
+#include "TransientBase.h"
 #include "DefaultNonlinearConvergence.h"
+#include "DefaultMultiAppFixedPointConvergence.h"
+#include "DefaultSteadyStateConvergence.h"
 
-registerMooseAction("MooseApp", AddDefaultConvergenceAction, "add_default_convergence");
+registerMooseAction("MooseApp", AddDefaultConvergenceAction, "add_default_nonlinear_convergence");
+registerMooseAction("MooseApp",
+                    AddDefaultConvergenceAction,
+                    "add_default_multiapp_fixed_point_convergence");
+registerMooseAction("MooseApp",
+                    AddDefaultConvergenceAction,
+                    "add_default_steady_state_convergence");
 
 InputParameters
 AddDefaultConvergenceAction::validParams()
 {
   InputParameters params = Action::validParams();
-  params.addClassDescription("Add a default Convergence object to the simulation.");
+  params.addClassDescription("Adds default Convergence objects to the simulation.");
   return params;
 }
 
@@ -30,6 +40,17 @@ AddDefaultConvergenceAction::AddDefaultConvergenceAction(const InputParameters &
 
 void
 AddDefaultConvergenceAction::act()
+{
+  if (_current_task == "add_default_nonlinear_convergence")
+    addDefaultNonlinearConvergence();
+  else if (_current_task == "add_default_multiapp_fixed_point_convergence")
+    addDefaultMultiAppFixedPointConvergence();
+  else if (_current_task == "add_default_steady_state_convergence")
+    addDefaultSteadyStateConvergence();
+}
+
+void
+AddDefaultConvergenceAction::addDefaultNonlinearConvergence()
 {
   if (_problem->needToAddDefaultNonlinearConvergence())
   {
@@ -43,6 +64,32 @@ AddDefaultConvergenceAction::act()
   }
 
   checkUnusedNonlinearConvergenceParameters();
+}
+
+void
+AddDefaultConvergenceAction::addDefaultMultiAppFixedPointConvergence()
+{
+  if (_problem->needToAddDefaultMultiAppFixedPointConvergence())
+  {
+    const std::string conv_name = "default_multiapp_fixed_point_convergence";
+    _problem->setMultiAppFixedPointConvergenceName(conv_name);
+    _problem->addDefaultMultiAppFixedPointConvergence(getMooseApp().getExecutioner()->parameters());
+  }
+
+  checkUnusedMultiAppFixedPointConvergenceParameters();
+}
+
+void
+AddDefaultConvergenceAction::addDefaultSteadyStateConvergence()
+{
+  if (_problem->needToAddDefaultSteadyStateConvergence())
+  {
+    const std::string conv_name = "default_steady_state_convergence";
+    _problem->setSteadyStateConvergenceName(conv_name);
+    _problem->addDefaultSteadyStateConvergence(getMooseApp().getExecutioner()->parameters());
+  }
+
+  checkUnusedSteadyStateConvergenceParameters();
 }
 
 void
@@ -98,6 +145,92 @@ AddDefaultConvergenceAction::checkUnusedNonlinearConvergenceParameters()
           msg << "  " << param << "\n";
         mooseError(msg.str());
       }
+    }
+  }
+}
+
+void
+AddDefaultConvergenceAction::checkUnusedMultiAppFixedPointConvergenceParameters()
+{
+  // Abort check if executioner does not allow Convergence objects
+  auto & executioner_params = getMooseApp().getExecutioner()->parameters();
+  if (!executioner_params.have_parameter<ConvergenceName>("multiapp_fixed_point_convergence"))
+    return;
+
+  // Abort if there is no fixed point convergence. For example, Executors may not have them.
+  if (!_problem->hasSetMultiAppFixedPointConvergenceName())
+    return;
+
+  const auto & conv_name = _problem->getMultiAppFixedPointConvergenceName();
+
+  // Abort check if Convergence is inactive
+  if (!_problem->hasConvergence(conv_name))
+    return;
+
+  // If the convergence is a DefaultMultiAppFixedPointConvergence they can handle the Executioner
+  // parameters pertaining to the fixed point solve
+  auto & conv = _problem->getConvergence(conv_name);
+  const auto * const default_conv = dynamic_cast<DefaultMultiAppFixedPointConvergence *>(&conv);
+
+  // Only Convergence objects deriving from DefaultMultiAppFixedPointConvergence should
+  // share parameters with the executioner
+  if (!default_conv)
+  {
+    auto fp_params = FixedPointSolve::fixedPointDefaultConvergenceParams();
+    std::vector<std::string> unused_params;
+    for (const auto & param : fp_params.getParametersList())
+      if (executioner_params.isParamSetByUser(param))
+        unused_params.push_back(param);
+
+    if (unused_params.size() > 0)
+    {
+      std::stringstream msg;
+      msg << "The following fixed point convergence parameters were set in the executioner, but "
+             "are not used:\n";
+      for (const auto & param : unused_params)
+        msg << "  " << param << "\n";
+      mooseError(msg.str());
+    }
+  }
+}
+
+void
+AddDefaultConvergenceAction::checkUnusedSteadyStateConvergenceParameters()
+{
+  // Abort check if executioner does not allow Convergence objects
+  auto & executioner_params = getMooseApp().getExecutioner()->parameters();
+  if (!executioner_params.have_parameter<ConvergenceName>("steady_state_convergence"))
+    return;
+
+  const auto conv_name = _problem->getSteadyStateConvergenceName();
+
+  // Abort check if Convergence is inactive
+  if (!_problem->hasConvergence(conv_name))
+    return;
+
+  // If the convergence is a DefaultSteadyStateConvergence they can handle the Executioner
+  // parameters pertaining to the steady solve
+  auto & conv = _problem->getConvergence(conv_name);
+  auto * default_conv = dynamic_cast<DefaultSteadyStateConvergence *>(&conv);
+
+  // Only Convergence objects deriving from DefaultSteadyStateConvergence should
+  // share parameters with the executioner
+  if (!default_conv)
+  {
+    auto params = TransientBase::defaultSteadyStateConvergenceParams();
+    std::vector<std::string> unused_params;
+    for (const auto & param : params.getParametersList())
+      if (executioner_params.isParamSetByUser(param))
+        unused_params.push_back(param);
+
+    if (unused_params.size() > 0)
+    {
+      std::stringstream msg;
+      msg << "The following steady-state convergence parameters were set in the executioner, but "
+             "are not used:\n";
+      for (const auto & param : unused_params)
+        msg << "  " << param << "\n";
+      mooseError(msg.str());
     }
   }
 }

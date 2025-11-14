@@ -68,7 +68,9 @@ pathjoin(const std::filesystem::path & p, Args... args)
 }
 
 /// Check if the input string can be parsed into a Real
-bool parsesToReal(const std::string & input);
+/// @param input input to check / parse
+/// @param parsed_real pointer to a Real that gets set to the parsed real if it does parse to Real
+bool parsesToReal(const std::string & input, Real * parsed_real = nullptr);
 
 /// Returns the location of either a local repo run_tests script - or an
 /// installed test executor script if run_tests isn't found.
@@ -135,16 +137,25 @@ std::vector<std::string> rsplit(const std::string & str,
                                 std::size_t max_count = std::numeric_limits<std::size_t>::max());
 
 /**
- * Python like join function for strings.
+ * Python-like join function for strings over an iterator range.
+ */
+template <typename Iterator>
+std::string
+join(Iterator begin, Iterator end, const std::string & delimiter)
+{
+  std::ostringstream oss;
+  std::copy(begin, end, infix_ostream_iterator<std::string>(oss, delimiter.c_str()));
+  return oss.str();
+}
+
+/**
+ * Python-like join function for strings over a container.
  */
 template <typename T>
 std::string
 join(const T & strings, const std::string & delimiter)
 {
-  std::ostringstream oss;
-  std::copy(
-      strings.begin(), strings.end(), infix_ostream_iterator<std::string>(oss, delimiter.c_str()));
-  return oss.str();
+  return join(strings.begin(), strings.end(), delimiter);
 }
 
 /**
@@ -331,9 +342,12 @@ std::string prettyCppType(const std::string & cpp_type);
  */
 template <typename T>
 std::string
-prettyCppType(const T * = nullptr)
+prettyCppType(const T * obj = nullptr)
 {
-  return prettyCppType(libMesh::demangle(typeid(T).name()));
+  if (obj)
+    return prettyCppType(libMesh::demangle(typeid(*obj).name()));
+  else
+    return prettyCppType(libMesh::demangle(typeid(T).name()));
 }
 
 /**
@@ -625,6 +639,27 @@ relativeFuzzyLessThan(const T & var1,
 }
 
 /**
+ * Function which takes the union of \p vector1 and \p vector2 and copies them
+ * to \p common . Depending on the vector size and data type this can be very expensive!
+ */
+template <typename T>
+void
+getUnion(const std::vector<T> & vector1, const std::vector<T> & vector2, std::vector<T> & common)
+{
+  std::unordered_set<T> unique_elements;
+  unique_elements.reserve(vector1.size() + vector2.size());
+
+  for (const T & entry : vector1)
+    unique_elements.insert(entry);
+  for (const T & entry : vector2)
+    unique_elements.insert(entry);
+
+  // Now populate the common vector with the union
+  common.clear();
+  common.assign(unique_elements.begin(), unique_elements.end());
+}
+
+/**
  * Taken from https://stackoverflow.com/a/257382
  * Evaluating constexpr (Has_size<T>::value) in a templated method over class T will
  * return whether T is a standard container or a singleton
@@ -798,54 +833,32 @@ expandAllMatches(const std::vector<T> & candidates, std::vector<T> & patterns)
 }
 
 /**
- * convert takes a string representation of a number type and converts it to the number.
- * This method is here to get around deficiencies in the STL stoi and stod methods where they
- * might successfully convert part of a string to a number when we'd like to throw an error.
+ * Takes the string representation of a value and converts it to the value.
+ *
+ * See the convert method in MooseStringUtils.h for more information on
+ * handling of each case.
+ *
+ * @param str The string to convert from
+ * @param throw_on_failure If true, throw on a failure to convert, otherwise use mooseError
+ * @return The converted value on success
  */
 template <typename T>
 T
 convert(const std::string & str, bool throw_on_failure = false)
 {
-  std::stringstream ss(str);
   T val;
-  if ((ss >> val).fail() || !ss.eof())
+  try
   {
-    std::string msg = std::string("Unable to convert '") + str + "' to type " +
-                      libMesh::demangle(typeid(T).name());
-
-    if (throw_on_failure)
-      throw std::invalid_argument(msg);
-    else
-      mooseError(msg);
+    convert(str, val, true);
   }
-
+  catch (std::exception const & e)
+  {
+    if (throw_on_failure)
+      throw;
+    mooseError(e.what());
+  }
   return val;
 }
-
-template <>
-short int convert<short int>(const std::string & str, bool throw_on_failure);
-
-template <>
-unsigned short int convert<unsigned short int>(const std::string & str, bool throw_on_failure);
-
-template <>
-int convert<int>(const std::string & str, bool throw_on_failure);
-
-template <>
-unsigned int convert<unsigned int>(const std::string & str, bool throw_on_failure);
-
-template <>
-long int convert<long int>(const std::string & str, bool throw_on_failure);
-
-template <>
-unsigned long int convert<unsigned long int>(const std::string & str, bool throw_on_failure);
-
-template <>
-long long int convert<long long int>(const std::string & str, bool throw_on_failure);
-
-template <>
-unsigned long long int convert<unsigned long long int>(const std::string & str,
-                                                       bool throw_on_failure);
 
 /**
  * Create a symbolic link, if the link already exists it is replaced.
@@ -1060,9 +1073,15 @@ libMesh::BoundingBox buildBoundingBox(const Point & p1, const Point & p2);
  * using the third template parameter if uninitialized storage is acceptable,
  */
 template <typename T, std::size_t N, bool value_init = true>
+#if METAPHYSICL_MAJOR_VERSION < 2
 class SemidynamicVector : public MetaPhysicL::DynamicStdArrayWrapper<T, MetaPhysicL::NWrapper<N>>
 {
   typedef MetaPhysicL::DynamicStdArrayWrapper<T, MetaPhysicL::NWrapper<N>> Parent;
+#else
+class SemidynamicVector : public MetaPhysicL::DynamicStdArrayWrapper<T, N>
+{
+  typedef MetaPhysicL::DynamicStdArrayWrapper<T, N> Parent;
+#endif
 
 public:
   SemidynamicVector(std::size_t size) : Parent()
@@ -1196,6 +1215,22 @@ isFloat(const std::string & str)
  * Gets the canonical path of the given path
  */
 std::string canonicalPath(const std::string & path);
+
+/**
+ * @returns Whether the \p string1 starts with \p string2
+ */
+bool startsWith(const std::string & string1, const std::string & string2);
+
+/**
+ * Replace the starting string \p string2 of \p string1 with \p string3. A user should have checked
+ * that \p string1 \p startsWith \p string2
+ */
+void replaceStart(std::string & string1, const std::string & string2, const std::string & string3);
+
+/**
+ * @returns whether every alphabetic character in a string is lower-case
+ */
+bool isAllLowercase(const std::string & str);
 } // MooseUtils namespace
 
 namespace Moose

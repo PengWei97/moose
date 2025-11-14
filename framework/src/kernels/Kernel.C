@@ -104,11 +104,8 @@ Kernel::computeResidual()
   accumulateTaggedLocalResidual();
 
   if (_has_save_in)
-  {
-    Threads::spin_mutex::scoped_lock lock(Threads::spin_mtx);
     for (const auto & var : _save_in)
       var->sys().solution().add_vector(_local_re, var->dofIndices());
-  }
 }
 
 void
@@ -127,7 +124,6 @@ Kernel::computeJacobian()
   if (_has_diag_save_in && !_sys.computingScalingJacobian())
   {
     DenseVector<Number> diag = _assembly.getJacobianDiagonal(_local_ke);
-    Threads::spin_mutex::scoped_lock lock(Threads::spin_mtx);
     for (const auto & var : _diag_save_in)
       var->sys().solution().add_vector(diag, var->dofIndices());
   }
@@ -136,23 +132,27 @@ Kernel::computeJacobian()
 void
 Kernel::computeOffDiagJacobian(const unsigned int jvar_num)
 {
-  const auto & jvar = getVariable(jvar_num);
-
   if (jvar_num == _var.number())
     computeJacobian();
   else
   {
+    const auto & jvar = getVariable(jvar_num);
     prepareMatrixTag(_assembly, _var.number(), jvar_num);
 
-    // This (undisplaced) jvar could potentially yield the wrong phi size if this object is acting
-    // on the displaced mesh
-    auto phi_size = jvar.dofIndices().size();
+    // It's possible that this variable has not been requested for coupling anywhere for our
+    // associated system/assembly. E.g. in one ALE simulation, the displacement diffusion kernel
+    // runs on the reference mesh and all the velocity variable couplings are on the displaced mesh
+    if (jvar.dofIndices().empty())
+      return;
+
+    // phi_size may not be equal to _phi.size(), e.g. when jvar is a vector variable
+    const auto phi_size = jvar.phiSize();
     mooseAssert(
         phi_size * jvar.count() == _local_ke.n(),
         "The size of the phi container does not match the number of local Jacobian columns");
 
-    if (_local_ke.m() != _test.size())
-      return;
+    mooseAssert(_local_ke.m() == _test.size(),
+                "If these are not the same, then we shouldn't even be calling this method");
 
     precalculateOffDiagJacobian(jvar_num);
     if (jvar.count() == 1)
@@ -164,14 +164,15 @@ Kernel::computeOffDiagJacobian(const unsigned int jvar_num)
     }
     else
     {
-      unsigned int n = phi_size;
+      const auto n = cast_int<unsigned int>(phi_size);
       for (_i = 0; _i < _test.size(); _i++)
-        for (_j = 0; _j < n; _j++)
+        for (_j = 0; _j < phi_size; _j++)
           for (_qp = 0; _qp < _qrule->n_points(); _qp++)
           {
-            RealEigenVector v = _JxW[_qp] * _coord[_qp] *
-                                computeQpOffDiagJacobianArray(static_cast<ArrayMooseVariable &>(
-                                    const_cast<MooseVariableFieldBase &>(jvar)));
+            const RealEigenVector v =
+                _JxW[_qp] * _coord[_qp] *
+                computeQpOffDiagJacobianArray(
+                    static_cast<ArrayMooseVariable &>(const_cast<MooseVariableFieldBase &>(jvar)));
             for (unsigned int k = 0; k < v.size(); ++k)
               _local_ke(_i, _j + k * n) += v(k);
           }

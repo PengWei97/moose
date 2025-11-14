@@ -55,7 +55,12 @@ formFunction(SNES, Vec x, Vec f, void * ctx)
 InputParameters
 SubChannel1PhaseProblem::validParams()
 {
+  // Enumerations
   MooseEnum schemes("upwind downwind central_difference exponential", "central_difference");
+  MooseEnum gravity_direction("counter_flow co_flow none", "counter_flow");
+  MooseEnum htc_correlations("dittus-boelter gnielinski kazimi-carelli hausen", "dittus-boelter");
+
+  // Inputs
   InputParameters params = ExternalProblem::validParams();
   params += PostprocessorInterface::validParams();
   params.addClassDescription("Base class of the subchannel solvers");
@@ -68,18 +73,23 @@ SubChannel1PhaseProblem::validParams()
   params.addParam<PetscReal>("atol", 1e-6, "Absolute tolerance for ksp solver");
   params.addParam<PetscReal>("dtol", 1e5, "Divergence tolerance or ksp solver");
   params.addParam<PetscInt>("maxit", 1e4, "Maximum number of iterations for ksp solver");
+  params.addParam<MooseEnum>("interpolation_scheme",
+                             schemes,
+                             "Interpolation scheme used for the method. Default is exponential");
+  params.addParam<MooseEnum>("pin_htc_correlation",
+                             htc_correlations,
+                             "The correlation used for computing the pin surface temperature.");
+  params.addParam<MooseEnum>("duct_htc_correlation",
+                             htc_correlations,
+                             "The correlation used for computing the duct surface temperature.");
   params.addParam<MooseEnum>(
-      "interpolation_scheme",
-      schemes,
-      "Interpolation scheme used for the method. Default is central difference");
+      "gravity", gravity_direction, "Direction of gravity. Default is counter_flow");
   params.addParam<bool>(
       "implicit", false, "Boolean to define the use of explicit or implicit solution.");
   params.addParam<bool>(
       "staggered_pressure", false, "Boolean to define the use of explicit or implicit solution.");
   params.addParam<bool>(
       "segregated", true, "Boolean to define whether to use a segregated solution.");
-  params.addParam<bool>(
-      "monolithic_thermal", false, "Boolean to define whether to use thermal monolithic solve.");
   params.addParam<bool>(
       "verbose_subchannel", false, "Boolean to print out information related to subchannel solve.");
   params.addParam<bool>(
@@ -101,6 +111,15 @@ SubChannel1PhaseProblem::validParams()
 SubChannel1PhaseProblem::SubChannel1PhaseProblem(const InputParameters & params)
   : ExternalProblem(params),
     PostprocessorInterface(this),
+    _pin_htc_correlation(getParam<MooseEnum>("pin_htc_correlation")),
+    _duct_htc_correlation(getParam<MooseEnum>("duct_htc_correlation")),
+    _nusselt_args(
+        /*Re*/ 1.0,
+        /*Pr*/ 1.0,
+        /*i_pin*/ std::numeric_limits<unsigned int>::max(), // sentinel (duct) default
+        /*iz*/ 0,
+        /*i_ch*/ 0,
+        /*htc_corr*/ _pin_htc_correlation),
     _subchannel_mesh(SCM::getMesh<SubChannelMesh>(_mesh)),
     _n_blocks(getParam<unsigned int>("n_blocks")),
     _Wij(declareRestartableData<libMesh::DenseMatrix<Real>>("Wij")),
@@ -122,24 +141,24 @@ SubChannel1PhaseProblem::SubChannel1PhaseProblem(const InputParameters & params)
     _dtol(getParam<PetscReal>("dtol")),
     _maxit(getParam<PetscInt>("maxit")),
     _interpolation_scheme(getParam<MooseEnum>("interpolation_scheme")),
+    _gravity_direction(getParam<MooseEnum>("gravity")),
+    _dir_grav(computeGravityDir(_gravity_direction)),
     _implicit_bool(getParam<bool>("implicit")),
     _staggered_pressure_bool(getParam<bool>("staggered_pressure")),
     _segregated_bool(getParam<bool>("segregated")),
-    _monolithic_thermal_bool(getParam<bool>("monolithic_thermal")),
     _verbose_subchannel(getParam<bool>("verbose_subchannel")),
     _deformation(getParam<bool>("deformation")),
     _fp(nullptr),
     _Tpin_soln(nullptr),
-    _q_prime_duct_soln(nullptr),
+    _duct_heat_flux_soln(nullptr),
     _Tduct_soln(nullptr)
 {
-  // Require only one process
-  if (n_processors() > 1)
-    mooseError("Cannot use more than one MPI process.");
+  // NOTE: The four quantities below are 0 for processor_id != 0
   _n_cells = _subchannel_mesh.getNumOfAxialCells();
   _n_gaps = _subchannel_mesh.getNumOfGapsPerLayer();
   _n_pins = _subchannel_mesh.getNumOfPins();
   _n_channels = _subchannel_mesh.getNumOfChannels();
+  // NOTE: The four quantities above are 0 for processor_id != 0
   _z_grid = _subchannel_mesh.getZGrid();
   _block_size = _n_cells / _n_blocks;
   // Turbulent crossflow (stuff that live on the gaps)
@@ -155,14 +174,6 @@ SubChannel1PhaseProblem::SubChannel1PhaseProblem(const InputParameters & params)
   _Wij_residual_matrix.resize(_n_gaps, _block_size);
   _Wij_residual_matrix.zero();
   _converged = true;
-
-  _outer_channels = 0.0;
-  for (unsigned int i_ch = 0; i_ch < _n_channels; i_ch++)
-  {
-    auto subch_type = _subchannel_mesh.getSubchannelType(i_ch);
-    if (subch_type == EChannelType::EDGE || subch_type == EChannelType::CORNER)
-      _outer_channels += 1.0;
-  }
 
   // Mass conservation components
   LibmeshPetscCall(
@@ -214,7 +225,6 @@ SubChannel1PhaseProblem::SubChannel1PhaseProblem(const InputParameters & params)
   LibmeshPetscCall(
       createPetscMatrix(_cmc_sys_Wij_mat, _block_size * _n_gaps, _block_size * _n_gaps));
   LibmeshPetscCall(createPetscVector(_cmc_sys_Wij_rhs, _block_size * _n_gaps));
-  LibmeshPetscCall(createPetscVector(_cmc_Wij_channel_dummy, _block_size * _n_channels));
 
   // Energy conservation components
   LibmeshPetscCall(createPetscMatrix(
@@ -243,6 +253,7 @@ void
 SubChannel1PhaseProblem::initialSetup()
 {
   ExternalProblem::initialSetup();
+
   _fp = &getUserObject<SinglePhaseFluidProperties>(getParam<UserObjectName>("fp"));
   _mdot_soln = std::make_unique<SolutionHandle>(getVariable(0, SubChannelApp::MASS_FLOW_RATE));
   _SumWij_soln = std::make_unique<SolutionHandle>(getVariable(0, SubChannelApp::SUM_CROSSFLOW));
@@ -264,8 +275,8 @@ SubChannel1PhaseProblem::initialSetup()
       std::make_unique<SolutionHandle>(getVariable(0, SubChannelApp::DISPLACEMENT));
   if (_duct_mesh_exist)
   {
-    _q_prime_duct_soln =
-        std::make_unique<SolutionHandle>(getVariable(0, SubChannelApp::DUCT_LINEAR_HEAT_RATE));
+    _duct_heat_flux_soln =
+        std::make_unique<SolutionHandle>(getVariable(0, SubChannelApp::DUCT_HEAT_FLUX));
     _Tduct_soln = std::make_unique<SolutionHandle>(getVariable(0, SubChannelApp::DUCT_TEMPERATURE));
   }
 }
@@ -318,7 +329,6 @@ SubChannel1PhaseProblem::cleanUp()
   LibmeshPetscCall(VecDestroy(&_cmc_pressure_force_rhs));
   LibmeshPetscCall(MatDestroy(&_cmc_sys_Wij_mat));
   LibmeshPetscCall(VecDestroy(&_cmc_sys_Wij_rhs));
-  LibmeshPetscCall(VecDestroy(&_cmc_Wij_channel_dummy));
 
   // Energy conservation components
   LibmeshPetscCall(MatDestroy(&_hc_time_derivative_mat));
@@ -367,6 +377,125 @@ SubChannel1PhaseProblem::computeInterpolatedValue(PetscScalar topValue,
 {
   PetscScalar alpha = computeInterpolationCoefficients(Peclet);
   return alpha * botValue + (1.0 - alpha) * topValue;
+}
+
+Real
+SubChannel1PhaseProblem::computeNusseltNumber(const NusseltStruct & nusselt_args)
+{
+  // Correlation Specific Parameters
+  const auto htc_correlation = nusselt_args.htc_correlation;
+  const auto Re = nusselt_args.Re;
+  auto Pr = nusselt_args.Pr;
+
+  // Geometry Specific Parameters
+  const auto pitch = _subchannel_mesh.getPitch();
+  Real D;
+  // Use sentinel i_pin == max() to denote duct; otherwise it's a pin
+  const bool is_duct = (nusselt_args.i_pin == std::numeric_limits<unsigned int>::max());
+
+  if (!is_duct) // pin temperature path
+  {
+    const auto * pin_node = _subchannel_mesh.getPinNode(nusselt_args.i_pin, nusselt_args.iz);
+    if ((*_Dpin_soln)(pin_node) > 0)
+      D = (*_Dpin_soln)(pin_node);
+    else
+      mooseError(name(),
+                 "The diameter of the pin is equal or smaller than zero, "
+                 "please initialize the auxiliary variable Dpin.");
+  }
+  else // duct temperature path
+  {
+    D = _subchannel_mesh.getPinDiameter();
+  }
+
+  const auto poD = pitch / D;
+  auto subch_type = _subchannel_mesh.getSubchannelType(nusselt_args.i_ch);
+
+  // Lambda function for laminar flow Nusselt
+  auto laminar_Nu = [subch_type]() -> Real
+  {
+    if (subch_type == EChannelType::CENTER)
+      return 4.0;
+    else if (subch_type == EChannelType::EDGE)
+      return 3.7;
+    else // corner channel
+      return 3.3;
+  };
+
+  // Precompute ReL and ReT
+  const auto ReL = 300 * std::pow(10.0, 1.7 * (poD - 1.0));
+  const auto ReT = 1e4 * std::pow(10.0, 1.7 * (poD - 1.0));
+
+  if (Re <= ReL)
+    return laminar_Nu();
+
+  // Lambda function for turbulent Nusselt
+  auto blended_Nu = [&](Real NuT) -> Real
+  {
+    if (Re >= ReT)
+      return NuT;
+    else // transition regime
+    {
+      const auto w = (Re - ReL) / (ReT - ReL);
+      return w * NuT + (1.0 - w) * laminar_Nu();
+    }
+  };
+
+  switch (htc_correlation)
+  {
+    case 0: // dittus-boelter
+    {
+      if (Pr < 0.7 || Pr > 1.6e2)
+        mooseDoOnce(mooseWarning("Pr number out of range in the Dittus Bolter correlation for "
+                                 "pin or duct surface temperature calculation."));
+
+      const auto NuT = 0.023 * std::pow(Re, 0.8) * std::pow(Pr, 0.4);
+      return blended_Nu(NuT);
+    }
+
+    case 1: // gnielinski
+    {
+      if (Pr < 1e-5 || Pr > 2e3)
+        mooseDoOnce(mooseWarning("Pr number out of range in the Gnielinski correlation for "
+                                 "pin or duct surface temperature calculation."));
+
+      const auto iz = nusselt_args.iz;
+      const auto i_ch = nusselt_args.i_ch;
+
+      FrictionStruct friction_args;
+      friction_args.i_ch = i_ch;
+      friction_args.Re = Re;
+      const auto * node = _subchannel_mesh.getChannelNode(i_ch, iz);
+      friction_args.S = (*_S_flow_soln)(node);
+      friction_args.w_perim = (*_w_perim_soln)(node);
+      Real f_darcy = computeFrictionFactor(friction_args) / 8.0;
+
+      /// Pr -> Pr + 0.01. We start flattening out the Nusselt profile in the correlation,
+      /// which is what we should see in practice, i.e., for very low Pr numbers the heat exchange
+      /// will be dominated by conduction and Nu profile should be flat.
+      const auto NuT = f_darcy * (Re - 1e3) * (Pr + 0.01) /
+                       (1 + 12.7 * std::sqrt(f_darcy) * (std::pow(Pr + 0.01, 2. / 3.) - 1.));
+      return blended_Nu(NuT);
+    }
+
+    case 2: // kazimi-carelli
+    {
+      const auto Pe = Re * Pr;
+
+      if (Pe < 1.5 || Pe > 1e4)
+        mooseDoOnce(mooseWarning("Pr number out of range in the Kazimi Carelli correlation for "
+                                 "pin or duct surface temperture calculation."));
+
+      const auto NuT =
+          4.0 + 0.33 * std::pow(poD, 3.8) * std::pow((Pe / 1e2), 0.86) + 0.16 * std::pow(poD, 5);
+      return blended_Nu(NuT);
+    }
+
+    default:
+      mooseError(name(),
+                 ": Invalid heat transfer correlation, "
+                 "please use 'dittus-boelter', 'gnielinski', or 'kazimi-carelli'");
+  }
 }
 
 void
@@ -457,7 +586,7 @@ SubChannel1PhaseProblem::computeSumWij(int iblock)
       LibmeshPetscCall(VecDuplicate(_amc_sys_mdot_rhs, &loc_prod));
       LibmeshPetscCall(VecDuplicate(_Wij_vec, &loc_Wij));
       LibmeshPetscCall(populateVectorFromDense<libMesh::DenseMatrix<Real>>(
-          loc_Wij, _Wij, first_node, last_node + 1, _n_gaps));
+          loc_Wij, _Wij, first_node, last_node, _n_gaps));
       LibmeshPetscCall(MatMult(_mc_sumWij_mat, loc_Wij, loc_prod));
       LibmeshPetscCall(populateSolutionChan<SolutionHandle>(
           loc_prod, *_SumWij_soln, first_node, last_node, _n_channels));
@@ -554,8 +683,6 @@ SubChannel1PhaseProblem::computeMdot(int iblock)
     }
     LibmeshPetscCall(MatAssemblyBegin(_mc_axial_convection_mat, MAT_FINAL_ASSEMBLY));
     LibmeshPetscCall(MatAssemblyEnd(_mc_axial_convection_mat, MAT_FINAL_ASSEMBLY));
-    if (_verbose_subchannel)
-      _console << "Block: " << iblock << " - Mass conservation matrix assembled" << std::endl;
 
     if (_segregated_bool)
     {
@@ -563,7 +690,7 @@ SubChannel1PhaseProblem::computeMdot(int iblock)
       PC pc;
       Vec sol;
       LibmeshPetscCall(VecDuplicate(_mc_axial_convection_rhs, &sol));
-      LibmeshPetscCall(KSPCreate(PETSC_COMM_WORLD, &ksploc));
+      LibmeshPetscCall(KSPCreate(PETSC_COMM_SELF, &ksploc));
       LibmeshPetscCall(KSPSetOperators(ksploc, _mc_axial_convection_mat, _mc_axial_convection_mat));
       LibmeshPetscCall(KSPGetPC(ksploc, &pc));
       LibmeshPetscCall(PCSetType(pc, PCJACOBI));
@@ -654,7 +781,7 @@ SubChannel1PhaseProblem::computeDP(int iblock)
         auto friction_term = (fi * dz / Dh_i + ki) * 0.5 *
                              (*_mdot_soln)(node_out)*std::abs((*_mdot_soln)(node_out)) /
                              (S * (*_rho_soln)(node_out));
-        auto gravity_term = _g_grav * (*_rho_soln)(node_out)*dz * S;
+        auto gravity_term = _dir_grav * _g_grav * (*_rho_soln)(node_out)*dz * S;
         auto DP = std::pow(S, -1.0) * (time_term + mass_term1 + mass_term2 + crossflow_term +
                                        turbulent_term + friction_term + gravity_term); // Pa
         _DP_soln->set(node_out, DP);
@@ -687,7 +814,7 @@ SubChannel1PhaseProblem::computeDP(int iblock)
 
         // interpolation weight coefficient
         PetscScalar Pe = 0.5;
-        if (_interpolation_scheme == "exponential")
+        if (_interpolation_scheme == 3)
         {
           // Compute the Peclet number
           auto S_in = (*_S_flow_soln)(node_in);
@@ -979,7 +1106,7 @@ SubChannel1PhaseProblem::computeDP(int iblock)
             MatSetValues(_amc_friction_force_mat, 1, &row, 1, &col, &value, INSERT_VALUES));
 
         /// Gravity force
-        PetscScalar value_vec = -1.0 * _g_grav * rho_interp * dz * S_interp;
+        PetscScalar value_vec = _dir_grav * -1.0 * _g_grav * rho_interp * dz * S_interp;
         PetscInt row_vec = i_ch + _n_channels * iz_ind;
         LibmeshPetscCall(VecSetValues(_amc_gravity_rhs, 1, &row_vec, &value_vec, ADD_VALUES));
       }
@@ -1031,9 +1158,6 @@ SubChannel1PhaseProblem::computeDP(int iblock)
 #endif
     LibmeshPetscCall(MatAssemblyBegin(_amc_sys_mdot_mat, MAT_FINAL_ASSEMBLY));
     LibmeshPetscCall(MatAssemblyEnd(_amc_sys_mdot_mat, MAT_FINAL_ASSEMBLY));
-    if (_verbose_subchannel)
-      _console << "Block: " << iblock << " - Linear momentum conservation matrix assembled"
-               << std::endl;
     // RHS
     LibmeshPetscCall(VecAXPY(_amc_sys_mdot_rhs, 1.0, _amc_time_derivative_rhs));
     LibmeshPetscCall(VecAXPY(_amc_sys_mdot_rhs, 1.0, _amc_advective_derivative_rhs));
@@ -1193,7 +1317,7 @@ SubChannel1PhaseProblem::computeP(int iblock)
         PC pc;
         Vec sol;
         LibmeshPetscCall(VecDuplicate(_amc_pressure_force_rhs, &sol));
-        LibmeshPetscCall(KSPCreate(PETSC_COMM_WORLD, &ksploc));
+        LibmeshPetscCall(KSPCreate(PETSC_COMM_SELF, &ksploc));
         LibmeshPetscCall(KSPSetOperators(ksploc, _amc_pressure_force_mat, _amc_pressure_force_mat));
         LibmeshPetscCall(KSPGetPC(ksploc, &pc));
         LibmeshPetscCall(PCSetType(pc, PCJACOBI));
@@ -1288,7 +1412,7 @@ SubChannel1PhaseProblem::computeP(int iblock)
         PC pc;
         Vec sol;
         LibmeshPetscCall(VecDuplicate(_amc_pressure_force_rhs, &sol));
-        LibmeshPetscCall(KSPCreate(PETSC_COMM_WORLD, &ksploc));
+        LibmeshPetscCall(KSPCreate(PETSC_COMM_SELF, &ksploc));
         LibmeshPetscCall(KSPSetOperators(ksploc, _amc_pressure_force_mat, _amc_pressure_force_mat));
         LibmeshPetscCall(KSPGetPC(ksploc, &pc));
         LibmeshPetscCall(PCSetType(pc, PCJACOBI));
@@ -1313,34 +1437,6 @@ SubChannel1PhaseProblem::computeP(int iblock)
         LibmeshPetscCall(VecDestroy(&sol));
       }
     }
-  }
-}
-
-Real
-SubChannel1PhaseProblem::computeAddedHeatDuct(unsigned int i_ch, unsigned int iz)
-{
-  if (_duct_mesh_exist)
-  {
-    auto subch_type = _subchannel_mesh.getSubchannelType(i_ch);
-    if (subch_type == EChannelType::EDGE || subch_type == EChannelType::CORNER)
-    {
-      auto dz = _z_grid[iz] - _z_grid[iz - 1];
-      auto * node_in_chan = _subchannel_mesh.getChannelNode(i_ch, iz - 1);
-      auto * node_out_chan = _subchannel_mesh.getChannelNode(i_ch, iz);
-      auto * node_in_duct = _subchannel_mesh.getDuctNodeFromChannel(node_in_chan);
-      auto * node_out_duct = _subchannel_mesh.getDuctNodeFromChannel(node_out_chan);
-      auto heat_rate_in = (*_q_prime_duct_soln)(node_in_duct);
-      auto heat_rate_out = (*_q_prime_duct_soln)(node_out_duct);
-      return 0.5 * (heat_rate_in + heat_rate_out) * dz / _outer_channels;
-    }
-    else
-    {
-      return 0.0;
-    }
-  }
-  else
-  {
-    return 0;
   }
 }
 
@@ -1412,9 +1508,9 @@ SubChannel1PhaseProblem::computeWijResidual(int iblock)
   if (!_implicit_bool)
   {
     unsigned int last_node = (iblock + 1) * _block_size;
-    unsigned int first_node = iblock * _block_size;
+    unsigned int first_node = iblock * _block_size + 1;
     const Real & pitch = _subchannel_mesh.getPitch();
-    for (unsigned int iz = first_node + 1; iz < last_node + 1; iz++)
+    for (unsigned int iz = first_node; iz < last_node + 1; iz++)
     {
       auto dz = _z_grid[iz] - _z_grid[iz - 1];
       for (unsigned int i_gap = 0; i_gap < _n_gaps; i_gap++)
@@ -1473,12 +1569,12 @@ SubChannel1PhaseProblem::computeWijResidual(int iblock)
     LibmeshPetscCall(MatZeroEntries(_cmc_sys_Wij_mat));
     LibmeshPetscCall(VecZeroEntries(_cmc_sys_Wij_rhs));
     unsigned int last_node = (iblock + 1) * _block_size;
-    unsigned int first_node = iblock * _block_size;
+    unsigned int first_node = iblock * _block_size + 1;
     const Real & pitch = _subchannel_mesh.getPitch();
-    for (unsigned int iz = first_node + 1; iz < last_node + 1; iz++)
+    for (unsigned int iz = first_node; iz < last_node + 1; iz++)
     {
       auto dz = _z_grid[iz] - _z_grid[iz - 1];
-      auto iz_ind = iz - first_node - 1;
+      auto iz_ind = iz - first_node;
       for (unsigned int i_gap = 0; i_gap < _n_gaps; i_gap++)
       {
         auto chans = _subchannel_mesh.getGapChannels(i_gap);
@@ -1536,7 +1632,7 @@ SubChannel1PhaseProblem::computeWijResidual(int iblock)
                             (*_mdot_soln)(node_in_j) / S_j_in / rho_j_in;
         auto term_out = Sij * rho_star * (Lij / dz) * mass_term_out / 2.0;
         auto term_in = Sij * rho_star * (Lij / dz) * mass_term_in / 2.0;
-        if (iz == first_node + 1)
+        if (iz == first_node)
         {
           PetscInt row_ad = i_gap + _n_gaps * iz_ind;
           PetscScalar value_ad = term_in * alpha * _Wij(i_gap, iz - 1);
@@ -1688,11 +1784,6 @@ SubChannel1PhaseProblem::computeWijResidual(int iblock)
 #endif
     LibmeshPetscCall(MatAssemblyBegin(_cmc_sys_Wij_mat, MAT_FINAL_ASSEMBLY));
     LibmeshPetscCall(MatAssemblyEnd(_cmc_sys_Wij_mat, MAT_FINAL_ASSEMBLY));
-    if (_verbose_subchannel)
-      _console << "Block: " << iblock << " - Cross flow system matrix assembled" << std::endl;
-    if (_verbose_subchannel)
-      _console << "Block: " << iblock << " - Cross flow pressure force matrix assembled"
-               << std::endl;
     // RHS
     LibmeshPetscCall(VecAXPY(_cmc_sys_Wij_rhs, 1.0, _cmc_time_derivative_rhs));
     LibmeshPetscCall(VecAXPY(_cmc_sys_Wij_rhs, 1.0, _cmc_advective_derivative_rhs));
@@ -1705,12 +1796,8 @@ SubChannel1PhaseProblem::computeWijResidual(int iblock)
       LibmeshPetscCall(createPetscVector(sol_holder_P, _block_size * _n_gaps));
       Vec sol_holder_W;
       LibmeshPetscCall(createPetscVector(sol_holder_W, _block_size * _n_gaps));
-      Vec loc_holder_Wij;
-      LibmeshPetscCall(createPetscVector(loc_holder_Wij, _block_size * _n_gaps));
       LibmeshPetscCall(populateVectorFromHandle<SolutionHandle>(
           _prodp, *_P_soln, iblock * _block_size, (iblock + 1) * _block_size - 1, _n_channels));
-      LibmeshPetscCall(populateVectorFromDense<libMesh::DenseMatrix<Real>>(
-          loc_holder_Wij, _Wij, first_node, last_node, _n_gaps));
       LibmeshPetscCall(MatMult(_cmc_sys_Wij_mat, _Wij_vec, sol_holder_W));
       LibmeshPetscCall(VecAXPY(sol_holder_W, -1.0, _cmc_sys_Wij_rhs));
       LibmeshPetscCall(MatMult(_cmc_pressure_force_mat, _prodp, sol_holder_P));
@@ -1718,9 +1805,9 @@ SubChannel1PhaseProblem::computeWijResidual(int iblock)
       LibmeshPetscCall(VecAXPY(sol_holder_W, 1.0, sol_holder_P));
       PetscScalar * xx;
       LibmeshPetscCall(VecGetArray(sol_holder_W, &xx));
-      for (unsigned int iz = first_node + 1; iz < last_node + 1; iz++)
+      for (unsigned int iz = first_node; iz < last_node + 1; iz++)
       {
-        auto iz_ind = iz - first_node - 1;
+        auto iz_ind = iz - first_node;
         for (unsigned int i_gap = 0; i_gap < _n_gaps; i_gap++)
         {
           _Wij_residual_matrix(i_gap, iz - 1 - iblock * _block_size) = xx[iz_ind * _n_gaps + i_gap];
@@ -1728,7 +1815,6 @@ SubChannel1PhaseProblem::computeWijResidual(int iblock)
       }
       LibmeshPetscCall(VecDestroy(&sol_holder_P));
       LibmeshPetscCall(VecDestroy(&sol_holder_W));
-      LibmeshPetscCall(VecDestroy(&loc_holder_Wij));
     }
   }
 }
@@ -1759,7 +1845,7 @@ SubChannel1PhaseProblem::computeWijPrime(int iblock)
       auto avg_massflux =
           0.5 * (((*_mdot_soln)(node_in_i) + (*_mdot_soln)(node_in_j)) / (Si_in + Sj_in) +
                  ((*_mdot_soln)(node_out_i) + (*_mdot_soln)(node_out_j)) / (Si_out + Sj_out));
-      auto beta = computeBeta(i_gap, iz);
+      auto beta = computeBeta(i_gap, iz, /*enthalpy=*/false);
 
       if (!_implicit_bool)
       {
@@ -1833,11 +1919,11 @@ libMesh::DenseVector<Real>
 SubChannel1PhaseProblem::residualFunction(int iblock, libMesh::DenseVector<Real> solution)
 {
   unsigned int last_node = (iblock + 1) * _block_size;
-  unsigned int first_node = iblock * _block_size;
+  unsigned int first_node = iblock * _block_size + 1;
   libMesh::DenseVector<Real> Wij_residual_vector(_n_gaps * _block_size, 0.0);
   // Assign the solution to the cross-flow matrix
   int i = 0;
-  for (unsigned int iz = first_node + 1; iz < last_node + 1; iz++)
+  for (unsigned int iz = first_node; iz < last_node + 1; iz++)
   {
     for (unsigned int i_gap = 0; i_gap < _n_gaps; i_gap++)
     {
@@ -1880,15 +1966,11 @@ SubChannel1PhaseProblem::petscSnesSolver(int iblock,
   KSP ksp;
   PC pc;
   Vec x, r;
-  PetscMPIInt size;
   PetscScalar * xx;
 
   PetscFunctionBegin;
-  PetscCallMPI(MPI_Comm_size(PETSC_COMM_WORLD, &size));
-  if (size > 1)
-    SETERRQ(PETSC_COMM_WORLD, PETSC_ERR_SUP, "Example is only for sequential runs");
-  LibmeshPetscCall(SNESCreate(PETSC_COMM_WORLD, &snes));
-  LibmeshPetscCall(VecCreate(PETSC_COMM_WORLD, &x));
+  LibmeshPetscCall(SNESCreate(PETSC_COMM_SELF, &snes));
+  LibmeshPetscCall(VecCreate(PETSC_COMM_SELF, &x));
   LibmeshPetscCall(VecSetSizes(x, PETSC_DECIDE, _block_size * _n_gaps));
   LibmeshPetscCall(VecSetFromOptions(x));
   LibmeshPetscCall(VecDuplicate(x, &r));
@@ -1927,219 +2009,226 @@ SubChannel1PhaseProblem::petscSnesSolver(int iblock,
 }
 
 PetscErrorCode
+SubChannel1PhaseProblem::solveAndPopulateEnthalpy(
+    Mat A, Vec rhs, unsigned int first_node, unsigned int last_node, const char * ksp_prefix)
+{
+  PetscFunctionBegin;
+
+  // Create solution vector with rhs layout
+  Vec x = nullptr;
+  LibmeshPetscCall(VecDuplicate(rhs, &x));
+
+  // KSP setup
+  KSP ksp = nullptr;
+  PC pc = nullptr;
+  LibmeshPetscCall(KSPCreate(PETSC_COMM_SELF, &ksp));
+  LibmeshPetscCall(KSPSetOperators(ksp, A, A));
+  LibmeshPetscCall(KSPGetPC(ksp, &pc));
+  LibmeshPetscCall(PCSetType(pc, PCJACOBI));
+  LibmeshPetscCall(KSPSetTolerances(ksp, _rtol, _atol, _dtol, _maxit));
+  if (ksp_prefix && *ksp_prefix)
+    LibmeshPetscCall(KSPSetOptionsPrefix(ksp, ksp_prefix));
+  LibmeshPetscCall(KSPSetFromOptions(ksp));
+
+  // Solve
+  LibmeshPetscCall(KSPSolve(ksp, rhs, x));
+
+  // Scatter to _h_soln with sanity checks
+  PetscScalar * xx = nullptr;
+  LibmeshPetscCall(VecGetArray(x, &xx));
+  for (unsigned int iz = first_node; iz <= last_node; ++iz)
+  {
+    const unsigned int iz_ind = iz - first_node;
+    for (unsigned int i_ch = 0; i_ch < _n_channels; ++i_ch)
+    {
+      auto * node_out = _subchannel_mesh.getChannelNode(i_ch, iz);
+      const PetscScalar h_out = xx[iz_ind * _n_channels + i_ch];
+      if (h_out < 0.0)
+        mooseError(
+            name(), " : Calculation of negative Enthalpy h_out = ", h_out, " Axial Level = ", iz);
+      _h_soln->set(node_out, h_out);
+    }
+  }
+  LibmeshPetscCall(VecRestoreArray(x, &xx));
+
+  // Cleanup
+  LibmeshPetscCall(KSPDestroy(&ksp));
+  LibmeshPetscCall(VecDestroy(&x));
+
+  PetscFunctionReturn(LIBMESH_PETSC_SUCCESS);
+}
+
+Real
+SubChannel1PhaseProblem::computeAddedHeatDuct(unsigned int i_ch, unsigned int iz)
+{
+  mooseAssert(iz > 0, "Trapezoidal rule requires starting at index 1 at least");
+  if (_duct_mesh_exist)
+  {
+    auto subch_type = _subchannel_mesh.getSubchannelType(i_ch);
+    if (subch_type == EChannelType::EDGE || subch_type == EChannelType::CORNER)
+    {
+      auto dz = _z_grid[iz] - _z_grid[iz - 1];
+      auto * node_in_chan = _subchannel_mesh.getChannelNode(i_ch, iz - 1);
+      auto * node_out_chan = _subchannel_mesh.getChannelNode(i_ch, iz);
+      auto * node_in_duct = _subchannel_mesh.getDuctNodeFromChannel(node_in_chan);
+      auto * node_out_duct = _subchannel_mesh.getDuctNodeFromChannel(node_out_chan);
+      auto heat_rate_in = (*_duct_heat_flux_soln)(node_in_duct);
+      auto heat_rate_out = (*_duct_heat_flux_soln)(node_out_duct);
+      auto width = getSubChannelPeripheralDuctWidth(i_ch);
+      return 0.5 * (heat_rate_in + heat_rate_out) * dz * width;
+    }
+    else
+    {
+      return 0.0;
+    }
+  }
+  else
+  {
+    return 0.0;
+  }
+}
+
+PetscErrorCode
 SubChannel1PhaseProblem::implicitPetscSolve(int iblock)
 {
-  bool lag_block_thermal_solve = true;
-  Vec b_nest, x_nest; /* approx solution, RHS, exact solution */
-  Mat A_nest;         /* linear system matrix */
-  KSP ksp;            /* linear solver context */
-  PC pc;              /* preconditioner context */
-
   PetscFunctionBegin;
-  PetscInt Q = _monolithic_thermal_bool ? 4 : 3;
-  std::vector<Mat> mat_array(Q * Q);
-  std::vector<Vec> vec_array(Q);
-
-  /// Initializing flags
-  bool _axial_mass_flow_tight_coupling = true;
-  bool _pressure_axial_momentum_tight_coupling = true;
-  bool _pressure_cross_momentum_tight_coupling = true;
-  unsigned int first_node = iblock * _block_size + 1;
-  unsigned int last_node = (iblock + 1) * _block_size;
-
-  /// Assembling matrices
-  // Computing sum of crossflows with previous iteration
-  computeSumWij(iblock);
-  // Assembling axial flux matrix
-  computeMdot(iblock);
-  // Computing turbulent crossflow with previous step axial mass flows
-  computeWijPrime(iblock);
-  // Assembling for Pressure Drop matrix
-  computeDP(iblock);
-  // Assembling pressure matrix
-  computeP(iblock);
-  // Assembling cross fluxes matrix
-  computeWijResidual(iblock);
-  // If monolithic solve - Assembling enthalpy matrix
-  if (_monolithic_thermal_bool)
-    computeh(iblock);
-
-  if (_verbose_subchannel)
+  // ---------- helper functions -----------------------------
+  auto V = [&](const std::string & s)
   {
-    _console << "Starting nested system." << std::endl;
-    _console << "Number of simultaneous variables: " << Q << std::endl;
-  }
-  // Mass conservation
-  PetscInt field_num = 0;
-  LibmeshPetscCall(
-      MatDuplicate(_mc_axial_convection_mat, MAT_COPY_VALUES, &mat_array[Q * field_num + 0]));
-  LibmeshPetscCall(MatAssemblyBegin(mat_array[Q * field_num + 0], MAT_FINAL_ASSEMBLY));
-  LibmeshPetscCall(MatAssemblyEnd(mat_array[Q * field_num + 0], MAT_FINAL_ASSEMBLY));
-  mat_array[Q * field_num + 1] = NULL;
-  if (_axial_mass_flow_tight_coupling)
-  {
-    LibmeshPetscCall(MatDuplicate(_mc_sumWij_mat, MAT_COPY_VALUES, &mat_array[Q * field_num + 2]));
-    LibmeshPetscCall(MatAssemblyBegin(mat_array[Q * field_num + 2], MAT_FINAL_ASSEMBLY));
-    LibmeshPetscCall(MatAssemblyEnd(mat_array[Q * field_num + 2], MAT_FINAL_ASSEMBLY));
-  }
-  else
-  {
-    mat_array[Q * field_num + 2] = NULL;
-  }
-  if (_monolithic_thermal_bool)
-  {
-    mat_array[Q * field_num + 3] = NULL;
-  }
-  LibmeshPetscCall(VecDuplicate(_mc_axial_convection_rhs, &vec_array[field_num]));
-  LibmeshPetscCall(VecCopy(_mc_axial_convection_rhs, vec_array[field_num]));
-  if (!_axial_mass_flow_tight_coupling)
-  {
-    Vec sumWij_loc;
-    LibmeshPetscCall(VecDuplicate(_mc_axial_convection_rhs, &sumWij_loc));
-    LibmeshPetscCall(VecSet(sumWij_loc, 0.0));
-    for (unsigned int iz = first_node; iz < last_node + 1; iz++)
-    {
-      auto iz_ind = iz - first_node;
-      for (unsigned int i_ch = 0; i_ch < _n_channels; i_ch++)
-      {
-        auto * node_out = _subchannel_mesh.getChannelNode(i_ch, iz);
-
-        PetscScalar value_vec_2 = -1.0 * (*_SumWij_soln)(node_out);
-        PetscInt row_vec_2 = i_ch + _n_channels * iz_ind;
-        LibmeshPetscCall(VecSetValues(sumWij_loc, 1, &row_vec_2, &value_vec_2, ADD_VALUES));
-      }
-    }
-    LibmeshPetscCall(VecAXPY(vec_array[field_num], 1.0, sumWij_loc));
-    LibmeshPetscCall(VecDestroy(&sumWij_loc));
-  }
-
-  if (_verbose_subchannel)
-    _console << "Mass ok." << std::endl;
-  // Axial momentum conservation
-  field_num = 1;
-  if (_pressure_axial_momentum_tight_coupling)
-  {
-    LibmeshPetscCall(
-        MatDuplicate(_amc_sys_mdot_mat, MAT_COPY_VALUES, &mat_array[Q * field_num + 0]));
-    LibmeshPetscCall(MatAssemblyBegin(mat_array[Q * field_num + 0], MAT_FINAL_ASSEMBLY));
-    LibmeshPetscCall(MatAssemblyEnd(mat_array[Q * field_num + 0], MAT_FINAL_ASSEMBLY));
-  }
-  else
-  {
-    mat_array[Q * field_num + 0] = NULL;
-  }
-  LibmeshPetscCall(
-      MatDuplicate(_amc_pressure_force_mat, MAT_COPY_VALUES, &mat_array[Q * field_num + 1]));
-  LibmeshPetscCall(MatAssemblyBegin(mat_array[Q * field_num + 1], MAT_FINAL_ASSEMBLY));
-  LibmeshPetscCall(MatAssemblyEnd(mat_array[Q * field_num + 1], MAT_FINAL_ASSEMBLY));
-  mat_array[Q * field_num + 2] = NULL;
-  if (_monolithic_thermal_bool)
-  {
-    mat_array[Q * field_num + 3] = NULL;
-  }
-  LibmeshPetscCall(VecDuplicate(_amc_pressure_force_rhs, &vec_array[field_num]));
-  LibmeshPetscCall(VecCopy(_amc_pressure_force_rhs, vec_array[field_num]));
-  if (_pressure_axial_momentum_tight_coupling)
-  {
-    LibmeshPetscCall(VecAXPY(vec_array[field_num], 1.0, _amc_sys_mdot_rhs));
-  }
-  else
-  {
-    unsigned int last_node = (iblock + 1) * _block_size;
-    unsigned int first_node = iblock * _block_size + 1;
-    LibmeshPetscCall(populateVectorFromHandle<SolutionHandle>(
-        _prod, *_mdot_soln, first_node, last_node, _n_channels));
-    Vec ls;
-    LibmeshPetscCall(VecDuplicate(_amc_sys_mdot_rhs, &ls));
-    LibmeshPetscCall(MatMult(_amc_sys_mdot_mat, _prod, ls));
-    LibmeshPetscCall(VecAXPY(ls, -1.0, _amc_sys_mdot_rhs));
-    LibmeshPetscCall(VecAXPY(vec_array[field_num], -1.0, ls));
-    LibmeshPetscCall(VecDestroy(&ls));
-  }
-
-  if (_verbose_subchannel)
-    _console << "Lin mom OK." << std::endl;
-
-  // Cross momentum conservation
-  field_num = 2;
-  mat_array[Q * field_num + 0] = NULL;
-  if (_pressure_cross_momentum_tight_coupling)
-  {
-    LibmeshPetscCall(
-        MatDuplicate(_cmc_pressure_force_mat, MAT_COPY_VALUES, &mat_array[Q * field_num + 1]));
-    LibmeshPetscCall(MatAssemblyBegin(mat_array[Q * field_num + 1], MAT_FINAL_ASSEMBLY));
-    LibmeshPetscCall(MatAssemblyEnd(mat_array[Q * field_num + 1], MAT_FINAL_ASSEMBLY));
-  }
-  else
-  {
-    mat_array[Q * field_num + 1] = NULL;
-  }
-
-  LibmeshPetscCall(MatDuplicate(_cmc_sys_Wij_mat, MAT_COPY_VALUES, &mat_array[Q * field_num + 2]));
-  LibmeshPetscCall(MatAssemblyBegin(mat_array[Q * field_num + 2], MAT_FINAL_ASSEMBLY));
-  LibmeshPetscCall(MatAssemblyEnd(mat_array[Q * field_num + 2], MAT_FINAL_ASSEMBLY));
-  if (_monolithic_thermal_bool)
-  {
-    mat_array[Q * field_num + 3] = NULL;
-  }
-
-  LibmeshPetscCall(VecDuplicate(_cmc_sys_Wij_rhs, &vec_array[field_num]));
-  LibmeshPetscCall(VecCopy(_cmc_sys_Wij_rhs, vec_array[field_num]));
-  if (_pressure_cross_momentum_tight_coupling)
-  {
-    LibmeshPetscCall(VecAXPY(vec_array[field_num], 1.0, _cmc_pressure_force_rhs));
-  }
-  else
-  {
-    Vec sol_holder_P;
-    LibmeshPetscCall(createPetscVector(sol_holder_P, _block_size * _n_gaps));
-    LibmeshPetscCall(populateVectorFromHandle<SolutionHandle>(
-        _prodp, *_P_soln, iblock * _block_size, (iblock + 1) * _block_size - 1, _n_channels));
-
-    LibmeshPetscCall(MatMult(_cmc_pressure_force_mat, _prodp, sol_holder_P));
-    LibmeshPetscCall(VecAXPY(sol_holder_P, -1.0, _cmc_pressure_force_rhs));
-    LibmeshPetscCall(VecScale(sol_holder_P, 1.0));
-    LibmeshPetscCall(VecAXPY(vec_array[field_num], 1.0, sol_holder_P));
-    LibmeshPetscCall(VecDestroy(&sol_holder_P));
-  }
-
-  if (_verbose_subchannel)
-    _console << "Cross mom ok." << std::endl;
-
-  // Energy conservation
-  if (_monolithic_thermal_bool)
-  {
-    field_num = 3;
-    mat_array[Q * field_num + 0] = NULL;
-    mat_array[Q * field_num + 1] = NULL;
-    mat_array[Q * field_num + 2] = NULL;
-    LibmeshPetscCall(MatDuplicate(_hc_sys_h_mat, MAT_COPY_VALUES, &mat_array[Q * field_num + 3]));
-    if (lag_block_thermal_solve)
-    {
-      LibmeshPetscCall(MatZeroEntries(mat_array[Q * field_num + 3]));
-      LibmeshPetscCall(MatShift(mat_array[Q * field_num + 3], 1.0));
-    }
-    LibmeshPetscCall(MatAssemblyBegin(mat_array[Q * field_num + 3], MAT_FINAL_ASSEMBLY));
-    LibmeshPetscCall(MatAssemblyEnd(mat_array[Q * field_num + 3], MAT_FINAL_ASSEMBLY));
-    LibmeshPetscCall(VecDuplicate(_hc_sys_h_rhs, &vec_array[field_num]));
-    LibmeshPetscCall(VecCopy(_hc_sys_h_rhs, vec_array[field_num]));
-    if (lag_block_thermal_solve)
-    {
-      LibmeshPetscCall(VecZeroEntries(vec_array[field_num]));
-      LibmeshPetscCall(VecShift(vec_array[field_num], 1.0));
-    }
-
     if (_verbose_subchannel)
-      _console << "Energy ok." << std::endl;
-  }
+      _console << s << std::endl;
+  };
 
-  // Relaxing linear system
-  // Weaker relaxation
+  auto DupMatAssembled = [&](Mat src, Mat * dst)
+  {
+    if (src)
+    {
+      LibmeshPetscCall(MatDuplicate(src, MAT_COPY_VALUES, dst));
+      LibmeshPetscCall(MatAssemblyBegin(*dst, MAT_FINAL_ASSEMBLY));
+      LibmeshPetscCall(MatAssemblyEnd(*dst, MAT_FINAL_ASSEMBLY));
+    }
+    else
+      *dst = NULL;
+  };
+
+  auto DupVecCopy = [&](Vec src, Vec * dst)
+  {
+    LibmeshPetscCall(VecDuplicate(src, dst));
+    LibmeshPetscCall(VecCopy(src, *dst));
+  };
+
+  const PetscInt Q = 3; // [mass conservation, axial momentum, cross momentum]
+
+  // small indexer
+  auto Idx = [&](PetscInt r, PetscInt c) { return Q * r + c; };
+
+  // arrays that MUST be declared before lambdas use them
+  std::vector<Mat> mat_array(Q * Q, NULL);
+  std::vector<Vec> vec_array(Q, NULL);
+
+  // generic assembler for one governing equation row in the nested matrix
+  auto AssembleEquation = [&](PetscInt f,
+                              Mat A0,
+                              Mat A1,
+                              Mat A2,             // three blocks in row f (can be nullptr)
+                              Vec rhs,            // base RHS for equation f
+                              Vec rhs_add,        // optional extra RHS to add (can be nullptr)
+                              const char * label) // e.g. "Mass", "Lin mom", "Cross mom"
+  {
+    DupMatAssembled(A0, &mat_array[Idx(f, 0)]);
+    DupMatAssembled(A1, &mat_array[Idx(f, 1)]);
+    DupMatAssembled(A2, &mat_array[Idx(f, 2)]);
+    DupVecCopy(rhs, &vec_array[f]);
+    if (rhs_add)
+      LibmeshPetscCall(VecAXPY(vec_array[f], 1.0, rhs_add));
+    V(std::string(label) + " system assembled");
+  };
+
+  // -----------------------------------------------------------------------------
+  // Helper lambda that applies per-equation under-relaxation by modifying BOTH the
+  // matrix block and the RHS for that equation.
+  //
+  // Specifically, with A_ff for the equation and D = diag(A_ff):
+  //   1) Matrix diagonal scaling: D <- D / alpha, then A_ff's diagonal is replaced
+  //      with D. For alpha < 1 this increases diagonal dominance (more damping).
+  //   2) RHS blending with the previous solution x_old:
+  //        rhs_f <- rhs_f + (1 - alpha) * (D / alpha) * x_old
+  //      where x_old is provided by the caller via `populate(work)`.
+  //
+  // Net effect: the solved x satisfies
+  //        A_ff x = rhs_f_original + ((1 - alpha)/alpha) * D * (x_old - x),
+  // which damps updates toward x_old without changing the converged solution.
+  // -----------------------------------------------------------------------------
+  auto RelaxEquation =
+      [&](Mat A_ff, Vec rhs_f, Vec like_vec, Vec work, PetscScalar alpha, auto && populate)
+  {
+    Vec d = nullptr;
+    LibmeshPetscCall(VecDuplicate(like_vec, &d));
+
+    // 1) A_ff: diag <- diag / alpha
+    LibmeshPetscCall(MatGetDiagonal(A_ff, d));
+    LibmeshPetscCall(VecScale(d, 1.0 / alpha));
+    LibmeshPetscCall(MatDiagonalSet(A_ff, d, INSERT_VALUES));
+
+    // 2) work <- x_old (caller-provided populator)
+    LibmeshPetscCall(populate(work));
+
+    // 3) rhs_f += (1 - alpha) * (diag .* work)
+    LibmeshPetscCall(VecScale(d, (1.0 - alpha)));
+    LibmeshPetscCall(VecPointwiseMult(work, work, d));
+    LibmeshPetscCall(VecAXPY(rhs_f, 1.0, work));
+
+    LibmeshPetscCall(VecDestroy(&d));
+  };
+
+  // indices
+  const unsigned int first_node = iblock * _block_size + 1;
+  const unsigned int last_node = (iblock + 1) * _block_size;
+
+  // ---------- assemble per-block operators -----------------
+  computeSumWij(iblock);
+  computeMdot(iblock);
+  computeWijPrime(iblock);
+  computeDP(iblock);
+  computeP(iblock);
+  computeWijResidual(iblock);
+
+  V("Starting nested system.");
+
+  // Populate nested matrix with the individual physics
+  // equation 0: Mass conservation
+  AssembleEquation(/*f=*/0,
+                   /*A0=*/_mc_axial_convection_mat,
+                   /*A1=*/nullptr,
+                   /*A2=*/_mc_sumWij_mat,
+                   /*rhs=*/_mc_axial_convection_rhs,
+                   /*rhs_add=*/nullptr,
+                   /*label=*/"Mass");
+
+  // equation 1: Axial momentum conservation
+  AssembleEquation(/*f=*/1,
+                   /*A0=*/_amc_sys_mdot_mat,
+                   /*A1=*/_amc_pressure_force_mat,
+                   /*A2=*/nullptr,
+                   /*rhs=*/_amc_pressure_force_rhs,
+                   /*rhs_add=*/_amc_sys_mdot_rhs,
+                   /*label=*/"Lin mom");
+
+  // equation 2: Cross momentum conservation
+  AssembleEquation(/*f=*/2,
+                   /*A0=*/nullptr,
+                   /*A1=*/_cmc_pressure_force_mat,
+                   /*A2=*/_cmc_sys_Wij_mat,
+                   /*rhs=*/_cmc_sys_Wij_rhs,
+                   /*rhs_add=*/_cmc_pressure_force_rhs,
+                   /*label=*/"Cross mom");
+
+  // ========================== Relaxation  ====================
   if (true)
   {
-    // Estimating cross-flow resistances to achieve realizable solves
     LibmeshPetscCall(populateVectorFromHandle<SolutionHandle>(
         _prod, *_mdot_soln, first_node, last_node, _n_channels));
+
     Vec mdot_estimate;
     LibmeshPetscCall(createPetscVector(mdot_estimate, _block_size * _n_channels));
     Vec pmat_diag;
@@ -2151,10 +2240,6 @@ SubChannel1PhaseProblem::implicitPetscSolve(int iblock)
     LibmeshPetscCall(VecSet(unity_vec, 1.0));
     Vec sol_holder_P;
     LibmeshPetscCall(createPetscVector(sol_holder_P, _block_size * _n_gaps));
-    Vec diag_Wij_loc;
-    LibmeshPetscCall(createPetscVector(diag_Wij_loc, _block_size * _n_gaps));
-    Vec Wij_estimate;
-    LibmeshPetscCall(createPetscVector(Wij_estimate, _block_size * _n_gaps));
     Vec unity_vec_Wij;
     LibmeshPetscCall(createPetscVector(unity_vec_Wij, _block_size * _n_gaps));
     LibmeshPetscCall(VecSet(unity_vec_Wij, 1.0));
@@ -2162,21 +2247,27 @@ SubChannel1PhaseProblem::implicitPetscSolve(int iblock)
     LibmeshPetscCall(createPetscVector(_Wij_loc_vec, _block_size * _n_gaps));
     Vec _Wij_old_loc_vec;
     LibmeshPetscCall(createPetscVector(_Wij_old_loc_vec, _block_size * _n_gaps));
-    LibmeshPetscCall(MatMult(mat_array[Q], _prod, mdot_estimate));
+
+    // ---- scale estimates ----
+    // mdot_estimate = A(1,0) * mdot
+    LibmeshPetscCall(MatMult(mat_array[Q /* (1,0) */], _prod, mdot_estimate));
+
+    // p_estimate = mdot_est / (diag(A(1,1)) + eps)
     LibmeshPetscCall(MatGetDiagonal(mat_array[Q + 1], pmat_diag));
     LibmeshPetscCall(VecAXPY(pmat_diag, 1e-10, unity_vec));
     LibmeshPetscCall(VecPointwiseDivide(p_estimate, mdot_estimate, pmat_diag));
+
+    // sol_holder_P = A(2,1) * p_estimate - rhs_cmc_pressure
     LibmeshPetscCall(MatMult(mat_array[2 * Q + 1], p_estimate, sol_holder_P));
     LibmeshPetscCall(VecAXPY(sol_holder_P, -1.0, _cmc_pressure_force_rhs));
-    LibmeshPetscCall(MatGetDiagonal(mat_array[2 * Q + 2], diag_Wij_loc));
-    LibmeshPetscCall(VecAXPY(diag_Wij_loc, 1e-10, unity_vec_Wij));
-    LibmeshPetscCall(VecPointwiseDivide(Wij_estimate, sol_holder_P, diag_Wij_loc));
+
+    // sumWij_loc from sol_holder_P (accumulate)
     Vec sumWij_loc;
     LibmeshPetscCall(createPetscVector(sumWij_loc, _block_size * _n_channels));
-    for (unsigned int iz = first_node; iz < last_node + 1; iz++)
+    for (unsigned int iz = first_node; iz <= last_node; ++iz)
     {
-      auto iz_ind = iz - first_node;
-      for (unsigned int i_ch = 0; i_ch < _n_channels; i_ch++)
+      const auto iz_ind = iz - first_node;
+      for (unsigned int i_ch = 0; i_ch < _n_channels; ++i_ch)
       {
         PetscScalar sumWij = 0.0;
         unsigned int counter = 0;
@@ -2194,18 +2285,19 @@ SubChannel1PhaseProblem::implicitPetscSolve(int iblock)
         LibmeshPetscCall(VecSetValues(sumWij_loc, 1, &row_vec, &sumWij, INSERT_VALUES));
       }
     }
+    LibmeshPetscCall(VecAssemblyBegin(sumWij_loc));
+    LibmeshPetscCall(VecAssemblyEnd(sumWij_loc));
 
+    // ---- robust scale measurements ----
     PetscScalar min_mdot;
     LibmeshPetscCall(VecAbs(_prod));
     LibmeshPetscCall(VecMin(_prod, NULL, &min_mdot));
-    if (_verbose_subchannel)
-      _console << "Minimum estimated mdot: " << min_mdot << std::endl;
+    V("Minimum estimated mdot: " + std::to_string(min_mdot));
 
     LibmeshPetscCall(VecAbs(sumWij_loc));
     LibmeshPetscCall(VecMax(sumWij_loc, NULL, &_max_sumWij));
     _max_sumWij = std::max(1e-10, _max_sumWij);
-    if (_verbose_subchannel)
-      _console << "Maximum estimated Wij: " << _max_sumWij << std::endl;
+    V("Maximum estimated Wij: " + std::to_string(_max_sumWij));
 
     LibmeshPetscCall(populateVectorFromDense<libMesh::DenseMatrix<Real>>(
         _Wij_loc_vec, _Wij, first_node, last_node, _n_gaps));
@@ -2214,6 +2306,7 @@ SubChannel1PhaseProblem::implicitPetscSolve(int iblock)
         _Wij_old_loc_vec, _Wij_old, first_node, last_node, _n_gaps));
     LibmeshPetscCall(VecAbs(_Wij_old_loc_vec));
     LibmeshPetscCall(VecAXPY(_Wij_loc_vec, -1.0, _Wij_old_loc_vec));
+
     PetscScalar relax_factor;
     LibmeshPetscCall(VecAbs(_Wij_loc_vec));
 #if !PETSC_VERSION_LESS_THAN(3, 16, 0)
@@ -2223,305 +2316,192 @@ SubChannel1PhaseProblem::implicitPetscSolve(int iblock)
     relax_factor /= _block_size * _n_gaps;
 #endif
     relax_factor = relax_factor / _max_sumWij + 0.5;
-    if (_verbose_subchannel)
-      _console << "Relax base value: " << relax_factor << std::endl;
+    V("Relax base value: " + std::to_string(relax_factor));
 
-    PetscScalar resistance_relaxation = 0.9;
+    // ---- crossflow resistance inflation ----
+    const PetscScalar resistance_relaxation = 0.9;
     _added_K = _max_sumWij / min_mdot;
-    if (_verbose_subchannel)
-      _console << "New cross resistance: " << _added_K << std::endl;
+    V("New cross resistance: " + std::to_string(_added_K));
     _added_K = (_added_K * resistance_relaxation + (1.0 - resistance_relaxation) * _added_K_old) *
                relax_factor;
-    if (_verbose_subchannel)
-      _console << "Relaxed cross resistance: " << _added_K << std::endl;
+    V("Relaxed cross resistance: " + std::to_string(_added_K));
+
+    // Snap-up lower-bounding
     if (_added_K < 10 && _added_K >= 1.0)
-      _added_K = 1.0; //(1.0 - resistance_relaxation);
+      _added_K = 1.0;
     if (_added_K < 1.0 && _added_K >= 0.1)
       _added_K = 0.5;
     if (_added_K < 0.1 && _added_K >= 0.01)
       _added_K = 1. / 3.;
     if (_added_K < 1e-2 && _added_K >= 1e-3)
       _added_K = 0.1;
-    if (_added_K < 1e-3)
-      _added_K = 1.0 * _added_K;
-    if (_verbose_subchannel)
-      _console << "Actual added cross resistance: " << _added_K << std::endl;
+    V("Actual added cross resistance: " + std::to_string(_added_K));
     LibmeshPetscCall(VecScale(unity_vec_Wij, _added_K));
     _added_K_old = _added_K;
 
-    // Adding cross resistances
     LibmeshPetscCall(MatDiagonalSet(mat_array[2 * Q + 2], unity_vec_Wij, ADD_VALUES));
+
+    // ---- cleanup temp vectors used above ----
     LibmeshPetscCall(VecDestroy(&mdot_estimate));
     LibmeshPetscCall(VecDestroy(&pmat_diag));
     LibmeshPetscCall(VecDestroy(&unity_vec));
     LibmeshPetscCall(VecDestroy(&p_estimate));
     LibmeshPetscCall(VecDestroy(&sol_holder_P));
-    LibmeshPetscCall(VecDestroy(&diag_Wij_loc));
     LibmeshPetscCall(VecDestroy(&unity_vec_Wij));
-    LibmeshPetscCall(VecDestroy(&Wij_estimate));
     LibmeshPetscCall(VecDestroy(&sumWij_loc));
     LibmeshPetscCall(VecDestroy(&_Wij_loc_vec));
     LibmeshPetscCall(VecDestroy(&_Wij_old_loc_vec));
 
-    // Auto-computing relaxation factors
-    PetscScalar relaxation_factor_mdot, relaxation_factor_P, relaxation_factor_Wij;
-    relaxation_factor_mdot = 1.0;
-    relaxation_factor_P = 1.0; // std::exp(-5.0);
-    relaxation_factor_Wij = 0.1;
+    // ---- per-equation under-relaxation ----
+    const PetscScalar relaxation_factor_mdot = 1.0;
+    const PetscScalar relaxation_factor_P = 1.0;
+    const PetscScalar relaxation_factor_Wij = 0.1;
 
-    if (_verbose_subchannel)
-    {
-      _console << "Relax mdot: " << relaxation_factor_mdot << std::endl;
-      _console << "Relax P: " << relaxation_factor_P << std::endl;
-      _console << "Relax Wij: " << relaxation_factor_Wij << std::endl;
-    }
+    V("Relax mdot: " + std::to_string(relaxation_factor_mdot));
+    V("Relax P: " + std::to_string(relaxation_factor_P));
+    V("Relax Wij: " + std::to_string(relaxation_factor_Wij));
 
-    PetscInt field_num = 0;
-    Vec diag_mdot;
-    LibmeshPetscCall(VecDuplicate(vec_array[field_num], &diag_mdot));
-    LibmeshPetscCall(MatGetDiagonal(mat_array[Q * field_num + field_num], diag_mdot));
-    LibmeshPetscCall(VecScale(diag_mdot, 1.0 / relaxation_factor_mdot));
-    LibmeshPetscCall(
-        MatDiagonalSet(mat_array[Q * field_num + field_num], diag_mdot, INSERT_VALUES));
-    LibmeshPetscCall(populateVectorFromHandle<SolutionHandle>(
-        _prod, *_mdot_soln, first_node, last_node, _n_channels));
-    LibmeshPetscCall(VecScale(diag_mdot, (1.0 - relaxation_factor_mdot)));
-    LibmeshPetscCall(VecPointwiseMult(_prod, _prod, diag_mdot));
-    LibmeshPetscCall(VecAXPY(vec_array[field_num], 1.0, _prod));
-    LibmeshPetscCall(VecDestroy(&diag_mdot));
+    // mdot
+    RelaxEquation(mat_array[Idx(0, 0)],
+                  vec_array[0],
+                  vec_array[0],
+                  _prod,
+                  relaxation_factor_mdot,
+                  [&](Vec dst)
+                  {
+                    return populateVectorFromHandle<SolutionHandle>(
+                        dst, *_mdot_soln, first_node, last_node, _n_channels);
+                  });
+    V("mdot relaxed");
 
-    if (_verbose_subchannel)
-      _console << "mdot relaxed" << std::endl;
+    // pressure
+    RelaxEquation(mat_array[Idx(1, 1)],
+                  vec_array[1],
+                  vec_array[1],
+                  _prod,
+                  relaxation_factor_P,
+                  [&](Vec dst)
+                  {
+                    return populateVectorFromHandle<SolutionHandle>(
+                        dst, *_P_soln, first_node, last_node, _n_channels);
+                  });
+    V("P relaxed");
 
-    field_num = 1;
-    Vec diag_P;
-    LibmeshPetscCall(VecDuplicate(vec_array[field_num], &diag_P));
-    LibmeshPetscCall(MatGetDiagonal(mat_array[Q * field_num + field_num], diag_P));
-    LibmeshPetscCall(VecScale(diag_P, 1.0 / relaxation_factor_P));
-    LibmeshPetscCall(MatDiagonalSet(mat_array[Q * field_num + field_num], diag_P, INSERT_VALUES));
-    if (_verbose_subchannel)
-      _console << "Mat assembled" << std::endl;
-    LibmeshPetscCall(populateVectorFromHandle<SolutionHandle>(
-        _prod, *_P_soln, first_node, last_node, _n_channels));
-    LibmeshPetscCall(VecScale(diag_P, (1.0 - relaxation_factor_P)));
-    LibmeshPetscCall(VecPointwiseMult(_prod, _prod, diag_P));
-    LibmeshPetscCall(VecAXPY(vec_array[field_num], 1.0, _prod));
-    LibmeshPetscCall(VecDestroy(&diag_P));
-
-    if (_verbose_subchannel)
-      _console << "P relaxed" << std::endl;
-
-    field_num = 2;
-    Vec diag_Wij;
-    LibmeshPetscCall(VecDuplicate(vec_array[field_num], &diag_Wij));
-    LibmeshPetscCall(MatGetDiagonal(mat_array[Q * field_num + field_num], diag_Wij));
-    LibmeshPetscCall(VecScale(diag_Wij, 1.0 / relaxation_factor_Wij));
-    LibmeshPetscCall(MatDiagonalSet(mat_array[Q * field_num + field_num], diag_Wij, INSERT_VALUES));
-    LibmeshPetscCall(populateVectorFromDense<libMesh::DenseMatrix<Real>>(
-        _Wij_vec, _Wij, first_node, last_node, _n_gaps));
-    LibmeshPetscCall(VecScale(diag_Wij, (1.0 - relaxation_factor_Wij)));
-    LibmeshPetscCall(VecPointwiseMult(_Wij_vec, _Wij_vec, diag_Wij));
-    LibmeshPetscCall(VecAXPY(vec_array[field_num], 1.0, _Wij_vec));
-    LibmeshPetscCall(VecDestroy(&diag_Wij));
-
-    if (_verbose_subchannel)
-      _console << "Wij relaxed" << std::endl;
+    // crossflow
+    RelaxEquation(mat_array[Idx(2, 2)],
+                  vec_array[2],
+                  vec_array[2],
+                  _Wij_vec,
+                  relaxation_factor_Wij,
+                  [&](Vec dst)
+                  {
+                    return populateVectorFromDense<libMesh::DenseMatrix<Real>>(
+                        dst, _Wij, first_node, last_node, _n_gaps);
+                  });
+    V("Wij relaxed");
   }
-  if (_verbose_subchannel)
-    _console << "Linear solver relaxed." << std::endl;
+  V("Linear solver relaxed");
 
-  // Creating nested matrices
-  LibmeshPetscCall(MatCreateNest(PETSC_COMM_WORLD, Q, NULL, Q, NULL, mat_array.data(), &A_nest));
-  LibmeshPetscCall(VecCreateNest(PETSC_COMM_WORLD, Q, NULL, vec_array.data(), &b_nest));
-  if (_verbose_subchannel)
-    _console << "Nested system created." << std::endl;
+  // ======================== Create and configure KSP =========================
+  Mat A_nest;
+  Vec b_nest;
+  Vec x_nest;
+  LibmeshPetscCall(MatCreateNest(PETSC_COMM_SELF, Q, NULL, Q, NULL, mat_array.data(), &A_nest));
+  LibmeshPetscCall(VecCreateNest(PETSC_COMM_SELF, Q, NULL, vec_array.data(), &b_nest));
+  V("Nested system created");
 
-  /// Setting up linear solver
-  // Creating linear solver
-  LibmeshPetscCall(KSPCreate(PETSC_COMM_WORLD, &ksp));
+  KSP ksp;
+  PC pc;
+  LibmeshPetscCall(KSPCreate(PETSC_COMM_SELF, &ksp));
   LibmeshPetscCall(KSPSetType(ksp, KSPFGMRES));
-  // Setting KSP operators
   LibmeshPetscCall(KSPSetOperators(ksp, A_nest, A_nest));
-  // Set KSP and PC options
   LibmeshPetscCall(KSPGetPC(ksp, &pc));
   LibmeshPetscCall(PCSetType(pc, PCFIELDSPLIT));
   LibmeshPetscCall(KSPSetTolerances(ksp, _rtol, _atol, _dtol, _maxit));
-  // Splitting fields
+
+  // split equations
   std::vector<IS> rows(Q);
-  // IS rows[Q];
-  PetscInt M = 0;
   LibmeshPetscCall(MatNestGetISs(A_nest, rows.data(), NULL));
   for (PetscInt j = 0; j < Q; ++j)
   {
-    IS expand1;
-    LibmeshPetscCall(ISDuplicate(rows[M], &expand1));
-    M += 1;
-    LibmeshPetscCall(PCFieldSplitSetIS(pc, NULL, expand1));
-    LibmeshPetscCall(ISDestroy(&expand1));
+    IS part;
+    LibmeshPetscCall(ISDuplicate(rows[j], &part));
+    LibmeshPetscCall(PCFieldSplitSetIS(pc, NULL, part));
+    LibmeshPetscCall(ISDestroy(&part));
   }
-  if (_verbose_subchannel)
-    _console << "Linear solver assembled." << std::endl;
+  V("Linear solver assembled");
 
-  /// Solving
+  // ============================== Solve =====================================
   LibmeshPetscCall(VecDuplicate(b_nest, &x_nest));
   LibmeshPetscCall(VecSet(x_nest, 0.0));
   LibmeshPetscCall(KSPSolve(ksp, b_nest, x_nest));
 
-  /// Destroying solver elements
+  // destroy solver containers first
   LibmeshPetscCall(VecDestroy(&b_nest));
   LibmeshPetscCall(MatDestroy(&A_nest));
   LibmeshPetscCall(KSPDestroy(&ksp));
   for (PetscInt i = 0; i < Q * Q; i++)
-  {
     LibmeshPetscCall(MatDestroy(&mat_array[i]));
-  }
   for (PetscInt i = 0; i < Q; i++)
-  {
     LibmeshPetscCall(VecDestroy(&vec_array[i]));
-  }
-  if (_verbose_subchannel)
-    _console << "Solver elements destroyed." << std::endl;
+  V("Solver elements destroyed");
 
-  /// Recovering the solutions
+  // ====================== Extract & scatter the solution =====================
   Vec sol_mdot, sol_p, sol_Wij;
-  if (_verbose_subchannel)
-    _console << "Vectors created." << std::endl;
+  V("Vectors to hold solution created");
   PetscInt num_vecs;
   Vec * loc_vecs;
   LibmeshPetscCall(VecNestGetSubVecs(x_nest, &num_vecs, &loc_vecs));
-  if (_verbose_subchannel)
-    _console << "Starting extraction." << std::endl;
   LibmeshPetscCall(VecDuplicate(_mc_axial_convection_rhs, &sol_mdot));
   LibmeshPetscCall(VecCopy(loc_vecs[0], sol_mdot));
   LibmeshPetscCall(VecDuplicate(_amc_sys_mdot_rhs, &sol_p));
   LibmeshPetscCall(VecCopy(loc_vecs[1], sol_p));
   LibmeshPetscCall(VecDuplicate(_cmc_sys_Wij_rhs, &sol_Wij));
   LibmeshPetscCall(VecCopy(loc_vecs[2], sol_Wij));
-  if (_verbose_subchannel)
-    _console << "Getting individual field solutions from coupled solver." << std::endl;
+  V("Solution from coupled solver copied to solution vectors");
 
-  /// Assigning the solutions to arrays
-  PetscScalar * sol_p_array;
-  LibmeshPetscCall(VecGetArray(sol_p, &sol_p_array));
-  PetscScalar * sol_Wij_array;
-  LibmeshPetscCall(VecGetArray(sol_Wij, &sol_Wij_array));
-
-  /// Populating Mass flow
+  // mass flow
   LibmeshPetscCall(populateSolutionChan<SolutionHandle>(
       sol_mdot, *_mdot_soln, first_node, last_node, _n_channels));
 
-  /// Populating Pressure
-  for (unsigned int iz = last_node; iz > first_node - 1; iz--)
+  // pressure
   {
-    auto iz_ind = iz - first_node;
-    for (unsigned int i_ch = 0; i_ch < _n_channels; i_ch++)
+    PetscScalar * sol_p_array;
+    LibmeshPetscCall(VecGetArray(sol_p, &sol_p_array));
+    for (unsigned int iz = last_node; iz > first_node - 1; iz--)
     {
-      auto * node_in = _subchannel_mesh.getChannelNode(i_ch, iz - 1);
-      PetscScalar value = sol_p_array[iz_ind * _n_channels + i_ch];
-      _P_soln->set(node_in, value);
+      const auto iz_ind = iz - first_node;
+      for (unsigned int i_ch = 0; i_ch < _n_channels; i_ch++)
+      {
+        auto * node_in = _subchannel_mesh.getChannelNode(i_ch, iz - 1);
+        PetscScalar value = sol_p_array[iz_ind * _n_channels + i_ch];
+        _P_soln->set(node_in, value);
+      }
     }
+    LibmeshPetscCall(VecRestoreArray(sol_p, &sol_p_array));
   }
 
-  /// Populating Crossflow
+  // crossflow dense + sumWij + correction factor
   LibmeshPetscCall(populateDenseFromVector<libMesh::DenseMatrix<Real>>(
-      sol_Wij, _Wij, first_node, last_node - 1, _n_gaps));
+      sol_Wij, _Wij, first_node, last_node, _n_gaps));
 
-  /// Populating Enthalpy
-  if (_monolithic_thermal_bool)
-  {
-    if (lag_block_thermal_solve)
-    {
-      KSP ksploc;
-      PC pc;
-      Vec sol;
-      LibmeshPetscCall(VecDuplicate(_hc_sys_h_rhs, &sol));
-      LibmeshPetscCall(KSPCreate(PETSC_COMM_WORLD, &ksploc));
-      LibmeshPetscCall(KSPSetOperators(ksploc, _hc_sys_h_mat, _hc_sys_h_mat));
-      LibmeshPetscCall(KSPGetPC(ksploc, &pc));
-      LibmeshPetscCall(PCSetType(pc, PCJACOBI));
-      LibmeshPetscCall(KSPSetTolerances(ksploc, _rtol, _atol, _dtol, _maxit));
-      LibmeshPetscCall(KSPSetFromOptions(ksploc));
-      LibmeshPetscCall(KSPSolve(ksploc, _hc_sys_h_rhs, sol));
-      PetscScalar * xx;
-      LibmeshPetscCall(VecGetArray(sol, &xx));
-      for (unsigned int iz = first_node; iz < last_node + 1; iz++)
-      {
-        auto iz_ind = iz - first_node;
-        for (unsigned int i_ch = 0; i_ch < _n_channels; i_ch++)
-        {
-          auto * node_out = _subchannel_mesh.getChannelNode(i_ch, iz);
-          auto h_out = xx[iz_ind * _n_channels + i_ch];
-          if (h_out < 0)
-          {
-            mooseError(name(),
-                       " : Calculation of negative Enthalpy h_out = : ",
-                       h_out,
-                       " Axial Level= : ",
-                       iz);
-          }
-          _h_soln->set(node_out, h_out);
-        }
-      }
-      LibmeshPetscCall(KSPDestroy(&ksploc));
-      LibmeshPetscCall(VecDestroy(&sol));
-    }
-    else
-    {
-      Vec sol_h;
-      LibmeshPetscCall(VecDuplicate(_hc_sys_h_rhs, &sol_h));
-      LibmeshPetscCall(VecCopy(loc_vecs[3], sol_h));
-      PetscScalar * sol_h_array;
-      LibmeshPetscCall(VecGetArray(sol_h, &sol_h_array));
-      for (unsigned int iz = first_node; iz < last_node + 1; iz++)
-      {
-        auto iz_ind = iz - first_node;
-        for (unsigned int i_ch = 0; i_ch < _n_channels; i_ch++)
-        {
-          auto * node_out = _subchannel_mesh.getChannelNode(i_ch, iz);
-          auto h_out = sol_h_array[iz_ind * _n_channels + i_ch];
-          if (h_out < 0)
-          {
-            mooseError(name(),
-                       " : Calculation of negative Enthalpy h_out = : ",
-                       h_out,
-                       " Axial Level= : ",
-                       iz);
-          }
-          _h_soln->set(node_out, h_out);
-        }
-      }
-      LibmeshPetscCall(VecDestroy(&sol_h));
-    }
-  }
-
-  /// Populating sum_Wij
   LibmeshPetscCall(MatMult(_mc_sumWij_mat, sol_Wij, _prod));
   LibmeshPetscCall(populateSolutionChan<SolutionHandle>(
       _prod, *_SumWij_soln, first_node, last_node, _n_channels));
 
-  Vec sumWij_loc;
-  LibmeshPetscCall(createPetscVector(sumWij_loc, _block_size * _n_channels));
-  LibmeshPetscCall(populateVectorFromHandle<SolutionHandle>(
-      _prod, *_SumWij_soln, first_node, last_node, _n_channels));
-
   LibmeshPetscCall(VecAbs(_prod));
   LibmeshPetscCall(VecMax(_prod, NULL, &_max_sumWij_new));
-  if (_verbose_subchannel)
-    _console << "Maximum estimated Wij new: " << _max_sumWij_new << std::endl;
+  V("Maximum estimated Wij new: " + std::to_string(_max_sumWij_new));
   _correction_factor = _max_sumWij_new / _max_sumWij;
-  if (_verbose_subchannel)
-    _console << "Correction factor: " << _correction_factor << std::endl;
-  if (_verbose_subchannel)
-    _console << "Solutions assigned to MOOSE variables." << std::endl;
+  V("Correction factor: " + std::to_string(_correction_factor));
+  V("Solutions assigned to MOOSE variables.");
 
-  /// Destroying arrays
+  // cleanup solution objects
   LibmeshPetscCall(VecDestroy(&x_nest));
   LibmeshPetscCall(VecDestroy(&sol_mdot));
   LibmeshPetscCall(VecDestroy(&sol_p));
   LibmeshPetscCall(VecDestroy(&sol_Wij));
-  LibmeshPetscCall(VecDestroy(&sumWij_loc));
-  if (_verbose_subchannel)
-    _console << "Solutions destroyed." << std::endl;
+  V("Solutions destroyed.");
 
   PetscFunctionReturn(LIBMESH_PETSC_SUCCESS);
 }
@@ -2533,8 +2513,14 @@ SubChannel1PhaseProblem::externalSolve()
   _dt = (isTransient() ? dt() : _one);
   _TR = isTransient();
   initializeSolution();
-  if (_verbose_subchannel)
-    _console << "Solution initialized" << std::endl;
+  // Small helper functions to reduce repetition
+  // Verbose print helper (no-op unless _verbose_subchannel is true)
+  auto V = [&](const std::string & s)
+  {
+    if (_verbose_subchannel)
+      _console << s << std::endl;
+  };
+  V("Solution initialized");
   Real P_error = 1.0;
   unsigned int P_it = 0;
   unsigned int P_it_max;
@@ -2575,11 +2561,13 @@ SubChannel1PhaseProblem::externalSolve()
           _converged = false;
         }
         auto T_L2norm_old_block = _T_soln->L2norm();
+        // We are only computing quantities on rank 0
+        if (processor_id() > 0)
+          goto aux_close;
 
         if (_segregated_bool)
         {
           computeWijFromSolve(iblock);
-
           if (_compute_power)
           {
             computeh(iblock);
@@ -2590,62 +2578,54 @@ SubChannel1PhaseProblem::externalSolve()
         {
           LibmeshPetscCall(implicitPetscSolve(iblock));
           computeWijPrime(iblock);
-          if (_verbose_subchannel)
-            _console << "Done with main solve." << std::endl;
-          if (_monolithic_thermal_bool)
+          V("Done with main solve.");
+          if (_compute_power)
           {
-            // Enthalpy is already solved from the monolithic solve
+            computeh(iblock);
             computeT(iblock);
           }
-          else
-          {
-            if (_verbose_subchannel)
-              _console << "Starting thermal solve." << std::endl;
-            if (_compute_power)
-            {
-              computeh(iblock);
-              computeT(iblock);
-            }
-            if (_verbose_subchannel)
-              _console << "Done with thermal solve." << std::endl;
-          }
+          V("Done with thermal solve.");
         }
 
-        if (_verbose_subchannel)
-          _console << "Start updating thermophysical properties." << std::endl;
-
+        V("Start updating thermophysical properties.");
         if (_compute_density)
           computeRho(iblock);
-
         if (_compute_viscosity)
           computeMu(iblock);
-
-        if (_verbose_subchannel)
-          _console << "Done updating thermophysical properties." << std::endl;
+        V("Done updating thermophysical properties.");
 
         // We must do a global assembly to make sure data is parallel consistent before we do things
         // like compute L2 norms
+      aux_close:
         _aux->solution().close();
 
         auto T_L2norm_new = _T_soln->L2norm();
         T_block_error =
             std::abs((T_L2norm_new - T_L2norm_old_block) / (T_L2norm_old_block + 1E-14));
         _console << "T_block_error: " << T_block_error << std::endl;
+
+        // All processes must have the same iteration count
+        comm().max(T_block_error);
       }
     }
     auto P_L2norm_new_axial = _P_soln->L2norm();
     P_error =
         std::abs((P_L2norm_new_axial - P_L2norm_old_axial) / (P_L2norm_old_axial + _P_out + 1E-14));
     _console << "P_error :" << P_error << std::endl;
-    if (_verbose_subchannel)
-    {
-      _console << "Iteration:  " << P_it << std::endl;
-      _console << "Maximum iterations: " << P_it_max << std::endl;
-    }
+    V("Iteration:  " + std::to_string(P_it));
+    V("Maximum iterations: " + std::to_string(P_it_max));
   }
   // update old crossflow matrix
   _Wij_old = _Wij;
   _console << "Finished executing subchannel solver\n";
+
+  // set SumWij at the inlet equal to the one on the first axial level  (for visualization purposes)
+  for (unsigned int i_ch = 0; i_ch < _n_channels; i_ch++)
+  {
+    auto * node_in = _subchannel_mesh.getChannelNode(i_ch, 0);
+    auto * node_out = _subchannel_mesh.getChannelNode(i_ch, 1);
+    _SumWij_soln->set(node_in, (*_SumWij_soln)(node_out)); // kg/sec
+  }
 
   /// Assigning temperature to the fuel pins
   if (_pin_mesh_exist)
@@ -2657,7 +2637,7 @@ SubChannel1PhaseProblem::externalSolve()
       {
         const auto * pin_node = _subchannel_mesh.getPinNode(i_pin, iz);
         Real sumTemp = 0.0;
-        Real rod_counter = 0.0;
+
         // Calculate sum of pin surface temperatures that the channels around the pin see
         for (auto i_ch : _subchannel_mesh.getPinChannels(i_pin))
         {
@@ -2670,17 +2650,22 @@ SubChannel1PhaseProblem::externalSolve()
           auto k = _fp->k_from_p_T((*_P_soln)(node) + _P_out, (*_T_soln)(node));
           auto cp = _fp->cp_from_p_T((*_P_soln)(node) + _P_out, (*_T_soln)(node));
           auto Pr = (*_mu_soln)(node)*cp / k;
-          auto Nu = 0.023 * std::pow(Re, 0.8) * std::pow(Pr, 0.4);
+
+          // Create nusselt number structure
+          NusseltStruct nusselt_struct(Re, Pr, i_pin, iz, i_ch, _pin_htc_correlation);
+
+          // Compute Nusselt number
+          auto Nu = this->computeNusseltNumber(nusselt_struct);
+
+          // Compute HTC
           auto hw = Nu * k / Dh_i;
-          if ((*_Dpin_soln)(pin_node) <= 0)
-            mooseError("Dpin should not be null or negative when computing pin powers: ",
-                       (*_Dpin_soln)(pin_node));
+
+          // Compute surface temperature contribution from subchannel side
           sumTemp +=
               (*_q_prime_soln)(pin_node) / ((*_Dpin_soln)(pin_node)*M_PI * hw) + (*_T_soln)(node);
-          rod_counter += 1.0;
         }
-        if (rod_counter > 0)
-          _Tpin_soln->set(pin_node, sumTemp / rod_counter);
+        if (_subchannel_mesh.getPinChannels(i_pin).size() > 0)
+          _Tpin_soln->set(pin_node, sumTemp / _subchannel_mesh.getPinChannels(i_pin).size());
         else
           mooseError("Pin was not found for pin index:  " + std::to_string(i_pin));
       }
@@ -2688,7 +2673,7 @@ SubChannel1PhaseProblem::externalSolve()
   }
 
   /// Assigning temperatures to duct
-  if (_duct_mesh_exist)
+  if (_duct_mesh_exist && processor_id() == 0)
   {
     _console << "Commencing calculation of duct surface temperature " << std::endl;
     auto duct_nodes = _subchannel_mesh.getDuctNodes();
@@ -2703,16 +2688,40 @@ SubChannel1PhaseProblem::externalSolve()
       auto k = _fp->k_from_p_T((*_P_soln)(node_chan) + _P_out, (*_T_soln)(node_chan));
       auto cp = _fp->cp_from_p_T((*_P_soln)(node_chan) + _P_out, (*_T_soln)(node_chan));
       auto Pr = (*_mu_soln)(node_chan)*cp / k;
-      auto Nu = 0.023 * std::pow(Re, 0.8) * std::pow(Pr, 0.4);
+
+      // Check that kazimi-carelli is not used for the duct (not supported yet)
+      if (_duct_htc_correlation == "kazimi-carelli")
+        mooseError("'kazimi-carelli' is not yet supported for the 'duct_htc_correlation'.");
+
+      // Create nusselt number structure (consistent with pin case)
+      const libMesh::Point & node_point = *_subchannel_mesh.getChannelNodeFromDuct(dn);
+      const unsigned int iz = _subchannel_mesh.getZIndex(node_point);
+      const unsigned int i_ch = _subchannel_mesh.channelIndex(node_point);
+
+      NusseltStruct nusselt_struct(
+          Re,
+          Pr,
+          std::numeric_limits<unsigned int>::max(), // sentinel pin index for duct
+          iz,
+          i_ch,
+          _duct_htc_correlation);
+
+      // Compute Nusselt number
+      auto Nu = this->computeNusseltNumber(nusselt_struct);
+
+      // Compute HTC
       auto hw = Nu * k / Dh_i;
-      auto T_chan = (*_q_prime_duct_soln)(dn) / (_subchannel_mesh.getPinDiameter() * M_PI * hw) +
-                    (*_T_soln)(node_chan);
+
+      // Compute Channel Temperature
+      auto T_chan = (*_duct_heat_flux_soln)(dn) / hw + (*_T_soln)(node_chan);
       _Tduct_soln->set(dn, T_chan);
     }
   }
   _aux->solution().close();
   _aux->update();
 
+  if (processor_id() != 0)
+    return;
   Real power_in = 0.0;
   Real power_out = 0.0;
   Real Total_surface_area = 0.0;
@@ -2751,9 +2760,14 @@ SubChannel1PhaseProblem::externalSolve()
     _console << "User defined outlet pressure is : " << _P_out << " Pa" << std::endl;
     _console << " ======================================= " << std::endl;
   }
-}
-void
 
+  if (MooseUtils::absoluteFuzzyLessEqual((power_out - power_in), -1.0))
+    mooseWarning(
+        "Energy conservation equation might not be solved correctly, Power added to coolant:  " +
+        std::to_string(power_out - power_in) + " Watt ");
+}
+
+void
 SubChannel1PhaseProblem::syncSolutions(Direction /*direction*/)
 {
 }

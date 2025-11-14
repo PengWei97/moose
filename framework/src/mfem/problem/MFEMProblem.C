@@ -1,6 +1,20 @@
-#ifdef MFEM_ENABLED
+//* This file is part of the MOOSE framework
+//* https://mooseframework.inl.gov
+//*
+//* All rights reserved, see COPYRIGHT for full restrictions
+//* https://github.com/idaholab/moose/blob/master/COPYRIGHT
+//*
+//* Licensed under LGPL 2.1, please see LICENSE for details
+//* https://www.gnu.org/licenses/lgpl-2.1.html
+
+#ifdef MOOSE_MFEM_ENABLED
 
 #include "MFEMProblem.h"
+#include "MFEMInitialCondition.h"
+#include "MFEMVariable.h"
+#include "MFEMSubMesh.h"
+#include "MFEMFunctorMaterial.h"
+#include "libmesh/string_to_enum.h"
 
 #include <vector>
 #include <algorithm>
@@ -16,7 +30,14 @@ MFEMProblem::validParams()
   return params;
 }
 
-MFEMProblem::MFEMProblem(const InputParameters & params) : ExternalProblem(params) {}
+MFEMProblem::MFEMProblem(const InputParameters & params) : ExternalProblem(params)
+{
+  // Initialise Hypre for all MFEM problems.
+  mfem::Hypre::Init();
+  // Disable multithreading for all MFEM problems (including any libMesh or MFEM subapps).
+  libMesh::libMeshPrivateData::_n_threads = 1;
+  setMesh();
+}
 
 void
 MFEMProblem::initialSetup()
@@ -31,23 +52,8 @@ MFEMProblem::setMesh()
   auto pmesh = mesh().getMFEMParMeshPtr();
   getProblemData().pmesh = pmesh;
   getProblemData().comm = pmesh->GetComm();
-  MPI_Comm_size(pmesh->GetComm(), &(getProblemData().num_procs));
-  MPI_Comm_rank(pmesh->GetComm(), &(getProblemData().myid));
-}
-
-void
-MFEMProblem::initProblemOperator()
-{
-  setMesh();
-  auto mfem_exec_ptr = dynamic_cast<MFEMExecutioner *>(_app.getExecutioner());
-  if (mfem_exec_ptr != nullptr)
-  {
-    mfem_exec_ptr->constructProblemOperator();
-  }
-  else
-  {
-    mooseError("Executioner used that is not currently supported by MFEMProblem");
-  }
+  getProblemData().num_procs = pmesh->GetNRanks();
+  getProblemData().myid = pmesh->GetMyRank();
 }
 
 void
@@ -56,9 +62,6 @@ MFEMProblem::addMFEMPreconditioner(const std::string & user_object_name,
                                    InputParameters & parameters)
 {
   FEProblemBase::addUserObject(user_object_name, name, parameters);
-  auto object_ptr = getUserObject<MFEMSolverBase>(name).getSharedPtr();
-
-  getProblemData().jacobian_preconditioner = std::dynamic_pointer_cast<MFEMSolverBase>(object_ptr);
 }
 
 void
@@ -75,7 +78,7 @@ MFEMProblem::addMFEMSolver(const std::string & user_object_name,
 void
 MFEMProblem::addMFEMNonlinearSolver()
 {
-  auto nl_solver = std::make_shared<mfem::NewtonSolver>(getProblemData().comm);
+  auto nl_solver = std::make_shared<mfem::NewtonSolver>(getComm());
 
   // Defaults to one iteration, without further nonlinear iterations
   nl_solver->SetRelTol(0.0);
@@ -96,7 +99,6 @@ MFEMProblem::addBoundaryCondition(const std::string & bc_name,
   {
     auto object_ptr = getUserObject<MFEMIntegratedBC>(name).getSharedPtr();
     auto bc = std::dynamic_pointer_cast<MFEMIntegratedBC>(object_ptr);
-    bc->getBoundaries();
     if (getProblemData().eqn_system)
     {
       getProblemData().eqn_system->AddIntegratedBC(std::move(bc));
@@ -111,7 +113,6 @@ MFEMProblem::addBoundaryCondition(const std::string & bc_name,
   {
     auto object_ptr = getUserObject<MFEMEssentialBC>(name).getSharedPtr();
     auto mfem_bc = std::dynamic_pointer_cast<MFEMEssentialBC>(object_ptr);
-    mfem_bc->getBoundaries();
     if (getProblemData().eqn_system)
     {
       getProblemData().eqn_system->AddEssentialBC(std::move(mfem_bc));
@@ -168,7 +169,11 @@ MFEMProblem::addVariable(const std::string & var_type,
   // GridFunctions for time derivatives.
   if (isTransient())
   {
-    addGridFunction(var_type, Moose::MFEM::GetTimeDerivativeName(var_name), parameters);
+    const auto time_derivative_var_name =
+        getUserObject<MFEMVariable>(var_name).getTimeDerivativeName();
+    getProblemData().time_derivative_map.addTimeDerivativeAssociation(var_name,
+                                                                      time_derivative_var_name);
+    addGridFunction(var_type, time_derivative_var_name, parameters);
   }
 }
 
@@ -208,8 +213,9 @@ MFEMProblem::addAuxVariable(const std::string & var_type,
                             const std::string & var_name,
                             InputParameters & parameters)
 {
-  // We do not handle MFEM AuxVariables separately from variables currently
-  addVariable(var_type, var_name, parameters);
+  // We handle MFEM AuxVariables just like MFEM Variables, except
+  // we do not add additional GridFunctions for time derivatives.
+  addGridFunction(var_type, var_name, parameters);
 }
 
 void
@@ -336,7 +342,7 @@ MFEMProblem::addFunction(const std::string & type,
   {
     getCoefficients().declareScalar<mfem::FunctionCoefficient>(
         name,
-        [&func](const mfem::Vector & p, double t) -> mfem::real_t
+        [&func](const mfem::Vector & p, mfem::real_t t) -> mfem::real_t
         { return func.value(t, pointFromMFEMVector(p)); });
   }
   else if (std::find(VECTOR_FUNCS.begin(), VECTOR_FUNCS.end(), type) != VECTOR_FUNCS.end())
@@ -345,7 +351,7 @@ MFEMProblem::addFunction(const std::string & type,
     getCoefficients().declareVector<mfem::VectorFunctionCoefficient>(
         name,
         dim,
-        [&func, dim](const mfem::Vector & p, double t, mfem::Vector & u)
+        [&func, dim](const mfem::Vector & p, mfem::real_t t, mfem::Vector & u)
         {
           libMesh::RealVectorValue vector_value = func.vectorValue(t, pointFromMFEMVector(p));
           for (int i = 0; i < dim; i++)
@@ -354,7 +360,7 @@ MFEMProblem::addFunction(const std::string & type,
           }
         });
   }
-  else
+  else if ("MFEMParsedFunction" != type)
   {
     mooseWarning("Could not identify whether function ",
                  type,
@@ -367,11 +373,10 @@ MFEMProblem::addPostprocessor(const std::string & type,
                               const std::string & name,
                               InputParameters & parameters)
 {
-  // For some reason this isn't getting called
   ExternalProblem::addPostprocessor(type, name, parameters);
   const PostprocessorValue & val = getPostprocessorValueByName(name);
   getCoefficients().declareScalar<mfem::FunctionCoefficient>(
-      name, [&val](const mfem::Vector &, double) -> mfem::real_t { return val; });
+      name, [&val](const mfem::Vector &) -> mfem::real_t { return val; });
 }
 
 InputParameters
@@ -475,6 +480,51 @@ const MFEMMesh &
 MFEMProblem::mesh() const
 {
   return const_cast<MFEMProblem *>(this)->mesh();
+}
+
+void
+MFEMProblem::addSubMesh(const std::string & var_type,
+                        const std::string & var_name,
+                        InputParameters & parameters)
+{
+  // Add MFEM SubMesh.
+  FEProblemBase::addUserObject(var_type, var_name, parameters);
+  // Register submesh.
+  MFEMSubMesh & mfem_submesh = getUserObject<MFEMSubMesh>(var_name);
+  getProblemData().submeshes.Register(var_name, mfem_submesh.getSubMesh());
+}
+
+void
+MFEMProblem::addTransfer(const std::string & transfer_name,
+                         const std::string & name,
+                         InputParameters & parameters)
+{
+  if (parameters.getBase() == "MFEMSubMeshTransfer")
+    FEProblemBase::addUserObject(transfer_name, name, parameters);
+  else
+    FEProblemBase::addTransfer(transfer_name, name, parameters);
+}
+
+std::shared_ptr<mfem::ParGridFunction>
+MFEMProblem::getGridFunction(const std::string & name)
+{
+  return getUserObject<MFEMVariable>(name).getGridFunction();
+}
+
+void
+MFEMProblem::addInitialCondition(const std::string & ic_name,
+                                 const std::string & name,
+                                 InputParameters & parameters)
+{
+  FEProblemBase::addUserObject(ic_name, name, parameters);
+  getUserObject<MFEMInitialCondition>(name); // error check
+}
+
+std::string
+MFEMProblem::solverTypeString(const unsigned int libmesh_dbg_var(solver_sys_num))
+{
+  mooseAssert(solver_sys_num == 0, "No support for multi-system with MFEM right now");
+  return MooseUtils::prettyCppType(getProblemData().jacobian_solver.get());
 }
 
 #endif

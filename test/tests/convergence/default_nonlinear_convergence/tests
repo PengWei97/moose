@@ -10,7 +10,7 @@
     requirement = 'The system shall be able to determine convergence of the nonlinear solve using default criteria through an object.'
   []
   [error_reporting]
-    requirement = 'The system shall report an error for the default convergence class'
+    requirement = 'The system shall report an error for the default nonlinear convergence class'
     [multiple_objects]
       type = RunException
       input = 'default_nonlinear_convergence.i'
@@ -25,6 +25,12 @@
       cli_args = "Executioner/nl_abs_tol=1e-20"
       expect_err = "The following parameters were set in both this Convergence object and the executioner:\s+nl_abs_tol"
       detail = 'if convergence criteria are additionally specified in the executioner.'
+    []
+    [invalid_iteration_type]
+      type = RunException
+      input = 'invalid_iteration_type.i'
+      expect_err = "DefaultNonlinearConvergence can only be used with nonlinear solves"
+      detail = 'if used with an invalid iteration type.'
     []
   []
 []

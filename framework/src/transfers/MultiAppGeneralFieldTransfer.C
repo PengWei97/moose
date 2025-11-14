@@ -109,7 +109,7 @@ MultiAppGeneralFieldTransfer::validParams()
       "The code will be slow if this flag is on but it will give a better solution.");
   params.addParam<bool>(
       "error_on_miss",
-      false,
+      true,
       "Whether or not to error in the case that a target point is not found in the source domain.");
   params.addParam<bool>("use_bounding_boxes",
                         true,
@@ -133,7 +133,7 @@ MultiAppGeneralFieldTransfer::validParams()
       "allows for interpolation between origin app meshes. Origin app bounding boxes are still "
       "considered so you may want to increase them with 'fixed_bounding_box_size'");
   params.addParam<bool>("search_value_conflicts",
-                        true,
+                        false,
                         "Whether to look for potential conflicts between two valid and different "
                         "source values for any target point");
   params.addParam<unsigned int>(
@@ -235,20 +235,31 @@ MultiAppGeneralFieldTransfer::initialSetup()
     const auto & from_moose_mesh = _from_problems[i_from]->mesh(_displaced_source_mesh);
     if (isParamValid("from_blocks"))
     {
-      auto & blocks = getParam<std::vector<SubdomainName>>("from_blocks");
-      std::vector<SubdomainID> ids = from_moose_mesh.getSubdomainIDs(blocks);
-      _from_blocks.insert(ids.begin(), ids.end());
-      if (_from_blocks.size() != blocks.size())
-        paramError("from_blocks", "Some blocks were not found in the mesh");
+      const auto & block_names = getParam<std::vector<SubdomainName>>("from_blocks");
+
+      for (const auto & b : block_names)
+        if (!MooseMeshUtils::hasSubdomainName(from_moose_mesh.getMesh(), b))
+          paramError("from_blocks", "The block '", b, "' was not found in the mesh");
+
+      if (!block_names.empty())
+      {
+        const auto ids = from_moose_mesh.getSubdomainIDs(block_names);
+        _from_blocks.insert(ids.begin(), ids.end());
+      }
     }
 
     if (isParamValid("from_boundaries"))
     {
-      auto & boundary_names = getParam<std::vector<BoundaryName>>("from_boundaries");
-      std::vector<BoundaryID> boundary_ids = from_moose_mesh.getBoundaryIDs(boundary_names);
-      _from_boundaries.insert(boundary_ids.begin(), boundary_ids.end());
-      if (_from_boundaries.size() != boundary_names.size())
-        paramError("from_boundaries", "Some boundaries were not found in the mesh");
+      const auto & boundary_names = getParam<std::vector<BoundaryName>>("from_boundaries");
+      for (const auto & bn : boundary_names)
+        if (!MooseMeshUtils::hasBoundaryName(from_moose_mesh.getMesh(), bn))
+          paramError("from_boundaries", "The boundary '", bn, "' was not found in the mesh");
+
+      if (!boundary_names.empty())
+      {
+        const auto boundary_ids = from_moose_mesh.getBoundaryIDs(boundary_names);
+        _from_boundaries.insert(boundary_ids.begin(), boundary_ids.end());
+      }
     }
 
     if (isParamValid("from_mesh_division"))
@@ -304,20 +315,30 @@ MultiAppGeneralFieldTransfer::initialSetup()
     const auto & to_moose_mesh = _to_problems[i_to]->mesh(_displaced_target_mesh);
     if (isParamValid("to_blocks"))
     {
-      auto & blocks = getParam<std::vector<SubdomainName>>("to_blocks");
-      std::vector<SubdomainID> ids = to_moose_mesh.getSubdomainIDs(blocks);
-      _to_blocks.insert(ids.begin(), ids.end());
-      if (_to_blocks.size() != blocks.size())
-        paramError("to_blocks", "Some blocks were not found in the mesh");
+      const auto & block_names = getParam<std::vector<SubdomainName>>("to_blocks");
+      for (const auto & b : block_names)
+        if (!MooseMeshUtils::hasSubdomainName(to_moose_mesh.getMesh(), b))
+          paramError("to_blocks", "The block '", b, "' was not found in the mesh");
+
+      if (!block_names.empty())
+      {
+        const auto ids = to_moose_mesh.getSubdomainIDs(block_names);
+        _to_blocks.insert(ids.begin(), ids.end());
+      }
     }
 
     if (isParamValid("to_boundaries"))
     {
-      auto & boundary_names = getParam<std::vector<BoundaryName>>("to_boundaries");
-      std::vector<BoundaryID> boundary_ids = to_moose_mesh.getBoundaryIDs(boundary_names);
-      _to_boundaries.insert(boundary_ids.begin(), boundary_ids.end());
-      if (_to_boundaries.size() != boundary_names.size())
-        paramError("to_boundaries", "Some boundaries were not found in the mesh");
+      const auto & boundary_names = getParam<std::vector<BoundaryName>>("to_boundaries");
+      for (const auto & bn : boundary_names)
+        if (!MooseMeshUtils::hasBoundaryName(to_moose_mesh.getMesh(), bn))
+          paramError("to_boundaries", "The boundary '", bn, "' was not found in the mesh");
+
+      if (!boundary_names.empty())
+      {
+        const auto boundary_ids = to_moose_mesh.getBoundaryIDs(boundary_names);
+        _to_boundaries.insert(boundary_ids.begin(), boundary_ids.end());
+      }
     }
 
     if (isParamValid("to_mesh_division"))
@@ -676,8 +697,10 @@ MultiAppGeneralFieldTransfer::locatePointReceivers(const Point point,
         point,
         " \n ",
         "It must be that mismatched meshes, between the source and target application, are being "
-        "used.\nIf you are using bounding boxes, nearest-app or mesh-divisions, please consider "
-        "using the greedy_search to confirm. Then consider choosing a different transfer type.");
+        "used.\nIf you are using the bounding boxes or nearest-app heuristics, or mesh-divisions, "
+        "please consider using the greedy_search to confirm. Then consider choosing a different "
+        "transfer type.\nThis check can be turned off by setting 'error_on_miss' to false. The "
+        "'extrapolation_constant' parameter will be used to set the local value at missed points.");
 }
 
 void
@@ -861,8 +884,8 @@ MultiAppGeneralFieldTransfer::extractOutgoingPoints(const unsigned int var_index
                                i_to,
                                outgoing_points);
       } // for
-    }   // else
-  }     // for
+    } // else
+  } // for
 }
 
 void
@@ -1481,19 +1504,26 @@ MultiAppGeneralFieldTransfer::setSolutionVectorValues(
           const auto target_location =
               hasToMultiApp()
                   ? " on target app " + std::to_string(getGlobalTargetAppIndex(problem_id))
-                  : " on parent app ";
+                  : " on parent app";
+          const auto info_msg = "\nThis check can be turned off by setting 'error_on_miss' to "
+                                "false. The 'extrapolation_constant' parameter will be used to set "
+                                "the local value at missed points.";
           if (is_nodal)
-            mooseError("No source value could be found for node ",
+            mooseError("No source value for node ",
                        dof_object_id,
                        target_location,
-                       "could not be located. Node details:\n",
-                       _to_meshes[problem_id]->nodePtr(dof_object_id)->get_info());
+                       " could be located. Node details:\n",
+                       _to_meshes[problem_id]->nodePtr(dof_object_id)->get_info(),
+                       "\n",
+                       info_msg);
           else
-            mooseError("No source value could be found for element ",
+            mooseError("No source value for element ",
                        dof_object_id,
                        target_location,
-                       "could not be located. Element details:\n",
-                       _to_meshes[problem_id]->elemPtr(dof_object_id)->get_info());
+                       " could be located. Element details:\n",
+                       _to_meshes[problem_id]->elemPtr(dof_object_id)->get_info(),
+                       "\n",
+                       info_msg);
         }
 
         // We should not put garbage into our solution vector

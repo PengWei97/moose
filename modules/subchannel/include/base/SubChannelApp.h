@@ -21,9 +21,6 @@ public:
 
   static void registerApps();
   static void registerAll(Factory & f, ActionFactory & af, Syntax & s);
-  static void registerObjects(Factory & factory);
-  static void associateSyntax(Syntax & syntax, ActionFactory & action_factory);
-  static void registerExecFlags(Factory & factory);
 
 public:
   static InputParameters validParams();
@@ -55,7 +52,7 @@ public:
   /// linear heat rate
   static const std::string LINEAR_HEAT_RATE;
   /// duct linear heat rate
-  static const std::string DUCT_LINEAR_HEAT_RATE;
+  static const std::string DUCT_HEAT_FLUX;
   /// duct temperature
   static const std::string DUCT_TEMPERATURE;
   /// subchannel displacement

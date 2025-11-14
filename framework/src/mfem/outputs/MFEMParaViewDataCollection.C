@@ -1,4 +1,13 @@
-#ifdef MFEM_ENABLED
+//* This file is part of the MOOSE framework
+//* https://mooseframework.inl.gov
+//*
+//* All rights reserved, see COPYRIGHT for full restrictions
+//* https://github.com/idaholab/moose/blob/master/COPYRIGHT
+//*
+//* Licensed under LGPL 2.1, please see LICENSE for details
+//* https://www.gnu.org/licenses/lgpl-2.1.html
+
+#ifdef MOOSE_MFEM_ENABLED
 
 #include "MFEMParaViewDataCollection.h"
 
@@ -31,8 +40,7 @@ MFEMParaViewDataCollection::validParams()
 
 MFEMParaViewDataCollection::MFEMParaViewDataCollection(const InputParameters & parameters)
   : MFEMDataCollection(parameters),
-    _pv_dc((_file_base + std::string("/Run") + std::to_string(getFileNumber())).c_str(),
-           _problem_data.pmesh.get()),
+    _pv_dc((_file_base + std::string("/Run") + std::to_string(getFileNumber())).c_str(), &_pmesh),
     _high_order_output(getParam<bool>("high_order_output")),
     _refinements(getParam<unsigned int>("refinements")),
     _vtk_format(parameters.get<MooseEnum>("vtk_format").getEnum<mfem::VTKFormat>())

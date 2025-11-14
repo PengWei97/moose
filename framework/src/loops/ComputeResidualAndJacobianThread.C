@@ -19,6 +19,7 @@
 #include "TimeKernel.h"
 #include "SwapBackSentinel.h"
 #include "FVTimeKernel.h"
+#include "HDGKernel.h"
 
 #include "libmesh/threads.h"
 
@@ -76,7 +77,6 @@ ComputeResidualAndJacobianThread::accumulate()
 
   if (_num_cached % 20 == 0)
   {
-    Threads::spin_mutex::scoped_lock lock(Threads::spin_mtx);
     _fe_problem.addCachedResidual(_tid);
     _fe_problem.addCachedJacobian(_tid);
   }
@@ -109,6 +109,7 @@ ComputeResidualAndJacobianThread::determineObjectWarehouses()
   _dg_warehouse = &_dg_kernels;
   _ibc_warehouse = &_integrated_bcs;
   _ik_warehouse = &_interface_kernels;
+  _hdg_warehouse = &_hdg_kernels;
 
   if (_fe_problem.haveFV())
   {
@@ -121,4 +122,14 @@ ComputeResidualAndJacobianThread::determineObjectWarehouses()
         .template condition<AttribThread>(_tid)
         .queryInto(_fv_kernels);
   }
+}
+
+void
+ComputeResidualAndJacobianThread::computeOnInternalFace()
+{
+  mooseAssert(_hdg_warehouse->hasActiveBlockObjects(_subdomain, _tid),
+              "We should not be called if we have no active HDG kernels");
+  for (const auto & hdg_kernel : _hdg_warehouse->getActiveBlockObjects(_subdomain, _tid))
+    if (hdg_kernel->hasBlocks(_subdomain))
+      hdg_kernel->computeResidualAndJacobianOnSide();
 }

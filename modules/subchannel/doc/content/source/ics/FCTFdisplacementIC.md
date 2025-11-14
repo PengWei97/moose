@@ -4,7 +4,7 @@
 
 ## Overview
 
-<!-- -->
+!! Intentional comment to provide extra spacing
 
 This is a custom, hard-coded IC, that is used only in one specific geometry. This kernel calculates and initializes, the deformation of the duct (`displacement` [AuxVariable](https://mooseframework.inl.gov/syntax/AuxVariables/index.html)) for the [AREVA FCTF](https://www.osti.gov/servlets/purl/1346027/).
 SCM models the effect of the duct deformation, by adapting the geometric parameters of the perimetric subchannels according to a representative per subchannel deformation variable,
@@ -18,11 +18,11 @@ subchannels that is taken into consideration, since the perimetric subchannels a
 
 An example input file that uses this initial condition kernel is shown below:
 
-!listing /validation/areva_FCTF/FCTF_deformed.i language=cpp
+!listing /validation/areva_FCTF/FCTF_deformed.i language=moose
 
 In this input file the variable `displacement` is populated in the Initial Conditions block (ICs), using the custom kernel `FCTFdisplacementIC`.
 
-!listing /validation/areva_FCTF/FCTF_deformed.i block=ICs language=cpp
+!listing /validation/areva_FCTF/FCTF_deformed.i block=ICs language=moose
 
 !syntax parameters /ICs/FCTFdisplacementIC
 

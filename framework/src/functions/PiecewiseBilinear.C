@@ -43,10 +43,10 @@ PiecewiseBilinear::validParams()
 
 PiecewiseBilinear::PiecewiseBilinear(const InputParameters & parameters)
   : Function(parameters),
+    _xaxis(getParam<int>("xaxis")),
+    _yaxis(getParam<int>("yaxis")),
     _data_file_name(getParam<FileName>("data_file")),
     _axis(getParam<int>("axis")),
-    _yaxis(getParam<int>("yaxis")),
-    _xaxis(getParam<int>("xaxis")),
     _axisValid(_axis > -1 && _axis < 3),
     _yaxisValid(_yaxis > -1 && _yaxis < 3),
     _xaxisValid(_xaxis > -1 && _xaxis < 3),
@@ -132,7 +132,8 @@ PiecewiseBilinear::valueInternal(T t, const P & p) const
   {
     const auto rx = p(_xaxis) * p(_xaxis);
     const auto ry = p(_yaxis) * p(_yaxis);
-    const auto r = std::sqrt(rx + ry);
+    using std::sqrt;
+    const auto r = sqrt(rx + ry);
     retVal = _bilinear_interp->sample(r, t);
   }
   else if (_axisValid)

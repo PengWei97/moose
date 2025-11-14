@@ -88,10 +88,10 @@ bool HttpRequest::parse(std::shared_ptr<IClientStream> stream) {
         path = path.substr(0, question);
     }
 
-    if (query.empty())
-        std::cout << methodString << " " << path << std::endl;
-    else
-        std::cout << methodString << " " << path << " (Query: " << query << ")" << std::endl;
+    // if (query.empty())
+    //     std::cout << methodString << " " << path << std::endl;
+    // else
+    //     std::cout << methodString << " " << path << " (Query: " << query << ")" << std::endl;
 
     while (true) {
         std::string line = stream->receiveLine();
@@ -226,7 +226,7 @@ HttpServer::Processor::Processor(std::shared_ptr<IClientStream> stream, HttpServ
 
             keep_alive_check:
             self->mLastActive = std::chrono::system_clock::now();
-            
+
             #ifdef TINYHTTP_ALLOW_KEEPALIVE
             if (req["Connection"] != "keep-alive")
                 break;
@@ -267,11 +267,11 @@ bool HttpServer::Processor::isTimedOut() const noexcept {
 
 void HttpServer::Processor::shutdown() {
     #ifdef TINYHTTP_THREADING
-    std::unique_lock{mShutdownMutex};
+    std::unique_lock lock{mShutdownMutex};
     #endif
 
     mIsAlive = false;
-    
+
     if (mClientStream && mClientStream->isOpen())
         mClientStream->close();
 
@@ -295,7 +295,7 @@ void HttpServer::cleanupThreadProc() {
 
         if (mSocket == -1)
             continue;
-        
+
         mRequestProcessorListMutex.lock();
         for (auto it = mRequestProcessors.begin(); it != mRequestProcessors.end(); ++it) {
             auto& processor = *it;
@@ -355,7 +355,7 @@ void HttpServer::startListening(const std::variant<uint16_t, std::string> listen
         const auto filename = std::get<std::string>(listen_on);
         struct sockaddr_un remote;
         remote.sun_family = AF_LOCAL;
-        strncpy (remote.sun_path, filename.c_str(), sizeof (remote.sun_path));
+        strcpy(remote.sun_path, filename.c_str());
         remote.sun_path[sizeof (remote.sun_path) - 1] = '\0';
         const auto remote_size = offsetof (struct sockaddr_un, sun_path) + strlen (remote.sun_path);
         const auto retval = bind(mSocket, reinterpret_cast<struct sockaddr*>(&remote), remote_size);
@@ -394,7 +394,7 @@ void HttpServer::shutdown() {
     if (mSocket < 0) {
         return;
     }
-    
+
     mSocket = -1;
 
     puts("Shutting down server");

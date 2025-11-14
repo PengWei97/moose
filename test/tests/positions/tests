@@ -1,5 +1,5 @@
 [Tests]
-  issues = '#23587'
+  issues = '#23587 #30899 #31026'
   design = 'syntax/Positions/index.md'
 
   [test]
@@ -24,6 +24,19 @@
       detail = 'element centroids from a mesh, with or without block restriction,'
       # PR #26848. Clang 16 Apple Si is not compatible.
       machine = X86_64
+    []
+    [mesh_nodes]
+      type = 'JSONDiff'
+      input = 'node_positions.i'
+      jsondiff = 'node_positions_out.json'
+      detail = 'element nodes from a mesh, with or without block restriction,'
+    []
+    [mesh_boundary_nodes]
+      type = 'JSONDiff'
+      input = 'node_positions.i'
+      cli_args = 'Positions/nodes/boundary=right Positions/nodes_block_1/boundary=bottom Outputs/file_base=boundary_nodes_out'
+      jsondiff = 'boundary_nodes_out.json'
+      detail = 'element nodes from a mesh, restricted to a nodeset,'
     []
     [mesh_quadrature_points]
       type = 'JSONDiff'
@@ -51,6 +64,12 @@
       detail = 'triplets on functors that are evaluated to obtain positions,'
       # Needs to be able to find the element containing the origin
       mesh_mode = replicated
+    []
+    [parsed_downselection_expression]
+      type = 'JSONDiff'
+      input = 'parsed_selection_positions.i'
+      jsondiff = 'parsed_selection_positions_out.json'
+      detail = 'a parsed expression selecting positions from other positions objects, depending on the value of a parsed expression,'
     []
     [functor_extrema]
       type = 'JSONDiff'

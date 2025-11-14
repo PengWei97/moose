@@ -1,4 +1,13 @@
-#ifdef MFEM_ENABLED
+//* This file is part of the MOOSE framework
+//* https://mooseframework.inl.gov
+//*
+//* All rights reserved, see COPYRIGHT for full restrictions
+//* https://github.com/idaholab/moose/blob/master/COPYRIGHT
+//*
+//* Licensed under LGPL 2.1, please see LICENSE for details
+//* https://www.gnu.org/licenses/lgpl-2.1.html
+
+#ifdef MOOSE_MFEM_ENABLED
 
 #pragma once
 
@@ -21,6 +30,9 @@ public:
   /// Returns a reference to the fespace used by the gridfunction.
   inline const MFEMFESpace & getFESpace() const { return _fespace; }
 
+  /// Returns the variable name corresponding to the time derivative of the MFEMVariable.
+  inline const VariableName & getTimeDerivativeName() const { return _time_derivative_name; }
+
 protected:
   const MFEMFESpace & _fespace;
 
@@ -30,6 +42,9 @@ private:
 
   /// Stores the constructed gridfunction.
   const std::shared_ptr<mfem::ParGridFunction> _gridfunction{nullptr};
+
+  /// Optional name of the time derivative to associate with this variable in transient problems.
+  const VariableName _time_derivative_name;
 };
 
 #endif

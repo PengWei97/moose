@@ -1,5 +1,3 @@
-#ifdef MFEM_ENABLED
-
 //* This file is part of the MOOSE framework
 //* https://mooseframework.inl.gov
 //*
@@ -9,7 +7,10 @@
 //* Licensed under LGPL 2.1, please see LICENSE for details
 //* https://www.gnu.org/licenses/lgpl-2.1.html
 
+#ifdef MOOSE_MFEM_ENABLED
+
 #include "MFEMMesh.h"
+#include "libmesh/mesh_generation.h"
 
 registerMooseObject("MooseApp", MFEMMesh);
 
@@ -59,7 +60,7 @@ MFEMMesh::buildMesh()
                                                       : getParam<unsigned int>("uniform_refine"));
 
   // multi app should take the mpi comm from moose so is split correctly??
-  auto comm = _app.comm().get();
+  auto comm = this->comm().get();
   _mfem_par_mesh = std::make_shared<mfem::ParMesh>(comm, mfem_ser_mesh);
 
   // Perform parallel refinements
@@ -83,23 +84,7 @@ MFEMMesh::displace(mfem::GridFunction const & displacement)
 void
 MFEMMesh::buildDummyMooseMesh()
 {
-  auto element = new Quad4;
-  element->set_id() = 1;
-  element->processor_id() = 0;
-
-  getMesh().add_elem(element);
-
-  Point pt1(0.0, 0.0, 0.0);
-  Point pt2(1.0, 0.0, 0.0);
-  Point pt3(1.0, 1.0, 0.0);
-  Point pt4(0.0, 1.0, 0.0);
-
-  element->set_node(0, getMesh().add_point(pt1));
-  element->set_node(1, getMesh().add_point(pt2));
-  element->set_node(2, getMesh().add_point(pt3));
-  element->set_node(3, getMesh().add_point(pt4));
-
-  getMesh().prepare_for_use();
+  MeshTools::Generation::build_point(static_cast<UnstructuredMesh &>(getMesh()));
 }
 
 void

@@ -65,14 +65,10 @@ P_out = 1.0e5 # Pa
   compute_density = true
   compute_viscosity = true
   compute_power = true
-  P_tol = 1.0e-4
-  T_tol = 1.0e-4
   implicit = true
   segregated = false
-  staggered_pressure = false
-  monolithic_thermal = false
-  verbose_multiapps = true
-  verbose_subchannel = false
+  verbose_subchannel = true
+  interpolation_scheme = upwind
 []
 
 [ICs]
@@ -159,8 +155,83 @@ P_out = 1.0e5 # Pa
   []
 []
 
+[Postprocessors]
+  [T1]
+    type = SubChannelPointValue
+    variable = T
+    index = 37
+    execute_on = "timestep_end"
+    height = 0.87
+  []
+  [T2]
+    type = SubChannelPointValue
+    variable = T
+    index = 36
+    execute_on = "timestep_end"
+    height = 0.87
+  []
+  [T3]
+    type = SubChannelPointValue
+    variable = T
+    index = 20
+    execute_on = "timestep_end"
+    height = 0.87
+  []
+  [T4]
+    type = SubChannelPointValue
+    variable = T
+    index = 10
+    execute_on = "timestep_end"
+    height = 0.87
+  []
+  [T5]
+    type = SubChannelPointValue
+    variable = T
+    index = 4
+    execute_on = "timestep_end"
+    height = 0.87
+  []
+  [T6]
+    type = SubChannelPointValue
+    variable = T
+    index = 1
+    execute_on = "timestep_end"
+    height = 0.87
+  []
+  [T7]
+    type = SubChannelPointValue
+    variable = T
+    index = 14
+    execute_on = "timestep_end"
+    height = 0.87
+  []
+  [T8]
+    type = SubChannelPointValue
+    variable = T
+    index = 28
+    execute_on = "timestep_end"
+    height = 0.87
+  []
+  ####### Assembly pressure drop
+  [DP_SubchannelDelta]
+    type = SubChannelDelta
+    variable = P
+    execute_on = 'TIMESTEP_END'
+  []
+  #####
+  [Mean_Temp]
+    type = SCMPlanarMean
+    variable = T
+    height = 2
+  []
+  [Total_power]
+    type = ElementIntegralVariablePostprocessor
+    variable = q_prime
+  []
+[]
+
 [Outputs]
-  exodus = true
+  csv = true
 []
 
 [Executioner]
@@ -176,6 +247,7 @@ P_out = 1.0e5 # Pa
 #     type = FullSolveMultiApp
 #     input_files = "3d_LBE_19.i"
 #     execute_on = "timestep_end"
+#     max_procs_per_app = 1
 #   []
 # []
 

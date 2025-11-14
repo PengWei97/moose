@@ -19,6 +19,7 @@
 #include <variant>
 
 // Forward declarations
+class FEProblemBase;
 class MaterialBase;
 class QpMap;
 
@@ -42,7 +43,7 @@ void dataLoad(std::istream & stream, MaterialPropertyStorage & storage, void * c
 class MaterialPropertyStorage
 {
 public:
-  MaterialPropertyStorage(MaterialPropertyRegistry & registry);
+  MaterialPropertyStorage(MaterialPropertyRegistry & registry, FEProblemBase & problem);
 
   /**
    * Basic structure for storing information about a property
@@ -327,7 +328,21 @@ public:
   /**
    * @return The MaterialData for thread \p tid
    */
+  const MaterialData & getMaterialData(const THREAD_ID tid) const { return _material_data[tid]; }
   MaterialData & getMaterialData(const THREAD_ID tid) { return _material_data[tid]; }
+
+  /**
+   * @return The consumers of storage of type \p type
+   */
+  const std::set<const MooseObject *> & getConsumers(Moose::MaterialDataType type) const;
+
+  /**
+   * Add \p object as the consumer of storage of type \p type
+   */
+  void addConsumer(Moose::MaterialDataType type, const MooseObject * object)
+  {
+    _consumers[type].insert(object);
+  }
 
   /**
    * Sets the loading of stateful material properties to recover
@@ -360,6 +375,9 @@ public:
   bool isRestoredProperty(const std::string & name) const;
 
 protected:
+  /// Reference to the problem
+  FEProblemBase & _problem;
+
   /// The actual storage
   std::array<PropsType, MaterialData::max_state + 1> _storage;
 
@@ -368,6 +386,9 @@ protected:
 
   /// the vector of stateful property ids (the vector index is the map to stateful prop_id)
   std::vector<unsigned int> _stateful_prop_id_to_prop_id;
+
+  /// The consumers of this storage
+  std::map<Moose::MaterialDataType, std::set<const MooseObject *>> _consumers;
 
   void sizeProps(MaterialProperties & mp, unsigned int size);
 

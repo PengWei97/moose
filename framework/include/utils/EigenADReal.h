@@ -10,7 +10,9 @@
 #pragma once
 
 #include "ADReal.h"
+#include "libmesh/int_range.h"
 #include "metaphysicl/raw_type.h"
+#include "metaphysicl/metaphysicl_version.h"
 
 namespace Eigen
 {
@@ -20,28 +22,38 @@ template <typename V, typename D, bool asd>
 inline bool
 isinf_impl(const MetaPhysicL::DualNumber<V, D, asd> & a)
 {
-  return std::isinf(a);
+  using std::isinf;
+  return isinf(a);
 }
 
 template <typename V, typename D, bool asd>
 inline bool
 isnan_impl(const MetaPhysicL::DualNumber<V, D, asd> & a)
 {
-  return std::isnan(a);
+  using std::isnan;
+  return isnan(a);
 }
 
 template <typename V, typename D, bool asd>
 inline MetaPhysicL::DualNumber<V, D, asd>
 sqrt(const MetaPhysicL::DualNumber<V, D, asd> & a)
 {
+#if METAPHYSICL_MAJOR_VERSION < 2
   return std::sqrt(a);
+#else
+  return MetaPhysicL::sqrt(a);
+#endif
 }
 
 template <typename V, typename D, bool asd>
 inline MetaPhysicL::DualNumber<V, D, asd>
 abs(const MetaPhysicL::DualNumber<V, D, asd> & a)
 {
+#if METAPHYSICL_MAJOR_VERSION < 2
   return std::abs(a);
+#else
+  return MetaPhysicL::abs(a);
+#endif
 }
 }
 } // namespace Eigen
@@ -64,6 +76,21 @@ struct RawType<Eigen::Matrix<T, M, N, O, M2, N2>>
   static value_type value(const Eigen::Matrix<T, M, N, O, M2, N2> & in)
   {
     return value_type::NullaryExpr([&in](Eigen::Index i) { return raw_value(in(i)); });
+  }
+};
+
+// specialized for RealEigenVector
+template <typename T, int Options, int MaxSize>
+struct RawType<Eigen::Matrix<T, -1, 1, Options, MaxSize, 1>>
+{
+  typedef Eigen::Matrix<typename RawType<T>::value_type, -1, 1, Options, MaxSize, 1> value_type;
+
+  static value_type value(const Eigen::Matrix<T, -1, 1, Options, MaxSize, 1> & in)
+  {
+    value_type ret(in.size());
+    for (const auto i : libMesh::make_range(in.size()))
+      ret(i) = raw_value(in(i));
+    return ret;
   }
 };
 

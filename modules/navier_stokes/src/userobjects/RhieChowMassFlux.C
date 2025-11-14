@@ -43,6 +43,11 @@ RhieChowMassFlux::validParams()
   params.addParam<VariableName>("w", "The z-component of velocity");
   params.addRequiredParam<std::string>("p_diffusion_kernel",
                                        "The diffusion kernel acting on the pressure.");
+  params.addParam<std::vector<std::vector<std::string>>>(
+      "body_force_kernel_names",
+      {},
+      "The body force kernel names."
+      "this double vector would have size index_x_dim: 'f1x f2x; f1y f2y; f1z f2z'");
 
   params.addRequiredParam<MooseFunctorName>(NS::density, "Density functor");
 
@@ -58,7 +63,6 @@ RhieChowMassFlux::validParams()
                              MooseEnum("standard consistent", "standard"),
                              "The method to use in the pressure projection for Ainv - "
                              "standard (SIMPLE) or consistent (SIMPLEC)");
-
   return params;
 }
 
@@ -76,6 +80,8 @@ RhieChowMassFlux::RhieChowMassFlux(const InputParameters & params)
     _face_mass_flux(
         declareRestartableData<FaceCenteredMapFunctor<Real, std::unordered_map<dof_id_type, Real>>>(
             "face_flux", _moose_mesh, blockIDs(), "face_values")),
+    _body_force_kernel_names(
+        getParam<std::vector<std::vector<std::string>>>("body_force_kernel_names")),
     _rho(getFunctor<Real>(NS::density)),
     _pressure_projection_method(getParam<MooseEnum>("pressure_projection_method"))
 {
@@ -158,6 +164,38 @@ RhieChowMassFlux::initialSetup()
   if (!_p_diffusion_kernel)
     paramError("p_diffusion_kernel",
                "The provided diffusion kernel should of type LinearFVAnisotropicDiffusion!");
+
+  // We fetch the body forces kernel to ensure that the face flux correction
+  // is accurate.
+
+  // Check if components match the dimension.
+
+  if (!_body_force_kernel_names.empty())
+  {
+    if (_body_force_kernel_names.size() != _dim)
+      paramError("body_force_kernel_names",
+                 "The dimension of the body force vector does not match the problem dimension.");
+
+    _body_force_kernels.resize(_dim);
+
+    for (const auto dim_i : make_range(_dim))
+      for (const auto & force_name : _body_force_kernel_names[dim_i])
+      {
+        std::vector<LinearFVElementalKernel *> temp_storage;
+        auto base_query_force = _fe_problem.theWarehouse()
+                                    .query()
+                                    .template condition<AttribThread>(_tid)
+                                    .template condition<AttribSysNum>(_vel[dim_i]->sys().number())
+                                    .template condition<AttribSystem>("LinearFVElementalKernel")
+                                    .template condition<AttribName>(force_name)
+                                    .queryInto(temp_storage);
+        if (temp_storage.size() != 1)
+          paramError("body_force_kernel_names",
+                     "The kernel with the given name: " + force_name +
+                         " could not be found or multiple instances were identified.");
+        _body_force_kernels[dim_i].push_back(temp_storage[0]);
+      }
+  }
 }
 
 void
@@ -227,16 +265,18 @@ RhieChowMassFlux::initFaceMassFlux()
     // On the boundary, we just take the boundary values
     else
     {
-      const Elem * const boundary_elem =
-          hasBlocks(fi->elemPtr()->subdomain_id()) ? fi->elemPtr() : fi->neighborPtr();
+      const bool elem_is_fluid = hasBlocks(fi->elemPtr()->subdomain_id());
+      const Elem * const boundary_elem = elem_is_fluid ? fi->elemPtr() : fi->neighborPtr();
 
+      // We need this multiplier in case the face is an internal face and
+      const Real boundary_normal_multiplier = elem_is_fluid ? 1.0 : -1.0;
       const Moose::FaceArg boundary_face{
           fi, Moose::FV::LimiterType::CentralDifference, true, false, boundary_elem, nullptr};
 
       const Real face_rho = _rho(boundary_face, time_arg);
       for (const auto dim_i : index_range(_vel))
-        density_times_velocity(dim_i) =
-            face_rho * raw_value((*_vel[dim_i])(boundary_face, time_arg));
+        density_times_velocity(dim_i) = boundary_normal_multiplier * face_rho *
+                                        raw_value((*_vel[dim_i])(boundary_face, time_arg));
     }
 
     _face_mass_flux[fi->id()] = density_times_velocity * fi->normal();
@@ -444,8 +484,12 @@ RhieChowMassFlux::populateCouplingFunctors(
     }
     else
     {
-      const ElemInfo & elem_info =
-          hasBlocks(fi->elemPtr()->subdomain_id()) ? *fi->elemInfo() : *fi->neighborInfo();
+      const bool elem_is_fluid = hasBlocks(fi->elemPtr()->subdomain_id());
+
+      // We need this multiplier in case the face is an internal face and
+      const Real boundary_normal_multiplier = elem_is_fluid ? 1.0 : -1.0;
+
+      const ElemInfo & elem_info = elem_is_fluid ? *fi->elemInfo() : *fi->neighborInfo();
       const auto elem_dof = elem_info.dofIndices()[_global_momentum_system_numbers[0]][0];
 
       // If it is a Dirichlet BC, we use the dirichlet value the make sure the face flux
@@ -457,8 +501,21 @@ RhieChowMassFlux::populateCouplingFunctors(
         face_rho = _rho(boundary_face, Moose::currentState());
 
         for (const auto dim_i : make_range(_dim))
+        {
+
           face_hbya(dim_i) =
               -MetaPhysicL::raw_value((*_vel[dim_i])(boundary_face, Moose::currentState()));
+
+          if (!_body_force_kernel_names.empty())
+            for (const auto & force_kernel : _body_force_kernels[dim_i])
+            {
+              force_kernel->setCurrentElemInfo(&elem_info);
+              face_hbya(dim_i) -= force_kernel->computeRightHandSideContribution() *
+                                  ainv_reader[dim_i](elem_dof) /
+                                  elem_info.volume(); // zero-term expansion
+            }
+          face_hbya(dim_i) *= boundary_normal_multiplier;
+        }
       }
       // Otherwise we just do a one-term expansion (so we just use the element value)
       else
@@ -467,7 +524,7 @@ RhieChowMassFlux::populateCouplingFunctors(
 
         face_rho = _rho(makeElemArg(elem_info.elem()), time_arg);
         for (const auto dim_i : make_range(_dim))
-          face_hbya(dim_i) = hbya_reader[dim_i](elem_dof);
+          face_hbya(dim_i) = boundary_normal_multiplier * hbya_reader[dim_i](elem_dof);
       }
 
       // We just do a one-term expansion for 1/A no matter what
@@ -496,6 +553,7 @@ RhieChowMassFlux::computeHbyA(const bool with_updated_pressure, bool verbose)
 
   _HbyA_raw.clear();
   _Ainv_raw.clear();
+
   for (auto system_i : index_range(_momentum_systems))
   {
     LinearImplicitSystem * momentum_system = _momentum_implicit_systems[system_i];
@@ -642,6 +700,12 @@ RhieChowMassFlux::computeHbyA(const bool with_updated_pressure, bool verbose)
     }
 
     Ainv.pointwise_mult(Ainv, *_cell_volumes);
+
+    if (verbose)
+    {
+      _console << " 1/A" << std::endl;
+      Ainv.print();
+    }
   }
 
   // We fill the 1/A and H/A functors

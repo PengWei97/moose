@@ -231,7 +231,7 @@ The function $f(x)$ *is defined everywhere in the domain*.
 $f(x)$ can be evaluated at the point $x=0.8$, for example, by computing:
 
 !equation
-f(2) = \sum_{i=0}^2 c_i 0.8^i = \sum_{i=0}^2 c_i g_i(0.8),
+f(0.8) = \sum_{i=0}^2 c_i 0.8^i = \sum_{i=0}^2 c_i g_i(0.8),
 
 where the $c_i$ correspond to the coefficients in the solution vector, and the $g_i$ are the
 respective functions.
@@ -296,6 +296,23 @@ Generating a weak form generally involves these steps:
 !alert note title=Exercise
 Obtain the weak form for the equations listed on the previous slide
 and the shape functions.
+
+!---
+
+## Looking back
+
+Polynomial fitting:
+
+- Form equations that the coefficients of a polynomial function must satisfy to fit
+- Solve the linear system
+- Reconstruct the fit by evaluating the polynomial defined by its coefficients
+
+Finite Element method:
+
+- Form equations on each element to minimize the residual of an equation
+- Solve the linear system
+- Reconstruct the function
+- Re-evaluate the equation and iterate (for nonlinear equations)
 
 !---
 
@@ -369,7 +386,7 @@ Write in inner product notation. Each term of the equation will inherit from an 
 
 ## Corresponding MOOSE input file blocks
 
-!style! fontsize=140%
+!style! fontsize=120%
 
 !equation
 \underbrace{\left(\nabla\psi, k\nabla u \right)}_{Kernel} -
@@ -379,13 +396,13 @@ Write in inner product notation. Each term of the equation will inherit from an 
 
 !style-end!
 
-!style! fontsize=60%
+!style! fontsize=40%
 
 !row!
 
 !col! width=10%
 
-!listing test/tests/kernels/2d_diffusion/2d_diffusion_neumannbc_test.i block=Kernels remove=Kernels/active link=False
+!listing test/tests/kernels/2d_diffusion/neumannbc.i block=Kernels link=False
 
 !col-end!
 
@@ -397,7 +414,7 @@ $\quad$
 
 !col! width=10%
 
-!listing test/tests/kernels/2d_diffusion/2d_diffusion_neumannbc_test.i block=BCs remove=BCs/active BCs/left link=False
+!listing test/tests/kernels/2d_diffusion/neumannbc.i block=BCs BCs/left link=False
 
 !col-end!
 

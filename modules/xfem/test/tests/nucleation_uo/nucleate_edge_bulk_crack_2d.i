@@ -1,3 +1,7 @@
+# Nucleate cracks in the bulk and then on the edges
+# checking that the domain integral fracture integrals
+# are being computed at every crack tip (6 crack tips)
+
 [GlobalParams]
   displacements = 'disp_x disp_y'
   volumetric_locking_correction = true
@@ -56,7 +60,7 @@
     bottom_left = '-2.21 0.89 0'
     top_right = '-1.79 1.01 0'
     boundary_new = top_mid_left_ss
-    boundaries_old = top
+    included_boundaries = top
   []
   [top_mid_ss]
     type = SideSetsFromBoundingBoxGenerator
@@ -64,7 +68,7 @@
     bottom_left = '-0.21 0.89 0'
     top_right = '0.21 1.01 0'
     boundary_new = top_mid_ss
-    boundaries_old = top
+    included_boundaries = top
   []
   [top_mid_right_ss]
     type = SideSetsFromBoundingBoxGenerator
@@ -72,7 +76,7 @@
     bottom_left = '1.79 0.89 0'
     top_right = '2.21 1.01 0'
     boundary_new = top_mid_right_ss
-    boundaries_old = top
+    included_boundaries = top
   []
 
   [nucleation_strip]
@@ -97,7 +101,6 @@
   youngs_modulus = 207000
   block = 0
   incremental = false
-  used_by_xfem_to_grow_crack = true
 []
 
 [UserObjects]

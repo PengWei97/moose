@@ -7,13 +7,17 @@
 #* Licensed under LGPL 2.1, please see LICENSE for details
 #* https://www.gnu.org/licenses/lgpl-2.1.html
 
-import re, os, sys, shutil, json
+import re, os, sys, shutil, json, importlib.util, inspect
 import mooseutils
 from TestHarness import OutputInterface, util
 from TestHarness.StatusSystem import StatusSystem
+from TestHarness.validation import ValidationCase, ValidationCaseClasses
 from FactorySystem.MooseObject import MooseObject
+from FactorySystem.InputParameters import InputParameters
 from pathlib import Path
 from dataclasses import dataclass
+from copy import deepcopy
+from typing import Optional
 
 class Tester(MooseObject, OutputInterface):
     """
@@ -42,7 +46,6 @@ class Tester(MooseObject, OutputInterface):
         params.addParam('allow_test_objects', False, "Allow the use of test objects by adding --allow-test-objects to the command line.")
 
         params.addParam('valgrind', 'NONE', "Set to (NONE, NORMAL, HEAVY) to determine which configurations where valgrind will run.")
-        params.addParam('tags',      [], "A list of strings")
         params.addParam('max_buffer_size', None, "Bytes allowed in stdout/stderr before it is subjected to being trimmed. Set to -1 to ignore output size restrictions. "
                                                  "If 'max_buffer_size' is not set, the default value of 'None' triggers a reasonable value (e.g. 100 kB)")
         params.addParam('parallel_scheduling', False, "Allow all tests in test spec file to run in parallel (adheres to prereq rules).")
@@ -62,6 +65,7 @@ class Tester(MooseObject, OutputInterface):
         params.addParam('library_mode',  ['ALL'], "A test that only runs when libraries are built under certain configurations ('ALL', 'STATIC', 'DYNAMIC')")
         params.addParam('unique_ids',    ['ALL'], "Deprecated. Use unique_id instead.")
         params.addParam('recover',       True,    "A test that runs with '--recover' mode enabled")
+        params.addParam('restep',        True,    "A test that can run with --test-restep")
         params.addParam('vtk',           ['ALL'], "A test that runs only if VTK is detected ('ALL', 'TRUE', 'FALSE')")
         params.addParam('tecplot',       ['ALL'], "A test that runs only if Tecplot is detected ('ALL', 'TRUE', 'FALSE')")
         params.addParam('dof_id_bytes',  ['ALL'], "A test that runs only if libmesh is configured --with-dof-id-bytes = a specific number, e.g. '4', '8'")
@@ -81,7 +85,6 @@ class Tester(MooseObject, OutputInterface):
         params.addParam('libpng',        ['ALL'], "A test that runs only if libpng is available ('ALL', 'TRUE', 'FALSE')")
         params.addParam('libtorch',      ['ALL'], "A test that runs only if libtorch is available ('ALL', 'TRUE', 'FALSE')")
         params.addParam('libtorch_version', ['ALL'], "A list of libtorch versions for which this test will run on, supports normal comparison operators ('<', '>', etc...)")
-        params.addParam('mfem', ['ALL'], "A test that runs only if mfem is available ('ALL', 'TRUE', 'FALSE')")
         params.addParam('installation_type',['ALL'], "A test that runs under certain executable installation configurations ('ALL', 'IN_TREE', 'RELOCATED')")
 
         params.addParam('capabilities',      "", "A test that only runs if all listed capabilities are supported by the executable")
@@ -91,7 +94,6 @@ class Tester(MooseObject, OutputInterface):
         params.addParam('env_vars_not_set', [], "A test that only runs if all the environment variables listed are not set")
         params.addParam('should_execute', True, 'Whether or not the executable needs to be run.  Use this to chain together multiple tests based off of one executeable invocation')
         params.addParam('required_submodule', [], "A list of initialized submodules for which this test requires.")
-        params.addParam('required_objects', [], "A list of required objects that are in the executable.")
         params.addParam('required_applications', [], "A list of required registered applications that are in the executable.")
         params.addParam('check_input',    False, "Check for correct input file syntax")
         params.addParam('display_required', False, "The test requires and active display for rendering (i.e., ImageDiff tests).")
@@ -113,7 +115,71 @@ class Tester(MooseObject, OutputInterface):
         params.addParam("collections", [], "A means for defining a collection of tests for SQA process.")
         params.addParam("classification", 'functional', "A means for defining a requirement classification for SQA process.")
 
+        # HPC
         params.addParam('hpc', True, 'Set to false to not run with HPC schedulers (PBS and slurm)')
+        params.addParam('hpc_mem_per_cpu', "Memory requirement per CPU to use for HPC submission")
+
+        params.addParam("validation_test", None, "List of validation scripts to run with this test")
+
+        return params
+
+    @staticmethod
+    def augmentParams(params):
+        # Augment our parameters with parameters from the validation test, if we
+        # have any validation tests
+        script = params['validation_test']
+        validation_classes = []
+        if script:
+            # Sanity checks
+            if '..' in script:
+                message = f'validation_test={script} out of test directory'
+                raise ValueError(message)
+            path = os.path.abspath(script)
+            if not os.path.exists(script):
+                message = f'validation_test={path} not found'
+                raise FileNotFoundError(message)
+
+            # Load the script; throw an exception here if it fails
+            # so that the Parser can report a reasonable error
+            spec = importlib.util.spec_from_file_location('validation_load', path)
+            module = importlib.util.module_from_spec(spec)
+            try:
+                spec.loader.exec_module(module)
+            except Exception as e:
+                raise ImportError(f'In validation_test={path}:\n{e}')
+
+            # Find the classes that are derived from the base validation
+            # classes in the module (the user's python script)
+            module_classes = inspect.getmembers(module, inspect.isclass)
+            base_classes = [c[1] for c in module_classes if c[1] in ValidationCaseClasses]
+            other_classes = [c[1] for c in module_classes if c[1] not in base_classes]
+            subclasses = [c for c in other_classes if issubclass(c, ValidationCase)]
+
+            # Store each of the classes in the script that derives from
+            # ValidationCase, and add their parameters to this Tester's
+            # parameters
+            validation_classes = []
+            validation_params = InputParameters()
+            for subclass in subclasses:
+                validation_params = subclass.validParams()
+
+                # Don't allow validation parameters that override
+                # parameters from the Tester
+                for key in validation_params.keys():
+                    if key in params:
+                        raise Exception(f'Duplicate parameter "{key}" from validation test')
+
+                # Collect the cumulative validation params
+                validation_params += subclass.validParams()
+                # Store the class so that it can be used later
+                validation_classes.append(subclass)
+
+            # Extend the Tester parameters
+            params += validation_params
+
+        # Store the classes that are used in validation so that they
+        # can be constructed within the Job at a later time
+        params.addPrivateParam('_validation_classes', validation_classes)
 
         return params
 
@@ -123,6 +189,7 @@ class Tester(MooseObject, OutputInterface):
     @dataclass
     class JSONMetadata:
         path: os.PathLike
+        data: Optional[dict] = None
 
     def __init__(self, name, params):
         MooseObject.__init__(self, name, params)
@@ -131,7 +198,6 @@ class Tester(MooseObject, OutputInterface):
         self.specs = params
         self.joined_out = ''
         self.process = None
-        self.tags = params['tags']
         self.__caveats = set([])
 
         # Alternate text we want to print as part of our status instead of the
@@ -172,6 +238,9 @@ class Tester(MooseObject, OutputInterface):
 
         # Paths to additional JSON metadata that can be collected
         self.json_metadata: dict[str, Tester.JSONMetadata] = {}
+
+        # The validation classes the user specified
+        self._validation_classes = self.parameters()['_validation_classes']
 
     def getStatus(self):
         return self.test_status.getStatus()
@@ -222,13 +291,16 @@ class Tester(MooseObject, OutputInterface):
 
     def getResults(self, options) -> dict:
         """Get the results dict for this Tester"""
-        output_files = [os.path.join(self.getTestDir(), file) for file in self.getOutputFiles(options)]
-        json_metadata = {k: os.path.join(self.getTestDir(), v.path) if v else None for k, v in self.json_metadata.items()}
-        return {'name': self.__class__.__name__,
-                'command': self.getCommand(options),
-                'input_file': self.getInputFile(),
-                'output_files': output_files,
-                'json_metadata': json_metadata}
+        results = {'name': self.__class__.__name__,
+                   'command': self.getCommand(options),
+                   'input_file': self.getInputFile()}
+        json_metadata = {}
+        for key, value in self.json_metadata.items():
+            if value.data:
+                json_metadata[key] = value.data
+        if json_metadata:
+            results['json_metadata'] = json_metadata
+        return results
 
     def getStatusMessage(self):
         return self.__tester_message
@@ -506,16 +578,29 @@ class Tester(MooseObject, OutputInterface):
         """
         reasons = {}
         checks = options._checks
-        capabilities = options._capabilities
 
-        tag_match = False
-        for t in self.tags:
-            if t in options.runtags:
-                tag_match = True
-                break
-        if len(options.runtags) > 0 and not tag_match:
-            self.setStatus(self.silent)
-            return False
+        # augment capabilities of the application with specs of the current tester
+        if options._capabilities is not None:
+            capabilities = options._capabilities.copy()
+            def augment(key, val_doc):
+                if key in capabilities:
+                    raise ValueError(f"Capability {key} is defined by the app, but it is a reserved dynamic test harness capability. This is an application bug.")
+                capabilities[key] = val_doc
+
+            # NOTE: If you add to this list, add the capability name as a reserved
+            # capability within MooseApp::checkReservedCapability()
+            augment('scale_refine', [options.scaling, 'The number of refinements to do when scaling'])
+            if options.valgrind_mode == '':
+                augment('valgrind', [False, 'Not running with valgrind'])
+            else:
+                augment('valgrind', [options.valgrind_mode.lower(), 'Performing valgrind testing'])
+            augment('recover', [options.enable_recover, 'Recover testing'])
+            augment('heavy', [options.all_tests or options.heavy_tests, 'Running with heavy tests'])
+            augment('mpi_procs', [self.getProcs(options), 'Number of MPI processes'])
+            augment('num_threads', [self.getThreads(options), 'Number of threads'])
+            augment('compute_device', [options.compute_device, 'Compute device'])
+        else:
+            capabilities = None
 
         # If something has already deemed this test a failure
         if self.isFail():
@@ -586,6 +671,8 @@ class Tester(MooseObject, OutputInterface):
         # If we're running in recover mode skip tests that have recover = false
         elif options.enable_recover and self.specs['recover'] == False:
             reasons['recover'] = 'NO RECOVER'
+        elif options.enable_restep and self.specs['restep'] == False:
+            reasons['restep'] = 'NO RESTEP'
 
         # AD size check
         min_ad_size = self.specs['min_ad_size']
@@ -633,21 +720,40 @@ class Tester(MooseObject, OutputInterface):
             reasons['libtorch_version'] = 'using libtorch ' + str(checks['libtorch_version']) + ' REQ: ' + libtorch_version
 
         # Check for supported capabilities
+        capabilities_present = None
         if self.specs['capabilities']:
-            if capabilities is None:
-                raise Exception('Capabilities are not available')
+            assert capabilities is not None
             capabilities_present = util.checkCapabilities(capabilities,
                                                           self.specs['capabilities'],
                                                           certain=self.specs['dynamic_capabilities'])[0]
             if not capabilities_present:
                 reasons['missing_capabilities'] = 'Needs: ' + self.specs['capabilities']
 
+        # Check for required capabilities
+        if options._required_capabilities:
+            assert capabilities is not None
+
+            missing = False
+            if capabilities_present is not None:
+                modified_capabilities = deepcopy(capabilities)
+                for k, v in options._required_capabilities:
+                    assert k in capabilities
+                    modified_capabilities[k][0] = v
+
+                modified_present = util.checkCapabilities(modified_capabilities,
+                                                          self.specs['capabilities'],
+                                                          certain=True)[0]
+                missing = capabilities_present != modified_present
+
+            if not missing:
+                reasons['missing_required_capabilities'] = 'Missing required capabilities'
+
         # PETSc and SLEPc is being explicitly checked above
         local_checks = ['platform', 'machine', 'compiler', 'mesh_mode', 'method', 'library_mode',
                         'unique_ids', 'vtk', 'tecplot', 'petsc_debug', 'curl', 'superlu', 'mumps',
                         'strumpack', 'unique_id', 'slepc',
                         'boost', 'fparser_jit', 'parmetis', 'chaco', 'party', 'ptscotch',
-                        'threading', 'libpng', 'libtorch', 'mfem']
+                        'threading', 'libpng', 'libtorch']
 
         for check in local_checks:
             test_platforms = set()
@@ -692,14 +798,6 @@ class Tester(MooseObject, OutputInterface):
         for file in self.specs['depend_files']:
             if not os.path.isfile(os.path.join(self.specs['base_dir'], file)):
                 reasons['depend_files'] = 'DEPEND FILES'
-
-        # Check to see if we have the required object names
-        if self.specs['required_objects'] and options._app_objects is None:
-            raise Exception('Cannot used required_objects; app objects not available')
-        for var in self.specs['required_objects']:
-            if var not in options._app_objects:
-                reasons['required_objects'] = '%s not found in executable' % var
-                break
 
         # We extract the registered apps only if we need them
         if self.specs["required_applications"] and checks["registered_apps"] is None:
@@ -828,9 +926,9 @@ class Tester(MooseObject, OutputInterface):
         if output:
             output = output.rstrip() + '\n\n'
 
-        # Check existance of metadata
+        # Load metadata if it exists
         if not self.isSkip() and self.json_metadata:
-            output += 'Checking JSON metadata...\n'
+            output += 'Loading JSON metadata...\n'
             if exit_code == 0:
                 for key, entry in self.json_metadata.items():
                     path = os.path.join(self.getTestDir(), entry.path)
@@ -838,18 +936,17 @@ class Tester(MooseObject, OutputInterface):
                     if os.path.isfile(path):
                         try:
                             with open(path, 'r') as f:
-                                result = json.load(f)
-                                del result
+                                entry.data = json.load(f)
                         except:
                             output += f'{prefix}cannot be loaded\n'
                             self.setStatus(self.fail, 'BAD METADATA')
                         else:
-                            output += f'{prefix}exists and is valid\n'
+                            output += f'{prefix}loaded\n'
                     else:
                         output += f'{prefix}does not exist\n'
                         self.setStatus(self.fail, 'MISSING METADATA')
             else:
-                output += '  Not checking due to non-zero exit code\n'
+                output += '  Not loading due to non-zero exit code\n'
             output += '\n'
 
         # If the tester requested to be skipped at the last minute, report that.

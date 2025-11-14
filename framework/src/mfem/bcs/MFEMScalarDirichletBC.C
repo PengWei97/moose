@@ -1,7 +1,15 @@
-#ifdef MFEM_ENABLED
+//* This file is part of the MOOSE framework
+//* https://mooseframework.inl.gov
+//*
+//* All rights reserved, see COPYRIGHT for full restrictions
+//* https://github.com/idaholab/moose/blob/master/COPYRIGHT
+//*
+//* Licensed under LGPL 2.1, please see LICENSE for details
+//* https://www.gnu.org/licenses/lgpl-2.1.html
+
+#ifdef MOOSE_MFEM_ENABLED
 
 #include "MFEMScalarDirichletBC.h"
-#include "MFEMProblem.h"
 
 registerMooseObject("MooseApp", MFEMScalarDirichletBC);
 
@@ -10,24 +18,20 @@ MFEMScalarDirichletBC::validParams()
 {
   InputParameters params = MFEMEssentialBC::validParams();
   params.addClassDescription("Applies a Dirichlet condition to a scalar variable.");
-  params.addRequiredParam<Real>("value", "The scalar value to use in the Dirichlet condition");
+  params.addParam<MFEMScalarCoefficientName>(
+      "coefficient", "0.", "The coefficient setting the values on the essential boundary");
   return params;
 }
 
 MFEMScalarDirichletBC::MFEMScalarDirichletBC(const InputParameters & parameters)
-  : MFEMEssentialBC(parameters),
-    _coef(getMFEMProblem().getCoefficients().declareScalar<mfem::ConstantCoefficient>(
-        "__ScalarDirichletBC_" + parameters.get<std::string>("_unique_name"),
-        getParam<Real>("value")))
+  : MFEMEssentialBC(parameters), _coef(getScalarCoefficient("coefficient"))
 {
 }
 
 void
-MFEMScalarDirichletBC::ApplyBC(mfem::GridFunction & gridfunc, mfem::Mesh & mesh)
+MFEMScalarDirichletBC::ApplyBC(mfem::GridFunction & gridfunc)
 {
-  mfem::Array<int> ess_bdrs(mesh.bdr_attributes.Max());
-  ess_bdrs = getBoundaries();
-  gridfunc.ProjectBdrCoefficient(_coef, ess_bdrs);
+  gridfunc.ProjectBdrCoefficient(_coef, getBoundaryMarkers());
 }
 
 #endif

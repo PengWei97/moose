@@ -16,7 +16,7 @@
   registerPhysicsBaseTasks(app_name, derived_name);                                                \
   registerMooseAction(app_name, derived_name, "add_geometric_rm");                                 \
   registerMooseAction(app_name, derived_name, "add_variable");                                     \
-  registerMooseAction(app_name, derived_name, "add_ic");                                           \
+  registerMooseAction(app_name, derived_name, "add_fv_ic");                                        \
   registerMooseAction(app_name, derived_name, "add_material");                                     \
   registerMooseAction(app_name, derived_name, "add_user_object");                                  \
   registerMooseAction(app_name, derived_name, "add_postprocessor");                                \
@@ -73,6 +73,12 @@ public:
   const std::vector<BoundaryName> & getWallBoundaries() const { return _wall_boundaries; }
   /// Get the hydraulic separator boundaries
   const std::vector<BoundaryName> & getHydraulicSeparators() const { return _hydraulic_separators; }
+  /// Get the type of the inlet BC
+  NS::MomentumInletTypes inletBoundaryType(const BoundaryName & boundary_name) const
+  {
+    return NS::MomentumInletTypes(
+        static_cast<int>(libmesh_map_find(_momentum_inlet_types, boundary_name)));
+  }
   /// Get the inlet direction if using a flux inlet
   const std::vector<Point> & getFluxInletDirections() const { return _flux_inlet_directions; }
   /// Get the inlet flux postprocessor if using a flux inlet
@@ -103,6 +109,7 @@ protected:
   virtual void addMomentumTimeKernels() = 0;
   virtual void addMomentumPressureKernels() = 0;
   virtual void addMomentumGravityKernels() = 0;
+  virtual void addMomentumFrictionKernels() = 0;
   virtual void addMomentumBoussinesqKernels() = 0;
 
   /// Functions adding boundary conditions for the flow simulation.
@@ -119,6 +126,8 @@ protected:
   void addPorousMediumSpeedMaterial();
   /// Add material to define the local speed with no porous medium treatment
   void addNonPorousMediumSpeedMaterial();
+  /// Function which adds the general functor fluid properties functor material to define fluid functor material property
+  void addFluidPropertiesFunctorMaterial();
 
   /// Function which adds the RhieChow interpolator user objects for weakly and incompressible formulations
   virtual void addRhieChowUserObjects() = 0;
@@ -179,6 +188,13 @@ protected:
 
   /// Can be set to a coupled turbulence physics
   const WCNSFVTurbulencePhysics * _turbulence_physics;
+
+  /// Subdomains where we want to have volumetric friction
+  std::vector<std::vector<SubdomainName>> _friction_blocks;
+  /// The friction correlation types used for each block
+  std::vector<std::vector<std::string>> _friction_types;
+  /// The coefficients used for each item if friction type
+  std::vector<std::vector<std::string>> _friction_coeffs;
 
   /// Boundaries with a flow inlet specified on them
   const std::vector<BoundaryName> _inlet_boundaries;

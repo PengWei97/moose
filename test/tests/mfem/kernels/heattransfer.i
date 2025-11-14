@@ -23,14 +23,20 @@
   []
 []
 
-[Functions]
-  [reservoir_far_temperature]
-    type = ParsedFunction
-    expression = 0.5
+[AuxVariables]
+  inactive = average_temperature
+  [average_temperature]
+    type = MFEMVariable
+    fespace = H1FESpace
   []
-  [heat_transfer_coefficient]
-    type = ParsedFunction
-    expression = 5.0
+[]
+
+[AuxKernels]
+  inactive = average_field
+  [average_field]
+    type = MFEMScalarTimeAverageAux
+    variable = average_temperature
+    source = temperature
   []
 []
 
@@ -38,12 +44,10 @@
   [diff]
     type = MFEMDiffusionKernel
     variable = temperature
-    coefficient = thermal_conductivity
   []
   [dT_dt]
     type = MFEMTimeDerivativeMassKernel
     variable = temperature
-    coefficient = volumetric_heat_capacity
   []
 []
 
@@ -53,28 +57,19 @@
     type = MFEMScalarDirichletBC
     variable = temperature
     boundary = '1'
-    value = 1.0
+    coefficient = 1.0
   []
   [top_convective]
     type = MFEMConvectiveHeatFluxBC
     variable = temperature
     boundary = '2'
-    T_infinity = reservoir_far_temperature
-    heat_transfer_coefficient = heat_transfer_coefficient
+    T_infinity = .5
+    heat_transfer_coefficient = 5
   []
   [top_dirichlet]
     type = MFEMScalarDirichletBC
     variable = temperature
     boundary = '2'
-    value = 0.0
-  []
-[]
-
-[FunctorMaterials]
-  [Substance]
-    type = MFEMGenericConstantFunctorMaterial
-    prop_names = 'thermal_conductivity volumetric_heat_capacity'
-    prop_values = '1.0 1.0'
   []
 []
 

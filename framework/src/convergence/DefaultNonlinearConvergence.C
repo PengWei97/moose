@@ -12,6 +12,7 @@
 #include "FEProblemBase.h"
 #include "PetscSupport.h"
 #include "NonlinearSystemBase.h"
+#include "ConvergenceIterationTypes.h"
 
 #include "libmesh/equation_systems.h"
 
@@ -25,7 +26,7 @@ registerMooseObject("MooseApp", DefaultNonlinearConvergence);
 InputParameters
 DefaultNonlinearConvergence::validParams()
 {
-  InputParameters params = Convergence::validParams();
+  InputParameters params = DefaultConvergenceBase::validParams();
   params += FEProblemSolve::feProblemDefaultConvergenceParams();
 
   params.addPrivateParam<bool>("added_as_default", false);
@@ -36,8 +37,7 @@ DefaultNonlinearConvergence::validParams()
 }
 
 DefaultNonlinearConvergence::DefaultNonlinearConvergence(const InputParameters & parameters)
-  : Convergence(parameters),
-    _added_as_default(getParam<bool>("added_as_default")),
+  : DefaultConvergenceBase(parameters),
     _fe_problem(*getCheckedPointerParam<FEProblemBase *>("_fe_problem_base")),
     _nl_abs_div_tol(getSharedExecutionerParam<Real>("nl_abs_div_tol")),
     _nl_rel_div_tol(getSharedExecutionerParam<Real>("nl_div_tol")),
@@ -65,11 +65,12 @@ DefaultNonlinearConvergence::DefaultNonlinearConvergence(const InputParameters &
 }
 
 void
-DefaultNonlinearConvergence::initialSetup()
+DefaultNonlinearConvergence::checkIterationType(IterationType it_type) const
 {
-  Convergence::initialSetup();
+  DefaultConvergenceBase::checkIterationType(it_type);
 
-  checkDuplicateSetSharedExecutionerParams();
+  if (it_type != ConvergenceIterationTypes::NONLINEAR)
+    mooseError("DefaultNonlinearConvergence can only be used with nonlinear solves.");
 }
 
 bool
@@ -82,8 +83,8 @@ DefaultNonlinearConvergence::checkRelativeConvergence(const unsigned int /*it*/,
 {
   if (fnorm <= ref_norm * rel_tol)
   {
-    oss << "Converged due to residual norm " << fnorm << " < relative tolerance (" << rel_tol
-        << ")\n";
+    oss << "Converged due to relative/normalized residual norm " << fnorm / ref_norm
+        << " < relative tolerance (" << rel_tol << ")\n";
     return true;
   }
   else
@@ -240,18 +241,4 @@ DefaultNonlinearConvergence::checkConvergence(unsigned int iter)
   verboseOutput(oss);
 
   return status;
-}
-
-void
-DefaultNonlinearConvergence::checkDuplicateSetSharedExecutionerParams() const
-{
-  if (_duplicate_shared_executioner_params.size() > 0 && !_added_as_default)
-  {
-    std::ostringstream oss;
-    oss << "The following parameters were set in both this Convergence object and the "
-           "executioner:\n";
-    for (const auto & param : _duplicate_shared_executioner_params)
-      oss << "  " << param << "\n";
-    mooseError(oss.str());
-  }
 }

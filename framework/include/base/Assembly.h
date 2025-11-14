@@ -13,6 +13,7 @@
 #include "MooseArray.h"
 #include "MooseTypes.h"
 #include "MooseVariableFE.h"
+#include "MoosePassKey.h"
 #include "ArbitraryQuadrature.h"
 
 #include "libmesh/dense_vector.h"
@@ -43,6 +44,7 @@ template <typename T>
 class NumericVector;
 template <typename T>
 class SparseMatrix;
+class StaticCondensation;
 }
 
 // MOOSE Forward Declares
@@ -61,6 +63,13 @@ typedef MooseVariableFE<RealEigenVector> ArrayMooseVariable;
 class XFEMInterface;
 class SubProblem;
 class NodeFaceConstraint;
+
+#ifdef MOOSE_KOKKOS_ENABLED
+namespace Moose::Kokkos
+{
+class Assembly;
+}
+#endif
 
 // Assembly.h does not import Moose.h nor libMeshReducedNamespace.h
 using libMesh::FEBase;
@@ -210,6 +219,15 @@ public:
     return constify_ref(_vector_fe_face_neighbor[dim][type]);
   }
 
+#ifdef MOOSE_KOKKOS_ENABLED
+  /**
+   * Key structure for APIs manipulating internal shape and quadrature data. Developers in blessed
+   * classes may create keys using simple curly braces \p {} or may be more explicit and use \p
+   * Assembly::InternalDataKey{}
+   */
+  using InternalDataKey = Moose::PassKey<Moose::Kokkos::Assembly>;
+#endif
+
   /**
    * Returns the reference to the current quadrature being used
    * @return A _reference_ to the pointer.  Make sure to store this as a reference!
@@ -221,6 +239,17 @@ public:
    * @return A _reference_ to the pointer.  Make sure to store this as a reference!
    */
   libMesh::QBase * const & writeableQRule() { return _current_qrule; }
+
+#ifdef MOOSE_KOKKOS_ENABLED
+  /**
+   * Returns the pointer to the quadrature of specified block and dimension
+   * @return A pointer.
+   */
+  libMesh::QBase * writeableQRule(unsigned int dim, SubdomainID block, InternalDataKey)
+  {
+    return qrules(dim, block).vol.get();
+  }
+#endif
 
   /**
    * Returns the reference to the quadrature points
@@ -284,7 +313,7 @@ public:
    * Get the coordinate system type
    * @return A reference to the coordinate system type
    */
-  const Moose::CoordinateSystemType & coordSystem() { return _coord_type; }
+  const Moose::CoordinateSystemType & coordSystem() const { return _coord_type; }
 
   /**
    * Returns the reference to the current quadrature being used on a current face
@@ -297,6 +326,17 @@ public:
    * @return A _reference_.  Make sure to store this as a reference!
    */
   libMesh::QBase * const & writeableQRuleFace() { return _current_qrule_face; }
+
+#ifdef MOOSE_KOKKOS_ENABLED
+  /**
+   * Returns the pointer to the quadrature used on a face of specified block and dimension
+   * @return A pointer.
+   */
+  libMesh::QBase * writeableQRuleFace(unsigned int dim, SubdomainID block, InternalDataKey)
+  {
+    return qrules(dim, block).face.get();
+  }
+#endif
 
   /**
    * Returns the reference to the current quadrature being used
@@ -397,7 +437,7 @@ public:
    * Returns the reference to the current element volume
    * @return A _reference_.  Make sure to store this as a reference!
    */
-  const Real & elemVolume() { return _current_elem_volume; }
+  const Real & elemVolume() const { return _current_elem_volume; }
 
   /**
    * Returns the current side
@@ -421,7 +461,7 @@ public:
    * Returns the reference to the volume of current side element
    * @return A _reference_.  Make sure to store this as a reference!
    */
-  const Real & sideElemVolume() { return _current_side_volume; }
+  const Real & sideElemVolume() const { return _current_side_volume; }
 
   /**
    * Return the neighbor element
@@ -1782,6 +1822,15 @@ public:
       re(i) += v(j);
   }
 
+  void saveLocalADArray(std::vector<ADReal> & re,
+                        unsigned int i,
+                        unsigned int ntest,
+                        const ADRealEigenVector & v) const
+  {
+    for (unsigned int j = 0; j < v.size(); ++j, i += ntest)
+      re[i] += v(j);
+  }
+
   /**
    * Helper function for assembling diagonal Jacobian contriubutions on local
    * quadrature points for an array kernel, bc, etc.
@@ -2050,8 +2099,7 @@ private:
    */
   void processLocalResidual(DenseVector<Number> & res_block,
                             std::vector<dof_id_type> & dof_indices,
-                            const std::vector<Real> & scaling_factor,
-                            bool is_nodal);
+                            const std::vector<Real> & scaling_factor);
 
   /**
    * Add a local residual block to a global residual vector with proper scaling.
@@ -2059,8 +2107,7 @@ private:
   void addResidualBlock(NumericVector<Number> & residual,
                         DenseVector<Number> & res_block,
                         const std::vector<dof_id_type> & dof_indices,
-                        const std::vector<Real> & scaling_factor,
-                        bool is_nodal);
+                        const std::vector<Real> & scaling_factor);
 
   /**
    * Push a local residual block with proper scaling into cache.
@@ -2069,8 +2116,7 @@ private:
                           std::vector<dof_id_type> & cached_residual_rows,
                           DenseVector<Number> & res_block,
                           const std::vector<dof_id_type> & dof_indices,
-                          const std::vector<Real> & scaling_factor,
-                          bool is_nodal);
+                          const std::vector<Real> & scaling_factor);
 
   /**
    * Set a local residual block to a global residual vector with proper scaling.
@@ -2078,8 +2124,7 @@ private:
   void setResidualBlock(NumericVector<Number> & residual,
                         DenseVector<Number> & res_block,
                         const std::vector<dof_id_type> & dof_indices,
-                        const std::vector<Real> & scaling_factor,
-                        bool is_nodal);
+                        const std::vector<Real> & scaling_factor);
 
   /**
    * Add a local Jacobian block to a global Jacobian with proper scaling.
@@ -3094,10 +3139,11 @@ Assembly::cacheJacobian(const Residuals & residuals,
 #ifndef NDEBUG
   auto compare_dofs_set = std::set<dof_id_type>(compare_dofs.begin(), compare_dofs.end());
 
-  for (auto resid_it = residuals.begin() + 1; resid_it != residuals.end(); ++resid_it)
+  for (const auto i : make_range(decltype(residuals.size())(1), residuals.size()))
   {
-    auto current_dofs_set = std::set<dof_id_type>(resid_it->derivatives().nude_indices().begin(),
-                                                  resid_it->derivatives().nude_indices().end());
+    const auto & residual = residuals[i];
+    auto current_dofs_set = std::set<dof_id_type>(residual.derivatives().nude_indices().begin(),
+                                                  residual.derivatives().nude_indices().end());
     mooseAssert(compare_dofs_set == current_dofs_set,
                 "We're going to see whether the dof sets are the same. IIRC the degree of freedom "
                 "dependence (as indicated by the dof index set held by the ADReal) has to be the "

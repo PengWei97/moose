@@ -105,10 +105,10 @@ heated_length = 1.0
   implicit = true
   segregated = false
   staggered_pressure = false
-  monolithic_thermal = false
   verbose_multiapps = true
   verbose_subchannel = false
   interpolation_scheme = 'upwind'
+  pin_htc_correlation = 'gnielinski'
 []
 
 [ICs]
@@ -222,7 +222,7 @@ heated_length = 1.0
   [total_pressure_drop_SC_limited]
     type = ParsedPostprocessor
     pp_names = 'total_pressure_drop_SC'
-    function = 'min(total_pressure_drop_SC, 1e6)'
+    expression = 'min(total_pressure_drop_SC, 1e6)'
     execute_on = "timestep_end"
   []
 

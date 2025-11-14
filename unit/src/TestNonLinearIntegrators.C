@@ -1,10 +1,11 @@
-#ifdef MFEM_ENABLED
+#ifdef MOOSE_MFEM_ENABLED
 
 #include "gtest/gtest.h"
 #include "libmesh/ignore_warnings.h"
 #include "mfem.hpp"
 #include "libmesh/restore_warnings.h"
 #include "Moose.h"
+#include "MFEMHyprePatch.h"
 
 class VectorPowerLawNLFIntegrator : public mfem::NonlinearFormIntegrator
 {
@@ -177,6 +178,7 @@ public:
 
 TEST(CheckData, NonlinearIntegratorTest)
 {
+  mfem::Hypre::Init();
   mfem::Mesh mesh("../test/tests/mfem/mesh/cylinder-hex-q2.gen", 1, 1);
   auto pmesh = std::make_shared<mfem::ParMesh>(MPI_COMM_WORLD, mesh);
 
@@ -219,7 +221,7 @@ TEST(CheckData, NonlinearIntegratorTest)
   // Solver for the Jacobian solve in the Newton method
   mfem::Solver * jacobian_solver;
   // Set up the Jacobian solver
-  mfem::HyprePCG j_pcg(h_curl_fe_space.GetComm());
+  mfem::patched::HyprePCG j_pcg(h_curl_fe_space.GetComm());
   mfem::HypreAMS ams(&h_curl_fe_space);
   ams.SetPrintLevel(1);
   j_pcg.SetTol(1e-7);

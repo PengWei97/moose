@@ -16,21 +16,30 @@
 #include "ConsoleStreamInterface.h"
 #include "Registry.h"
 #include "MooseObjectParameterName.h"
+#include "SolutionInvalidInterface.h"
 
 #define usingMooseObjectMembers                                                                    \
   usingMooseBaseMembers;                                                                           \
-  usingMooseBaseParameterInterfaceMembers;                                                         \
   using MooseObject::enabled
 
 /**
  * Every object that can be built by the factory should be derived from this class.
  */
-class MooseObject : public ParallelParamObject, public std::enable_shared_from_this<MooseObject>
+class MooseObject : public ParallelParamObject,
+                    public SolutionInvalidInterface,
+                    public std::enable_shared_from_this<MooseObject>
 {
 public:
   static InputParameters validParams();
 
   MooseObject(const InputParameters & parameters);
+
+#ifdef MOOSE_KOKKOS_ENABLED
+  /**
+   * Special constructor used for Kokkos functor copy during parallel dispatch
+   */
+  MooseObject(const MooseObject & object, const Moose::Kokkos::FunctorCopy & key);
+#endif
 
   virtual ~MooseObject() = default;
 
@@ -45,6 +54,19 @@ public:
    */
   std::shared_ptr<MooseObject> getSharedPtr();
   std::shared_ptr<const MooseObject> getSharedPtr() const;
+
+#ifdef MOOSE_KOKKOS_ENABLED
+  /**
+   * Get whether this object is a Kokkos functor
+   * The parameter is set by the Kokkos base classes:
+   * - Moose::Kokkos::ResidualObject in KokkosResidualObject.K
+   * - Moose::Kokkos::MaterialBase in KokkosMaterialBase.K
+   */
+  bool isKokkosObject() const { return parameters().isParamValid(MooseBase::kokkos_object_param); }
+#endif
+
+  // To get warnings tracked in the SolutionInvalidityOutput
+  usingCombinedWarningSolutionWarnings;
 
 protected:
   /// Reference to the "enable" InputParameters, used by Controls for toggling on/off MooseObjects

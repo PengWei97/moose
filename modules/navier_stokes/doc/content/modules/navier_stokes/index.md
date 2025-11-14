@@ -15,7 +15,7 @@ please refer to the below pages:
 - [Weakly Compressible Finite Volume](wcnsfv.md)
 - [Porous media Incompressible Finite Volume](pinsfv.md)
 - [Continuous Galerkin Finite Element](navier_stokes/cgfe.md)
-- [Hybridized Discontinous Galerkin (HDG) Finite Element](NavierStokesHDGKernel.md)
+- [Hybridized Discontinous Galerkin (HDG) Finite Element](NavierStokesLHDGKernel.md)
 - [Hybrid Continuous/Discontinuous Galerkin Finite Element](navier_stokes/hcgdgfe.md)
 - [Compressible Finite Volume HLLC](CNSFVHLLCBase.md)
 - [Porous media Compressible Finite Volume Kurganov-Tadmor](PCNSFVKT.md)
@@ -76,7 +76,7 @@ As Navier-Stokes Finite Volume solvers continue to evolve in MOOSE, many new sol
 | ------------------ | ------------------------- | ---------- | -----------------------------------------------------------  | ------------------------------------------------------------ | ---------------------- |
 | Transient          |       --                  | Yes        | Yes                                                          | Yes                                                           | Yes                                                          |
 | Turbulence         | Mixing length             | Yes        | Yes                                                          | Yes                                                          |                        |
-|                    | $k-\epsilon$              |            | Yes                                                          | Yes                                                          | under development      |
+|                    | $k-\epsilon$              |            | Yes                                                          | Yes                                                          | Yes                    |
 |                    | $k-\omega$ SST            |            |                                                              | in [PR #28151](https://github.com/idaholab/moose/pull/28151) |                        |
 | Two-phase          | Mixture model             | Yes        | Yes                                                          | Yes                                                          | in [PR #29614](https://github.com/idaholab/moose/pull/29614) |
 |                    | Eulerian-Eulerian         |            |                                                              | Yes                                                          |                        |

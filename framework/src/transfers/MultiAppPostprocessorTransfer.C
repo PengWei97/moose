@@ -38,6 +38,8 @@ MultiAppPostprocessorTransfer::validParams()
                              reduction_type,
                              "The type of reduction to perform to reduce postprocessor "
                              "values from multiple SubApps to a single value");
+  MultiAppTransfer::addUserObjectExecutionCheckParam(params);
+
   return params;
 }
 
@@ -64,6 +66,21 @@ void
 MultiAppPostprocessorTransfer::execute()
 {
   TIME_SECTION("MultiAppPostprocessorTransfer::execute()", 5, "Transferring a postprocessor");
+
+  // Execute the postprocessor if it was specified to execute on TRANSFER
+  switch (_current_direction)
+  {
+    case TO_MULTIAPP:
+    {
+      checkParentAppUserObjectExecuteOn(_from_pp_name);
+      _fe_problem.computeUserObjectByName(EXEC_TRANSFER, Moose::PRE_AUX, _from_pp_name);
+      _fe_problem.computeUserObjectByName(EXEC_TRANSFER, Moose::POST_AUX, _from_pp_name);
+      break;
+    }
+    case FROM_MULTIAPP:
+    case BETWEEN_MULTIAPP:
+      errorIfObjectExecutesOnTransferInSourceApp(_from_pp_name);
+  }
 
   switch (_current_direction)
   {

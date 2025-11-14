@@ -1,4 +1,13 @@
-#ifdef MFEM_ENABLED
+//* This file is part of the MOOSE framework
+//* https://mooseframework.inl.gov
+//*
+//* All rights reserved, see COPYRIGHT for full restrictions
+//* https://github.com/idaholab/moose/blob/master/COPYRIGHT
+//*
+//* Licensed under LGPL 2.1, please see LICENSE for details
+//* https://www.gnu.org/licenses/lgpl-2.1.html
+
+#ifdef MOOSE_MFEM_ENABLED
 
 #include "MFEMObjectUnitTest.h"
 #include "MFEMHypreGMRES.h"
@@ -18,11 +27,9 @@ class MFEMSolverTest : public MFEMObjectUnitTest
 public:
   MFEMSolverTest() : MFEMObjectUnitTest("MooseUnitApp") {}
 
-  static double uexact(const mfem::Vector & x)
+  static mfem::real_t uexact(const mfem::Vector & x)
   {
-    double u;
-    u = x(2) * x(2) * x(2) - 5.0 * x(0) * x(0) * x(1) * x(2);
-    return u;
+    return x(2) * x(2) * x(2) - 5.0 * x(0) * x(0) * x(1) * x(2);
   }
 
   static void gradexact(const mfem::Vector & x, mfem::Vector & grad)
@@ -33,17 +40,14 @@ public:
     grad[2] = 3.0 * x(2) * x(2) - 5.0 * x(0) * x(0) * x(1);
   }
 
-  static double d2uexact(const mfem::Vector & x) // returns \Delta u
+  static mfem::real_t d2uexact(const mfem::Vector & x) // returns \Delta u
   {
-    double d2u;
-    d2u = -10.0 * x(1) * x(2) + 6.0 * x(2);
-    return d2u;
+    return -10.0 * x(1) * x(2) + 6.0 * x(2);
   }
 
-  static double fexact(const mfem::Vector & x) // returns -\Delta u
+  static mfem::real_t fexact(const mfem::Vector & x) // returns -\Delta u
   {
-    double d2u = d2uexact(x);
-    return -d2u;
+    return -d2uexact(x);
   }
 
   // Create a simple 3D mesh for testing
@@ -98,7 +102,7 @@ public:
     a.FormLinearSystem(ess_tdof_list, x, b, A, X, B);
 
     solver.updateSolver(a, ess_tdof_list);
-    auto solver_ptr = std::dynamic_pointer_cast<SolverType>(solver.getSolver()).get();
+    auto solver_ptr = dynamic_cast<SolverType *>(&solver.getSolver());
     // Test MFEMKernel returns an integrator of the expected type
     ASSERT_TRUE(solver_ptr != nullptr);
     solver_ptr->SetOperator(*A);
@@ -203,10 +207,10 @@ TEST_F(MFEMSolverTest, MFEMHypreBoomerAMG)
       addObject<MFEMHypreBoomerAMG>("MFEMHypreBoomerAMG", "solver1", solver_params);
 
   // Test MFEMSolver returns an solver of the expected type
-  auto solver_downcast = std::dynamic_pointer_cast<mfem::HypreBoomerAMG>(solver.getSolver());
+  auto solver_downcast = dynamic_cast<mfem::HypreBoomerAMG *>(&solver.getSolver());
   // HypreBoomerAMG warnings are tripped by zero rows in matrices; turn this off for this test
   solver_downcast->SetErrorMode(mfem::HypreSolver::ErrorMode::IGNORE_HYPRE_ERRORS);
-  ASSERT_NE(solver_downcast.get(), nullptr);
+  ASSERT_NE(solver_downcast, nullptr);
   testDiffusionSolve<mfem::HypreBoomerAMG>(solver, 1e-5);
 }
 
@@ -232,8 +236,8 @@ TEST_F(MFEMSolverTest, MFEMHypreADS)
   MFEMHypreADS & solver = addObject<MFEMHypreADS>("MFEMHypreADS", "solver1", solver_params);
 
   // Test MFEMSolver returns a solver of the expected type
-  auto solver_downcast = std::dynamic_pointer_cast<mfem::HypreADS>(solver.getSolver());
-  ASSERT_NE(solver_downcast.get(), nullptr);
+  auto solver_downcast = dynamic_cast<mfem::HypreADS *>(&solver.getSolver());
+  ASSERT_NE(solver_downcast, nullptr);
 }
 
 /**
@@ -258,8 +262,8 @@ TEST_F(MFEMSolverTest, MFEMHypreAMS)
   MFEMHypreAMS & solver = addObject<MFEMHypreAMS>("MFEMHypreAMS", "solver1", solver_params);
 
   // Test MFEMSolver returns an solver of the expected type
-  auto solver_downcast = std::dynamic_pointer_cast<mfem::HypreAMS>(solver.getSolver());
-  ASSERT_NE(solver_downcast.get(), nullptr);
+  auto solver_downcast = dynamic_cast<mfem::HypreAMS *>(&solver.getSolver());
+  ASSERT_NE(solver_downcast, nullptr);
 }
 
 /**
@@ -381,8 +385,7 @@ TEST_F(MFEMSolverTest, MFEMHypreBoomerAMGLOR)
 
   solver.updateSolver(a, ess_tdof_list);
 
-  auto solver_ptr =
-      std::dynamic_pointer_cast<mfem::LORSolver<mfem::HypreBoomerAMG>>(solver.getSolver()).get();
+  auto solver_ptr = dynamic_cast<mfem::LORSolver<mfem::HypreBoomerAMG> *>(&solver.getSolver());
   // Test MFEMKernel returns an integrator of the expected type
   ASSERT_TRUE(solver_ptr != nullptr);
 }

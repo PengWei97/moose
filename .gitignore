@@ -42,6 +42,8 @@
 *.blg
 *.spl
 *.idx
+*.mat
+*.info
 traceout*.txt
 temp_print_trace.*
 *.xda
@@ -115,6 +117,8 @@ test.cache
 !**/gold/**/*.vtk
 !**/gold/**/*.vtu
 !**/gold/**/*.pvtu
+!**/gold/**/*.mat
+!**/gold/**/*.info
 !**/gold/**/*.xml*
 !**/gold/**/*.json*
 
@@ -245,6 +249,9 @@ python/peacock/tests/postprocessor_tab/TestPostprocessorPluginManager_test_scrip
 peacock_tmp_diff.exo
 *.e.diff
 
+# Python
+.coverage
+
 # configure
 _configs.sed
 autom4te.cache
@@ -358,3 +365,6 @@ OutputData
 !**/gold/**/OutputData/**/*.pvtu
 !**/gold/**/OutputData/**/*.xml*
 !**/gold/**/OutputData/**/*.json*
+
+# PETSc binary output
+binaryoutput

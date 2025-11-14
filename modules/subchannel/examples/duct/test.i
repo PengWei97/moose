@@ -64,7 +64,7 @@ P_out = 2.0e5 # Pa
   [displacement]
     block = subchannel
   []
-  [q_prime_duct]
+  [duct_heat_flux]
     block = duct
   []
   [Tduct]
@@ -92,7 +92,6 @@ P_out = 2.0e5 # Pa
   implicit = true
   segregated = false
   staggered_pressure = false
-  monolithic_thermal = false
   verbose_multiapps = true
   verbose_subchannel = false
 []
@@ -254,7 +253,7 @@ P_out = 2.0e5 # Pa
     type = MultiAppInterpolationTransfer
     from_multi_app = duct_map
     source_variable = q_prime
-    variable = q_prime_duct
+    variable = duct_heat_flux
   []
 
   [xfer]
