@@ -829,8 +829,8 @@ PolygonConcentricCircleMeshGeneratorBase::generate()
 
   if (!_has_ducts && _sides_to_adapt.empty())
   {
-    libMesh::LaplaceMeshSmoother lms(*mesh0);
-    lms.smooth(_smoothing_max_it);
+    libMesh::LaplaceMeshSmoother lms(*mesh0, _smoothing_max_it);
+    lms.smooth();
   }
 
   // Set up customized Block Names and/or IDs
@@ -949,7 +949,7 @@ PolygonConcentricCircleMeshGeneratorBase::generate()
   bool flat_side_up = getMeshProperty<bool>("flat_side_up", name());
   if (flat_side_up)
     MeshTools::Modification::rotate(*mesh0, 180.0 / (Real)_num_sides, 0.0, 0.0);
-  mesh0->set_isnt_prepared();
+  mesh0->unset_is_prepared();
 
   if (_has_rings && getParam<bool>("replace_inner_ring_with_delaunay_mesh"))
   {

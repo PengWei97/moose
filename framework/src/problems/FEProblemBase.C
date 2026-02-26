@@ -448,8 +448,6 @@ FEProblemBase::FEProblemBase(const InputParameters & parameters)
             "kokkos_neighbor_material_props", &_mesh, _material_prop_registry, *this)),
 #endif
     _reporter_data(_app),
-    // TODO: delete the following line after apps have been updated to not call getUserObjects
-    _all_user_objects(_app.getExecuteOnEnum()),
     _multi_apps(_app.getExecuteOnEnum()),
     _transient_multi_apps(_app.getExecuteOnEnum()),
     _transfers(_app.getExecuteOnEnum(), /*threaded=*/false),
@@ -477,6 +475,8 @@ FEProblemBase::FEProblemBase(const InputParameters & parameters)
     _has_jacobian(false),
     _needs_old_newton_iter(false),
     _previous_nl_solution_required(getParam<bool>("previous_nl_solution_required")),
+    _previous_multiapp_fp_nl_solution_required(_num_nl_sys + _num_linear_sys, false),
+    _previous_multiapp_fp_aux_solution_required(false),
     _has_nonlocal_coupling(false),
     _calculate_jacobian_in_uo(false),
     _kernel_coverage_check(
@@ -745,6 +745,17 @@ FEProblemBase::needSolutionState(unsigned int state, Moose::SolutionIterationTyp
   _aux->needSolutionState(state, iteration_type);
 }
 
+bool
+FEProblemBase::hasSolutionState(unsigned int state,
+                                Moose::SolutionIterationType iteration_type) const
+{
+  bool has_solution_state = false;
+  for (auto & sys : _solver_systems)
+    has_solution_state |= sys->hasSolutionState(state, iteration_type);
+  has_solution_state |= _aux->hasSolutionState(state, iteration_type);
+  return has_solution_state;
+}
+
 void
 FEProblemBase::newAssemblyArray(std::vector<std::shared_ptr<SolverSystem>> & solver_systems)
 {
@@ -928,12 +939,12 @@ FEProblemBase::initialSetup()
       TIME_SECTION("computingMaxDofs", 3, "Computing Max Dofs Per Element");
 
       MaxVarNDofsPerElem mvndpe(*this, sys);
-      Threads::parallel_reduce(*_mesh.getActiveLocalElementRange(), mvndpe);
+      Threads::parallel_reduce(getCurrentAlgebraicElementRange(), mvndpe);
       max_var_n_dofs_per_elem = mvndpe.max();
       _communicator.max(max_var_n_dofs_per_elem);
 
       MaxVarNDofsPerNode mvndpn(*this, sys);
-      Threads::parallel_reduce(*_mesh.getLocalNodeRange(), mvndpn);
+      Threads::parallel_reduce(getCurrentAlgebraicNodeRange(), mvndpn);
       max_var_n_dofs_per_node = mvndpn.max();
       _communicator.max(max_var_n_dofs_per_node);
       global_max_var_n_dofs_per_elem =
@@ -1079,16 +1090,31 @@ FEProblemBase::initialSetup()
   std::set<std::string> depend_objects_ic = _ics.getDependObjects();
   std::set<std::string> depend_objects_aux = _aux->getDependObjects();
 
+  std::map<int, std::vector<UserObjectBase *>> group_userobjs;
+
   // This replaces all prior updateDependObjects calls on the old user object warehouses.
   TheWarehouse::Query uo_query = theWarehouse().query().condition<AttribSystem>("UserObject");
-  std::vector<UserObject *> userobjs;
+  std::vector<UserObjectBase *> userobjs;
   uo_query.queryInto(userobjs);
   groupUserObjects(
       theWarehouse(), getAuxiliarySystem(), _app.getExecuteOnEnum(), userobjs, depend_objects_ic);
 
-  std::map<int, std::vector<UserObject *>> group_userobjs;
   for (auto obj : userobjs)
     group_userobjs[obj->getParam<int>("execution_order_group")].push_back(obj);
+
+#ifdef MOOSE_KOKKOS_ENABLED
+  {
+    TheWarehouse::Query uo_query =
+        theWarehouse().query().condition<AttribSystem>("KokkosUserObject");
+    std::vector<UserObjectBase *> userobjs;
+    uo_query.queryInto(userobjs);
+    groupUserObjects(
+        theWarehouse(), getAuxiliarySystem(), _app.getExecuteOnEnum(), userobjs, depend_objects_ic);
+
+    for (auto obj : userobjs)
+      group_userobjs[obj->getParam<int>("execution_order_group")].push_back(obj);
+  }
+#endif
 
   for (auto & [group, objs] : group_userobjs)
     for (auto obj : objs)
@@ -1098,7 +1124,7 @@ FEProblemBase::initialSetup()
   for (THREAD_ID tid = 0; tid < n_threads; ++tid)
     checkUserObjectJacobianRequirement(tid);
 
-  // Check whether nonlocal couling is required or not
+  // Check whether nonlocal coupling is required or not
   checkNonlocalCoupling();
   if (_requires_nonlocal_coupling)
     setVariableAllDoFMap(_uo_jacobian_moose_vars[0]);
@@ -1174,7 +1200,7 @@ FEProblemBase::initialSetup()
     {
       TIME_SECTION("computingInitialStatefulProps", 3, "Computing Initial Material Values");
 
-      initElementStatefulProps(*_mesh.getActiveLocalElementRange(), true);
+      initElementStatefulProps(getCurrentAlgebraicElementRange(), true);
 
       if (_material_props.hasStatefulProperties() || _bnd_material_props.hasStatefulProperties() ||
           _neighbor_material_props.hasStatefulProperties())
@@ -1381,7 +1407,7 @@ FEProblemBase::initialSetup()
     TIME_SECTION("BoundaryRestrictedNodeIntegrityCheck", 5);
 
     // check that variables are defined along boundaries of boundary restricted nodal objects
-    ConstBndNodeRange & bnd_nodes = *mesh().getBoundaryNodeRange();
+    const auto & bnd_nodes = getCurrentAlgebraicBndNodeRange();
     BoundaryNodeIntegrityCheckThread bnict(*this, uo_query);
     Threads::parallel_reduce(bnd_nodes, bnict);
 
@@ -1479,7 +1505,7 @@ FEProblemBase::initialSetup()
     {
       TIME_SECTION("computeMaterials", 2, "Computing Initial Material Properties");
 
-      initElementStatefulProps(*_mesh.getActiveLocalElementRange(), true);
+      initElementStatefulProps(getCurrentAlgebraicElementRange(), true);
     }
 #ifdef MOOSE_KOKKOS_ENABLED
     if (_kokkos_material_props.hasStatefulProperties() ||
@@ -1488,12 +1514,13 @@ FEProblemBase::initialSetup()
     {
       TIME_SECTION("computeMaterials", 2, "Computing Initial Material Properties");
 
-      initElementStatefulProps(*_mesh.getActiveLocalElementRange(), true);
+      initElementStatefulProps(getCurrentAlgebraicElementRange(), true);
     }
 #endif
   }
 
   // Control Logic
+  _control_warehouse.initialSetup();
   executeControls(EXEC_INITIAL);
 
   // Scalar variables need to reinited for the initial conditions to be available for output
@@ -1600,6 +1627,7 @@ FEProblemBase::timestepSetup()
     es().reinit_systems();
   }
 
+  _control_warehouse.timestepSetup();
   if (_line_search)
     _line_search->timestepSetup();
 
@@ -1637,6 +1665,15 @@ FEProblemBase::timestepSetup()
   theWarehouse().query().condition<AttribSystem>("UserObject").queryIntoUnsorted(userobjs);
   for (auto obj : userobjs)
     obj->timestepSetup();
+
+#ifdef MOOSE_KOKKOS_ENABLED
+  {
+    std::vector<UserObjectBase *> userobjs;
+    theWarehouse().query().condition<AttribSystem>("KokkosUserObject").queryIntoUnsorted(userobjs);
+    for (auto obj : userobjs)
+      obj->timestepSetup();
+  }
+#endif
 
   // Timestep setup of output objects
   _app.getOutputWarehouse().timestepSetup();
@@ -3333,7 +3370,7 @@ FEProblemBase::addAuxScalarVariable(const std::string & var_name,
 
   params.set<MooseEnum>("order") = type.order.get_order();
   params.set<MooseEnum>("family") = "SCALAR";
-  params.set<std::vector<Real>>("scaling") = {1};
+  params.set<std::vector<Real>>("scaling") = std::vector<Real>{1};
   if (active_subdomains)
     for (const SubdomainID & id : *active_subdomains)
       params.set<std::vector<SubdomainName>>("block").push_back(Moose::stringify(id));
@@ -3699,9 +3736,8 @@ FEProblemBase::projectSolution()
 
   FloatingPointExceptionGuard fpe_guard(_app);
 
-  ConstElemRange & elem_range = *_mesh.getActiveLocalElementRange();
   ComputeInitialConditionThread cic(*this);
-  Threads::parallel_reduce(elem_range, cic);
+  Threads::parallel_reduce(getCurrentAlgebraicElementRange(), cic);
 
   if (haveFV())
   {
@@ -3718,9 +3754,8 @@ FEProblemBase::projectSolution()
   _aux->solution().close();
 
   // now run boundary-restricted initial conditions
-  ConstBndNodeRange & bnd_nodes = *_mesh.getBoundaryNodeRange();
   ComputeBoundaryInitialConditionThread cbic(*this);
-  Threads::parallel_reduce(bnd_nodes, cbic);
+  Threads::parallel_reduce(getCurrentAlgebraicBndNodeRange(), cbic);
 
   for (auto & nl : _nl)
     nl->solution().close();
@@ -4470,15 +4505,32 @@ FEProblemBase::addObjectParamsHelper(InputParameters & parameters,
 }
 
 void
+FEProblemBase::checkUserObjectNameCollision(const std::string & name,
+                                            const std::string & type) const
+{
+  if (hasUserObject(name))
+    mooseError("A ",
+               getUserObjectBase(name).typeAndName(),
+               " already exists. You may not add a ",
+               type,
+               " by the same name.");
+
+#ifdef MOOSE_KOKKOS_ENABLED
+  if (hasKokkosUserObject(name))
+    mooseError("A ",
+               getKokkosUserObject<UserObjectBase>(name).typeAndName(),
+               " already exists. You may not add a ",
+               type,
+               " by the same name.");
+#endif
+}
+
+void
 FEProblemBase::addPostprocessor(const std::string & pp_name,
                                 const std::string & name,
                                 InputParameters & parameters)
 {
-  // Check for name collision
-  if (hasUserObject(name))
-    mooseError("A ",
-               getUserObjectBase(name).typeAndName(),
-               " already exists. You may not add a Postprocessor by the same name.");
+  checkUserObjectNameCollision(name, "Postprocessor");
 
   addUserObject(pp_name, name, parameters);
 }
@@ -4488,11 +4540,7 @@ FEProblemBase::addVectorPostprocessor(const std::string & pp_name,
                                       const std::string & name,
                                       InputParameters & parameters)
 {
-  // Check for name collision
-  if (hasUserObject(name))
-    mooseError("A ",
-               getUserObjectBase(name).typeAndName(),
-               " already exists. You may not add a VectorPostprocessor by the same name.");
+  checkUserObjectNameCollision(name, "VectorPostprocessor");
 
   addUserObject(pp_name, name, parameters);
 }
@@ -4502,11 +4550,7 @@ FEProblemBase::addReporter(const std::string & type,
                            const std::string & name,
                            InputParameters & parameters)
 {
-  // Check for name collision
-  if (hasUserObject(name))
-    mooseError("A ",
-               getUserObjectBase(name).typeAndName(),
-               " already exists. You may not add a Reporter by the same name.");
+  checkUserObjectNameCollision(name, "Reporter");
 
   addUserObject(type, name, parameters);
 }
@@ -4533,9 +4577,6 @@ FEProblemBase::addUserObject(const std::string & user_object_name,
 
     if (tid != 0)
       user_object->setPrimaryThreadCopy(uos[0].get());
-
-    // TODO: delete this line after apps have been updated to not call getUserObjects
-    _all_user_objects.addObject(user_object, tid);
 
     theWarehouse().add(user_object);
 
@@ -4739,12 +4780,12 @@ FEProblemBase::computeIndicators()
 
     // compute Indicators
     ComputeIndicatorThread cit(*this);
-    Threads::parallel_reduce(*_mesh.getActiveLocalElementRange(), cit);
+    Threads::parallel_reduce(getCurrentAlgebraicElementRange(), cit);
     _aux->solution().close();
     _aux->update();
 
     ComputeIndicatorThread finalize_cit(*this, true);
-    Threads::parallel_reduce(*_mesh.getActiveLocalElementRange(), finalize_cit);
+    Threads::parallel_reduce(getCurrentAlgebraicElementRange(), finalize_cit);
     _aux->solution().close();
     _aux->update();
 
@@ -4778,7 +4819,7 @@ FEProblemBase::computeMarkers()
     }
 
     ComputeMarkerThread cmt(*this);
-    Threads::parallel_reduce(*_mesh.getActiveLocalElementRange(), cmt);
+    Threads::parallel_reduce(getCurrentAlgebraicElementRange(), cmt);
 
     _aux->solution().close();
     _aux->update();
@@ -4839,6 +4880,15 @@ FEProblemBase::customSetup(const ExecFlagType & exec_type)
   theWarehouse().query().condition<AttribSystem>("UserObject").queryIntoUnsorted(userobjs);
   for (auto obj : userobjs)
     obj->customSetup(exec_type);
+
+#ifdef MOOSE_KOKKOS_ENABLED
+  {
+    std::vector<UserObjectBase *> userobjs;
+    theWarehouse().query().condition<AttribSystem>("KokkosUserObject").queryIntoUnsorted(userobjs);
+    for (auto obj : userobjs)
+      obj->customSetup(exec_type);
+  }
+#endif
 
   _app.getOutputWarehouse().customSetup(exec_type);
 }
@@ -5013,12 +5063,25 @@ FEProblemBase::computeUserObjectByName(const ExecFlagType & type,
 {
   const auto old_exec_flag = _current_execute_on_flag;
   _current_execute_on_flag = type;
+
   TheWarehouse::Query query = theWarehouse()
                                   .query()
                                   .condition<AttribSystem>("UserObject")
                                   .condition<AttribExecOns>(type)
                                   .condition<AttribName>(name);
   computeUserObjectsInternal(type, group, query);
+
+#ifdef MOOSE_KOKKOS_ENABLED
+  {
+    TheWarehouse::Query query = theWarehouse()
+                                    .query()
+                                    .condition<AttribSystem>("KokkosUserObject")
+                                    .condition<AttribExecOns>(type)
+                                    .condition<AttribName>(name);
+    computeKokkosUserObjectsInternal(type, group, query);
+  }
+#endif
+
   _current_execute_on_flag = old_exec_flag;
 }
 
@@ -5028,6 +5091,16 @@ FEProblemBase::computeUserObjects(const ExecFlagType & type, const Moose::AuxGro
   TheWarehouse::Query query =
       theWarehouse().query().condition<AttribSystem>("UserObject").condition<AttribExecOns>(type);
   computeUserObjectsInternal(type, group, query);
+
+#ifdef MOOSE_KOKKOS_ENABLED
+  {
+    TheWarehouse::Query query = theWarehouse()
+                                    .query()
+                                    .condition<AttribSystem>("KokkosUserObject")
+                                    .condition<AttribExecOns>(type);
+    computeKokkosUserObjectsInternal(type, group, query);
+  }
+#endif
 }
 
 void
@@ -5125,7 +5198,7 @@ FEProblemBase::computeUserObjectsInternal(const ExecFlagType & type,
         // because some nodal user objects (NodalNormal related) depend on elemental user objects
         // :-(
         ComputeUserObjectsThread cppt(*this, query);
-        Threads::parallel_reduce(*_mesh.getActiveLocalElementRange(), cppt);
+        Threads::parallel_reduce(getCurrentAlgebraicElementRange(), cppt);
 
         // There is one instance in rattlesnake where an elemental user object's finalize depends
         // on a side user object having been finalized first :-(
@@ -5156,7 +5229,7 @@ FEProblemBase::computeUserObjectsInternal(const ExecFlagType & type,
       if (query.clone().condition<AttribInterfaces>(Interfaces::NodalUserObject).count() > 0)
       {
         ComputeNodalUserObjectsThread cnppt(*this, query);
-        Threads::parallel_reduce(*_mesh.getLocalNodeRange(), cnppt);
+        Threads::parallel_reduce(getCurrentAlgebraicNodeRange(), cnppt);
         joinAndFinalize(query.clone().condition<AttribInterfaces>(Interfaces::NodalUserObject));
       }
 
@@ -5280,7 +5353,10 @@ FEProblemBase::executeControls(const ExecFlagType & exec_type)
 
     if (!ordered_controls.empty())
     {
-      _control_warehouse.setup(exec_type);
+      // already called by initialSetup when exec_type == EXEC_INITIAL
+      if (exec_type != EXEC_INITIAL)
+        _control_warehouse.setup(exec_type);
+
       // Run the controls in the proper order
       for (const auto & control : ordered_controls)
         control->execute();
@@ -6201,7 +6277,7 @@ FEProblemBase::updateMaxQps()
   // Find the maximum number of quadrature points
   {
     MaxQpsThread mqt(*this);
-    Threads::parallel_reduce(*_mesh.getActiveLocalElementRange(), mqt);
+    Threads::parallel_reduce(getCurrentAlgebraicElementRange(), mqt);
     _max_qps = mqt.max();
 
     // If we have more shape functions or more quadrature points on
@@ -6850,6 +6926,14 @@ FEProblemBase::copySolutionsBackwards()
 }
 
 void
+FEProblemBase::skipNextForwardSolutionCopyToOld()
+{
+  for (auto & sys : _solver_systems)
+    sys->skipNextSolutionToOldCopy();
+  _aux->skipNextSolutionToOldCopy();
+}
+
+void
 FEProblemBase::advanceState()
 {
   TIME_SECTION("advanceState", 5, "Advancing State");
@@ -7119,6 +7203,8 @@ FEProblemBase::computeResidualSys(NonlinearImplicitSystem & sys,
   parallel_object_only();
 
   TIME_SECTION("computeResidualSys", 5);
+  // Reset before residual setup, calculation & execution
+  _app.solutionInvalidity().resetIterationOccurences();
 
   computeResidual(soln, residual, sys.number());
 }
@@ -7525,6 +7611,8 @@ FEProblemBase::computeJacobianSys(NonlinearImplicitSystem & sys,
                                   const NumericVector<Number> & soln,
                                   SparseMatrix<Number> & jacobian)
 {
+  // Reset before Jacobian setup, calculation & execution
+  _app.solutionInvalidity().resetIterationOccurences();
   computeJacobian(soln, jacobian, sys.number());
 }
 
@@ -9082,6 +9170,32 @@ FEProblemBase::needsPreviousNewtonIteration(bool state)
   if (state && !vectorTagExists(Moose::PREVIOUS_NL_SOLUTION_TAG))
     mooseError("Previous nonlinear solution is required but not added through "
                "Problem/previous_nl_solution_required=true");
+}
+
+void
+FEProblemBase::needsPreviousMultiAppFixedPointIterationSolution(bool needed,
+                                                                const unsigned int solver_sys_num)
+{
+  _previous_multiapp_fp_nl_solution_required[solver_sys_num] = needed;
+}
+
+bool
+FEProblemBase::needsPreviousMultiAppFixedPointIterationSolution(
+    const unsigned int solver_sys_num) const
+{
+  return _previous_multiapp_fp_nl_solution_required[solver_sys_num];
+}
+
+void
+FEProblemBase::needsPreviousMultiAppFixedPointIterationAuxiliary(bool state)
+{
+  _previous_multiapp_fp_aux_solution_required = state;
+}
+
+bool
+FEProblemBase::needsPreviousMultiAppFixedPointIterationAuxiliary() const
+{
+  return _previous_multiapp_fp_aux_solution_required;
 }
 
 bool

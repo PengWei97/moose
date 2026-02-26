@@ -2,14 +2,10 @@
 
 !if! function=hasCapability('mfem')
 
-## Summary
-
-!syntax description /AuxKernels/MFEMGradAux
-
 ## Overview
 
 AuxKernel for calculating the gradient of a scalar $H^1$ conforming source variable and storing it in
-a scalar elemental result variable defined on an $H(\mathrm{curl})$ conforming Nédélec finite element space.
+a result variable defined on an $H(\mathrm{curl})$ conforming Nédélec finite element space.
 
 The result may be scaled by an optional (global) scalar factor.
 

@@ -24,8 +24,6 @@ public:
 
   /// Get the name of the linear friction coefficient. Returns an empty string if no friction.
   virtual MooseFunctorName getLinearFrictionCoefName() const override;
-  /// Return the name of the Rhie Chow user object
-  UserObjectName rhieChowUOName() const override;
   /// Return the number of algebraic ghosting layers needed
   unsigned short getNumberAlgebraicGhostingLayersNeeded() const override;
 
@@ -77,4 +75,7 @@ private:
 
   /// Name of the user object in charge of computing the Rhie Chow coefficients
   UserObjectName _rc_uo_name;
+
+  void addAxisymmetricViscousSourceKernel(const std::vector<SubdomainName> & rz_blocks,
+                                          unsigned int radial_index) override;
 };

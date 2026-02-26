@@ -10,6 +10,9 @@
 #include "FlowChannel1Phase.h"
 #include "FlowModelSinglePhase.h"
 #include "SinglePhaseFluidProperties.h"
+#include "THMNames.h"
+#include "MooseUtils.h"
+#include "ComponentsConvergence.h"
 
 registerMooseObject("ThermalHydraulicsApp", FlowChannel1Phase);
 
@@ -17,6 +20,19 @@ InputParameters
 FlowChannel1Phase::validParams()
 {
   InputParameters params = FlowChannel1PhaseBase::validParams();
+
+  params.addParam<std::vector<FunctionName>>(
+      "initial_passives",
+      {},
+      "Initial passive transport variable values in the flow channel, if any (units are "
+      "[amount/m^3], where 'amount' may be mass (kg) or a number (molecules, moles, etc.))");
+  params.addParam<std::vector<VariableName>>(
+      "passives_names",
+      {},
+      "Names for each passive transport variable [amount/m^3]. Note that the conserved (solution) "
+      "variables will be an amount per unit volume multiplied by the channel cross-sectional area, "
+      "yielding an amount per unit length; these solution variable names will append '_times_area' "
+      "to the names given in this parameter.");
 
   MooseEnum wave_speed_formulation("einfeldt davis", "einfeldt");
   params.addParam<MooseEnum>(
@@ -27,6 +43,20 @@ FlowChannel1Phase::validParams()
       "scaling_factor_1phase",
       sf_1phase,
       "Scaling factors for each single phase variable (rhoA, rhouA, rhoEA)");
+  params.addParam<std::vector<Real>>("scaling_factor_passives",
+                                     "Scaling factor for each passive transport variable");
+  params.addParam<bool>(
+      "create_flux_vpp",
+      false,
+      "If true, create a VectorPostprocessor with the the mass, momentum, and energy side fluxes");
+
+  params.addParam<Real>("p_rel_step_tol", 1e-5, "Pressure relative step tolerance");
+  params.addParam<Real>("T_rel_step_tol", 1e-5, "Temperature relative step tolerance");
+  params.addParam<Real>("vel_rel_step_tol", 1e-5, "Velocity relative step tolerance");
+  params.addParam<Real>("mass_res_tol", 1e-5, "Mass equation normalized residual tolerance");
+  params.addParam<Real>(
+      "momentum_res_tol", 1e-5, "Momentum equation normalized residual tolerance");
+  params.addParam<Real>("energy_res_tol", 1e-5, "Energy equation normalized residual tolerance");
 
   params.addParamNamesToGroup("scaling_factor_1phase", "Numerical scheme");
   params.addClassDescription("1-phase 1D flow channel");
@@ -36,6 +66,16 @@ FlowChannel1Phase::validParams()
 
 FlowChannel1Phase::FlowChannel1Phase(const InputParameters & params) : FlowChannel1PhaseBase(params)
 {
+}
+
+void
+FlowChannel1Phase::check() const
+{
+  FlowChannel1PhaseBase::check();
+
+  checkEqualSize<VariableName, FunctionName>("passives_names", "initial_passives");
+  if (isParamValid("scaling_factor_passives"))
+    checkEqualSize<VariableName, Real>("passives_names", "scaling_factor_passives");
 }
 
 void
@@ -56,4 +96,96 @@ std::vector<std::string>
 FlowChannel1Phase::ICParameters() const
 {
   return {"initial_p", "initial_T", "initial_vel"};
+}
+
+void
+FlowChannel1Phase::addMooseObjects()
+{
+  FlowChannel1PhaseBase::addMooseObjects();
+
+  if (getParam<bool>("create_flux_vpp"))
+    addNumericalFluxVectorPostprocessor();
+
+  addFlowChannel1PhaseFunctorMaterial();
+
+  const std::vector<std::pair<std::string, Real>> var_norm_pairs{
+      {THM::PRESSURE, getParam<Real>("p_ref")},
+      {THM::TEMPERATURE, getParam<Real>("T_ref")},
+      {THM::VELOCITY, getParam<Real>("vel_ref")}};
+  for (const auto & [var, norm] : var_norm_pairs)
+  {
+    addNonlinearStepFunctorMaterial(
+        THM::functorMaterialPropertyName<false>(var), var + "_change", false);
+    addMaximumFunctorPostprocessor(
+        var + "_change", genName(name(), var + "_rel_step"), norm, getSubdomainNames());
+  }
+
+  const std::vector<std::pair<std::string, std::string>> var_eq_pairs{
+      {THM::RHOA, "mass"}, {THM::RHOUA, "momentum"}, {THM::RHOEA, "energy"}};
+  for (const auto & [var, eq] : var_eq_pairs)
+    addNormalized1PhaseResidualNorm(var, eq);
+
+  addMultiPostprocessorConvergence(
+      {genName(name(), "p_rel_step"),
+       genName(name(), "T_rel_step"),
+       genName(name(), "vel_rel_step"),
+       genName(name(), "mass_res"),
+       genName(name(), "momentum_res"),
+       genName(name(), "energy_res")},
+      {"step: p", "step: T", "step: vel", "res: mass", "res: momentum", "res: energy"},
+      {getParam<Real>("p_rel_step_tol"),
+       getParam<Real>("T_rel_step_tol"),
+       getParam<Real>("vel_rel_step_tol"),
+       getParam<Real>("mass_res_tol"),
+       getParam<Real>("momentum_res_tol"),
+       getParam<Real>("energy_res_tol")});
+}
+
+void
+FlowChannel1Phase::addNumericalFluxVectorPostprocessor()
+{
+  const std::string class_name = "NumericalFlux3EqnInternalValues";
+  InputParameters params = _factory.getValidParams(class_name);
+  params.set<std::vector<SubdomainName>>("block") = getSubdomainNames();
+  params.set<UserObjectName>("numerical_flux") = _numerical_flux_name;
+  params.set<std::vector<VariableName>>("A_linear") = {THM::AREA_LINEAR};
+  params.set<MooseEnum>("sort_by") = sortBy();
+  params.set<ExecFlagEnum>("execute_on") = {EXEC_INITIAL, EXEC_TIMESTEP_END};
+  getTHMProblem().addVectorPostprocessor(class_name, name() + "_flux_vpp", params);
+}
+
+void
+FlowChannel1Phase::addFlowChannel1PhaseFunctorMaterial()
+{
+  const std::string class_name = "FlowModel1PhaseFunctorMaterial";
+  const std::string obj_name = genName(name(), "fm1phase_fmat");
+  InputParameters params = _factory.getValidParams(class_name);
+  params.set<std::vector<SubdomainName>>("block") = getSubdomainNames();
+  params.set<UserObjectName>("fluid_properties") = _fp_name;
+  getTHMProblem().addFunctorMaterial(class_name, obj_name, params);
+}
+
+void
+FlowChannel1Phase::addNormalized1PhaseResidualNorm(const VariableName & variable,
+                                                   const std::string & equation)
+{
+  const std::string class_name = "Normalized1PhaseResidualNorm";
+  InputParameters params = _factory.getValidParams(class_name);
+  params.applyParameters(parameters());
+  params.set<VariableName>("variable") = variable;
+  params.set<std::vector<SubdomainName>>("block") = getSubdomainNames();
+  params.set<MooseEnum>("norm_type") = "l_inf";
+  const Point mid_point = 0.5 * (getStartPoint() + getEndPoint());
+  params.set<Point>("point") = mid_point;
+  params.set<UserObjectName>("fluid_properties") = _fp_name;
+  params.set<Real>("min_elem_size") = getMinimumElemSize();
+  params.set<ExecFlagEnum>("execute_on") = EXEC_NONLINEAR_CONVERGENCE;
+  params.set<std::vector<OutputName>>("outputs") = {"none"};
+  getTHMProblem().addPostprocessor(class_name, genName(name(), equation + "_res"), params);
+}
+
+Convergence *
+FlowChannel1Phase::getNonlinearConvergence() const
+{
+  return &getTHMProblem().getConvergence(nonlinearConvergenceName());
 }

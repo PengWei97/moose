@@ -20,6 +20,7 @@
 class THMProblem;
 class THMMesh;
 class ThermalHydraulicsApp;
+class Convergence;
 
 /**
  * Base class for THM components
@@ -114,6 +115,11 @@ public:
   virtual void addMooseObjects() {}
 
   /**
+   * Gets the Component's nonlinear Convergence object if it has one
+   */
+  virtual Convergence * getNonlinearConvergence() const;
+
+  /**
    * Return a reference to a component via a parameter name
    * @tparam T the type of the component we are requesting
    * @param name The parameter name that has the component name
@@ -148,18 +154,34 @@ public:
   bool hasComponentByName(const std::string & cname) const;
 
   /**
-   * Connect with control logic
+   * Connects a controllable parameter of the component to a controllable parameter of
+   * a constituent object.
+   *
+   * This version assumes that the component and object have the same control parameter name.
+   *
+   * @param[in] obj_params  Constituent object input parameters object
+   * @param[in] obj_name    Constituent object name
+   * @param[in] param       Controllable parameter name (same in both component and constituent
+   * object)
    */
-  void connectObject(const InputParameters & params,
-                     const std::string & mooseName,
-                     const std::string & name) const;
+  void connectObject(const InputParameters & obj_params,
+                     const std::string & obj_name,
+                     const std::string & param) const;
   /**
-   * Connect with control logic
+   * Connects a controllable parameter of the component to a controllable parameter of
+   * a constituent object.
+   *
+   * This is achieved by creating a "controllable parameter alias".
+   *
+   * @param[in] obj_params  Constituent object input parameters object
+   * @param[in] obj_name    Constituent object name
+   * @param[in] comp_param  Controllable component parameter
+   * @param[in] obj_param   Constituent object parameter
    */
-  void connectObject(const InputParameters & params,
-                     const std::string & mooseName,
-                     const std::string & name,
-                     const std::string & par_name) const;
+  void connectObject(const InputParameters & obj_params,
+                     const std::string & obj_name,
+                     const std::string & comp_param,
+                     const std::string & obj_param) const;
 
   /**
    * Makes a function controllable if it is constant
@@ -434,6 +456,45 @@ protected:
   setSubdomainInfo(SubdomainID subdomain_id,
                    const std::string & subdomain_name,
                    const Moose::CoordinateSystemType & coord_system = Moose::COORD_XYZ);
+
+  /**
+   * Adds a functor material to compute the absolute value of the change (step) of some functor
+   * between nonlinear iterations
+   *
+   * @param[in] functor_name  Functor for which to compute step
+   * @param[in] property  Name of new step functor material property
+   * @param[in] functor_is_ad  Is the functor for which to compute the step AD?
+   */
+  void addNonlinearStepFunctorMaterial(const std::string & functor_name,
+                                       const std::string & property,
+                                       bool functor_is_ad);
+
+  /**
+   * Adds a Postprocessor to compute the maximum of a functor over some domain
+   *
+   * @param[in] functor_name  Functor for which to compute maximum
+   * @param[in] pp_name  Name of new Postprocessor
+   * @param[in] normalization  Factor by which to divide quantity
+   * @param[in] subdomains  Subdomains over which to compute maximum
+   */
+  void addMaximumFunctorPostprocessor(const std::string & functor_name,
+                                      const std::string & pp_name,
+                                      const Real normalization,
+                                      const std::vector<SubdomainName> & subdomains);
+
+  /**
+   * Adds a MultiPostprocessorConvergence for nonlinear convergence for the component
+   *
+   * @param[in] postprocessors  Postprocessors to compare
+   * @param[in] descriptions  Description of each Postprocessor
+   * @param[in] tolerances  Tolerance for each check
+   */
+  void addMultiPostprocessorConvergence(const std::vector<PostprocessorName> & postprocessors,
+                                        const std::vector<std::string> & descriptions,
+                                        const std::vector<Real> & tolerances);
+
+  /// Nonlinear Convergence name
+  std::string nonlinearConvergenceName() const { return genName(name(), "nlconv"); }
 
   /// Pointer to a parent component (used in composed components)
   Component * _parent;

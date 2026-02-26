@@ -19,7 +19,7 @@ P_out = 155e+5 # Pa
 [Functions]
   [T_fn]
     type = ParsedFunction
-    value = if(x>0.0,483.10,473.10)
+    expression = if(x>0.0,483.10,473.10)
   []
 []
 
@@ -41,6 +41,13 @@ P_out = 155e+5 # Pa
   compute_viscosity = true
   compute_power = true
   P_out = ${P_out}
+  friction_closure = 'MATRA'
+[]
+
+[SCMClosures]
+  [MATRA]
+    type = SCMFrictionMATRA
+  []
 []
 
 [ICs]

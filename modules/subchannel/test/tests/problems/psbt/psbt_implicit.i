@@ -48,6 +48,17 @@ pin_diameter = 0.00950
   verbose_subchannel = true
   implicit = true
   segregated = true
+  friction_closure = 'MATRA'
+  pin_HTC_closure = 'Dittus-Boelter'
+[]
+
+[SCMClosures]
+  [MATRA]
+    type = SCMFrictionMATRA
+  []
+  [Dittus-Boelter]
+    type = SCMHTCDittusBoelter
+  []
 []
 
 [ICs]

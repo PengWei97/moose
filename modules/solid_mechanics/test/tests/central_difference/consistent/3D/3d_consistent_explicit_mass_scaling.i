@@ -138,11 +138,11 @@
   []
   [dispy]
     type = ParsedFunction
-    value = 0.1*t*t*sin(10*t)
+    expression = 0.1*t*t*sin(10*t)
   []
   [dispz]
     type = ParsedFunction
-    value = 0.1*t*t*sin(20*t)
+    expression = 0.1*t*t*sin(20*t)
   []
 []
 
@@ -172,11 +172,13 @@
   [density_scaling]
     type = DensityScaling
     block = 0
-    density = density
+    true_density = density
     desired_time_step = 0.06
+    scaled_density = density_scaled
+    additional_density = density_scaling
     output_properties = density_scaling
     outputs = 'exodus'
-    factor = 0.5
+    safety_factor = 0.5
   []
 []
 

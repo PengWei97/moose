@@ -35,32 +35,15 @@ MooseVariableBase::validParams()
   params += BlockRestrictable::validParams();
   params += OutputInterface::validParams();
 
-  MooseEnum order(
-      "CONSTANT FIRST SECOND THIRD FOURTH FIFTH SIXTH SEVENTH EIGHTH NINTH TENTH ELEVENTH TWELFTH "
-      "THIRTEENTH FOURTEENTH FIFTEENTH SIXTEENTH SEVENTEENTH EIGHTTEENTH NINETEENTH TWENTIETH "
-      "TWENTYFIRST TWENTYSECOND TWENTYTHIRD TWENTYFOURTH TWENTYFIFTH TWENTYSIXTH TWENTYSEVENTH "
-      "TWENTYEIGHTH TWENTYNINTH THIRTIETH THIRTYFIRST THIRTYSECOND THIRTYTHIRD THIRTYFOURTH "
-      "THIRTYFIFTH THIRTYSIXTH THIRTYSEVENTH THIRTYEIGHTH THIRTYNINTH FORTIETH FORTYFIRST "
-      "FORTYSECOND FORTYTHIRD",
-      "FIRST",
-      true);
-  params.addParam<MooseEnum>("order",
-                             order,
-                             "Order of the FE shape function to use for this variable (additional "
-                             "orders not listed here are allowed, depending on the family).");
-
-  MooseEnum family{AddVariableAction::getNonlinearVariableFamilies()};
-
-  params.addParam<MooseEnum>(
-      "family", family, "Specifies the family of FE shape functions to use for this variable.");
+  params.transferParam<MooseEnum>(AddVariableAction::validParams(), "order");
+  params.transferParam<MooseEnum>(AddVariableAction::validParams(), "family");
 
   // ArrayVariable capability
   params.addRangeCheckedParam<unsigned int>(
       "components", 1, "components>0", "Number of components for an array variable");
 
   // Advanced input options
-  params.addParam<std::vector<Real>>("scaling",
-                                     "Specifies a scaling factor to apply to this variable");
+  params.transferParam<std::vector<Real>>(AddVariableAction::validParams(), "scaling");
   params.addParam<bool>("eigen", false, "True to make this variable an eigen variable");
   params.addParam<bool>("fv", false, "True to make this variable a finite volume variable");
   params.addParam<bool>("array",
@@ -159,29 +142,6 @@ MooseVariableBase::MooseVariableBase(const InputParameters & parameters)
       "An inconsistent numer of names or no names were provided for array variable components");
   if (_count > 1)
     mooseAssert(isArray(), "Must be true with component > 1");
-
-  if (!blockRestricted())
-    _is_lower_d = false;
-  else
-  {
-    const auto & blk_ids = blockIDs();
-    if (blk_ids.empty())
-      paramError("block",
-                 "Every variable should have at least one subdomain. For '" + name() +
-                     "' no subdomain is defined.");
-
-    _is_lower_d = _mesh.isLowerD(*blk_ids.begin());
-#ifdef DEBUG
-    for (auto it = ++blk_ids.begin(); it != blk_ids.end(); ++it)
-      if (_is_lower_d != _mesh.isLowerD(*it))
-        mooseError("A user should not specify a mix of lower-dimensional and higher-dimensional "
-                   "blocks for variable '" +
-                   name() + "'. This variable is " + (_is_lower_d ? "" : "not ") +
-                   "recognised as lower-dimensional, but is also defined for the " +
-                   (_is_lower_d ? "higher" : "lower") + "-dimensional block '" +
-                   _mesh.getSubdomainName(*it) + "' (block-id " + std::to_string(*it) + ").");
-#endif
-  }
 }
 
 const std::string &

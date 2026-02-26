@@ -91,7 +91,7 @@ heated_length = 1.0
   []
 []
 
-[Problem]
+[SubChannel]
   type = TriSubChannel1PhaseProblem
   fp = Sodium
   n_blocks = 1
@@ -108,7 +108,17 @@ heated_length = 1.0
   verbose_multiapps = true
   verbose_subchannel = false
   interpolation_scheme = 'upwind'
-  pin_htc_correlation = 'gnielinski'
+  pin_HTC_closure = 'gnielinski'
+  friction_closure = 'Cheng'
+[]
+
+[SCMClosures]
+  [Cheng]
+    type = SCMFrictionUpdatedChengTodreas
+  []
+  [gnielinski]
+    type = SCMHTCGnielinski
+  []
 []
 
 [ICs]

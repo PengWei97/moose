@@ -20,7 +20,7 @@ P_out = 155e+5 # Pa
 [Functions]
   [S_fn]
     type = ParsedFunction
-    value = if(x>0.0,0.002,0.001)
+    expression = if(x>0.0,0.002,0.001)
   []
 []
 
@@ -40,7 +40,14 @@ P_out = 155e+5 # Pa
   compute_viscosity = true
   compute_power = true
   P_out = ${P_out}
-  default_friction_model = false
+  # friction model
+  friction_closure = 'cheng'
+[]
+
+[SCMClosures]
+  [cheng]
+    type = SCMFrictionUpdatedChengTodreas
+  []
 []
 
 [ICs]

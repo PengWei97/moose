@@ -10,16 +10,34 @@
 #pragma once
 
 #include "MooseError.h"
+#include "TwoVector.h"
 
 #include "nlohmann/json.h"
 
-#include "libmesh/libmesh_common.h"
+#include <variant>
 
+#include "libmesh/libmesh_common.h"
 #include "Eigen/Core"
+#include "metaphysicl/dualsemidynamicsparsenumberarray.h"
 
 #include <memory>
 
 class MooseApp;
+
+/**
+ * Type definition for a variant that can hold all the supported types for lattice attributes
+ */
+typedef std::variant<int,
+                     unsigned int,
+                     std::string,
+                     Real,
+                     bool,
+                     std::vector<int>,
+                     std::vector<unsigned int>,
+                     std::vector<std::string>,
+                     std::vector<Real>,
+                     std::vector<bool>>
+    AttributeVariant;
 
 namespace libMesh
 {
@@ -54,6 +72,16 @@ void to_json(nlohmann::json & json,
 
 namespace nlohmann
 {
+// Serializer for AttributeVariant
+template <>
+struct adl_serializer<AttributeVariant>
+{
+  static void to_json(json & j, const AttributeVariant & data)
+  {
+    std::visit([&j](const auto & value) { j = value; }, data);
+  }
+};
+
 template <typename T>
 struct adl_serializer<std::unique_ptr<T>>
 {
@@ -74,6 +102,34 @@ struct adl_serializer<std::unique_ptr<T>>
       mooseAssert(false, "Should not get to this");
   }
 };
+}
+
+namespace MetaPhysicL
+{
+template <template <typename, size_t> class Array, typename T, size_t N>
+void
+to_json(nlohmann::json & json, const DynamicArrayWrapper<Array, T, N> & array)
+{
+  for (const auto element : array)
+    nlohmann::to_json(json, element);
+}
+
+template <typename T, typename I, typename N, typename ArrayWrapper>
+void
+to_json(nlohmann::json & json,
+        const SemiDynamicSparseNumberArrayGeneric<T, I, N, ArrayWrapper> & sdsna)
+{
+  to_json(json, sdsna.nude_indices());
+  to_json(json, sdsna.nude_data());
+}
+
+template <typename T, typename D, bool asd>
+void
+to_json(nlohmann::json & json, const DualNumber<T, D, asd> & dn)
+{
+  nlohmann::to_json(json, dn.value());
+  to_json(json, dn.derivatives());
+}
 }
 
 namespace Eigen
@@ -98,4 +154,11 @@ to_json(nlohmann::json & json, const Matrix<Scalar, Rows, Cols, Options, MaxRows
     nlohmann::to_json(json, values);
   }
 }
+}
+
+template <typename T>
+void
+to_json(nlohmann::json & json, const GenericTwoVector<T> & two_vector)
+{
+  to_json(json, static_cast<const Eigen::Matrix<T, 2, 1> &>(two_vector));
 }

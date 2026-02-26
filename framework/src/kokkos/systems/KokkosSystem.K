@@ -17,9 +17,7 @@
 
 #include "libmesh/system.h"
 
-namespace Moose
-{
-namespace Kokkos
+namespace Moose::Kokkos
 {
 
 System::System(SystemBase & system)
@@ -52,7 +50,7 @@ System::setupVariables()
   auto & sys = _system.system();
 
   _var_fe_types.create(_num_vars);
-  _var_subdomain_active.create(_num_vars, _mesh.meshSubdomains().size());
+  _var_subdomain_active.create(_num_vars, _mesh.nSubdomains());
 
   for (unsigned int var = 0; var < _num_vars; ++var)
   {
@@ -94,7 +92,7 @@ System::setupDofs()
 {
   auto & sys = _system.system();
 
-  auto num_elems = kokkosMesh().getContiguousElementMap().size();
+  auto num_elems = kokkosMesh().getNumLocalElements();
   auto num_nodes = kokkosMesh().getContiguousNodeMap().size();
 
   _residual_tag_active.create(MAX_TAG);
@@ -333,9 +331,9 @@ System::getNodalBCDofs(const NodalBCBase * nbc, Array<bool> & dofs)
 }
 
 void
-System::sync(const MemcpyKind dir)
+System::sync(const MemcpyType dir)
 {
-  if (dir == MemcpyKind::HOST_TO_DEVICE)
+  if (dir == MemcpyType::HOST_TO_DEVICE)
   {
     for (auto tag : _active_solution_tags)
     {
@@ -364,7 +362,7 @@ System::sync(const MemcpyKind dir)
     _vectors.copyToDevice();
     _matrices.copyToDevice();
   }
-  else if (dir == MemcpyKind::DEVICE_TO_HOST)
+  else if (dir == MemcpyType::DEVICE_TO_HOST)
   {
     for (auto tag : _active_solution_tags)
       _vectors[tag].restore();
@@ -378,9 +376,9 @@ System::sync(const MemcpyKind dir)
 }
 
 void
-System::sync(const std::set<TagID> & tags, const MemcpyKind dir)
+System::sync(const std::set<TagID> & tags, const MemcpyType dir)
 {
-  if (dir == MemcpyKind::HOST_TO_DEVICE)
+  if (dir == MemcpyType::HOST_TO_DEVICE)
   {
     for (auto tag : tags)
     {
@@ -395,7 +393,7 @@ System::sync(const std::set<TagID> & tags, const MemcpyKind dir)
 
     _vectors.copyToDevice();
   }
-  else if (dir == MemcpyKind::DEVICE_TO_HOST)
+  else if (dir == MemcpyType::DEVICE_TO_HOST)
   {
     for (auto tag : tags)
     {
@@ -409,13 +407,13 @@ System::sync(const std::set<TagID> & tags, const MemcpyKind dir)
 }
 
 void
-System::sync(const std::vector<TagID> & tags, const MemcpyKind dir)
+System::sync(const std::vector<TagID> & tags, const MemcpyType dir)
 {
   sync(std::set<TagID>(tags.begin(), tags.end()), dir);
 }
 
 void
-System::sync(const TagID tag, const MemcpyKind dir)
+System::sync(const TagID tag, const MemcpyType dir)
 {
   sync(std::set<TagID>{tag}, dir);
 }
@@ -436,9 +434,6 @@ System::setActiveVariables(const std::set<MooseVariableFieldBase *> & vars)
 void
 System::setActiveSolutionTags(const std::set<TagID> & tags)
 {
-  if (!_active_variables.size())
-    return;
-
   std::set<TagID> active_solution_tags;
 
   for (auto tag : tags)
@@ -488,10 +483,10 @@ System::reinit()
   for (auto tag : _active_solution_tags)
   {
     if (!_qp_solutions[tag].isAlloc())
-      _qp_solutions[tag].create(_mesh.meshSubdomains().size(), _num_vars);
+      _qp_solutions[tag].create(_mesh.nSubdomains(), _num_vars);
 
     if (!_qp_solutions_grad[tag].isAlloc())
-      _qp_solutions_grad[tag].create(_mesh.meshSubdomains().size(), _num_vars);
+      _qp_solutions_grad[tag].create(_mesh.nSubdomains(), _num_vars);
 
     for (auto subdomain : _mesh.meshSubdomains())
     {
@@ -517,7 +512,7 @@ System::reinit()
   _qp_solutions.copyToDevice();
   _qp_solutions_grad.copyToDevice();
 
-  dof_id_type num_elems = kokkosMesh().getContiguousElementMap().size();
+  dof_id_type num_elems = kokkosMesh().getNumLocalElements();
 
   _thread.resize({kokkosAssembly().getMaxQpsPerElem(),
                   num_elems,
@@ -571,5 +566,4 @@ System::operator()(const ThreadID tid) const
   getVectorQpGrad(info, qp_offset + qp, var, tag) = grad;
 }
 
-} // namespace Kokkos
-} // namespace Moose
+} // namespace Moose::Kokkos

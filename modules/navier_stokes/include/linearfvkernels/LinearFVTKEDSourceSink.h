@@ -60,17 +60,14 @@ protected:
   /// Wall boundaries
   const std::vector<BoundaryName> & _wall_boundary_names;
 
-  /// If the user wants to use the linearized model
-  const bool _linearized_model;
-
   /// Method used for wall treatment
   NS::WallTreatmentEnum _wall_treatment;
 
   /// Value of the first epsilon closure coefficient
-  const Real _C1_eps;
+  const Moose::Functor<Real> & _C1_eps;
 
   /// Value of the second epsilon closure coefficient
-  const Real _C2_eps;
+  const Moose::Functor<Real> & _C2_eps;
 
   /// C_mu constant
   const Real _C_mu;

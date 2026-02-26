@@ -25,14 +25,14 @@ public:
   virtual void addInitialConditions() override;
   virtual void addMooseObjects() override;
 
+  /// Returns the solution variable names for the flow model
+  virtual std::vector<VariableName> solutionVariableNames() const = 0;
+
 protected:
   // Methods to get scaling factors for rhoA, rhouA, and rhoEA
   virtual Real getScalingFactorRhoA() const = 0;
   virtual Real getScalingFactorRhoUA() const = 0;
   virtual Real getScalingFactorRhoEA() const = 0;
-
-  /// Returns the solution variable names for the flow model
-  virtual std::vector<VariableName> solutionVariableNames() const = 0;
 
   /// Returns true if all of the IC parameters are valid
   bool ICParametersAreValid() const;
@@ -72,6 +72,9 @@ protected:
   virtual void addSpecificInternalEnergyAux();
   virtual void addSpecificTotalEnthalpyAux();
 
+  /// Adds the functor materials
+  virtual void addFunctorMaterials() {}
+
   /// Adds materials to compute fluid properties
   virtual void addFluidPropertiesMaterials() = 0;
 
@@ -83,6 +86,9 @@ protected:
   virtual void addSlopeReconstructionMaterial() = 0;
   /// Adds DG kernels
   virtual void addRDGAdvectionDGKernels() = 0;
+
+  /// Adds post-processors
+  virtual void addPostprocessors() {}
 
   /// Slope reconstruction type for rDG
   const MooseEnum _rdg_slope_reconstruction;

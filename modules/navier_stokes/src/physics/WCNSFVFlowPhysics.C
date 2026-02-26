@@ -288,6 +288,7 @@ WCNSFVFlowPhysics::addFVKernels()
 
   // Momentum equation: momentum viscous stress
   addMomentumViscousDissipationKernels();
+  addAxisymmetricViscousSource();
 
   // Momentum equation: pressure term
   addMomentumPressureKernels();
@@ -454,10 +455,26 @@ WCNSFVFlowPhysics::addMomentumViscousDissipationKernels()
   assignBlocks(params, _blocks);
   params.set<UserObjectName>("rhie_chow_user_object") = rhieChowUOName();
   params.set<MooseFunctorName>(NS::mu) = _dynamic_viscosity_name;
+  const bool user_include_iso = includeIsotropicStress();
+  if (user_include_iso && _porous_medium_treatment)
+    paramWarning("include_isotropic_viscous_stress",
+                 "Including the isotropic viscous stress is not supported with the porous medium "
+                 "treatment. Ignoring the request.");
+  const bool include_isotropic = (!_porous_medium_treatment) && user_include_iso;
+  if (include_isotropic)
+    params.set<bool>("include_isotropic_viscous_stress") = true;
   params.set<MooseEnum>("mu_interp_method") = getParam<MooseEnum>("mu_interp_method");
   params.set<MooseEnum>("variable_interp_method") =
       getParam<MooseEnum>("momentum_face_interpolation");
-  if (getParam<bool>("include_deviatoric_stress"))
+  bool include_symmetric = includeSymmetrizedViscousStress();
+  if (include_symmetric && _porous_medium_treatment)
+  {
+    paramWarning("include_symmetrized_viscous_stress",
+                 "Including the symmetrized viscous stress is not supported with the porous "
+                 "medium treatment. Ignoring the request.");
+    include_symmetric = false;
+  }
+  if (include_symmetric || include_isotropic)
   {
     params.set<bool>("complete_expansion") = true;
     const std::string u_names[3] = {"u", "v", "w"};
@@ -476,6 +493,24 @@ WCNSFVFlowPhysics::addMomentumViscousDissipationKernels()
 
     getProblem().addFVKernel(kernel_type, kernel_name + NS::directions[d], params);
   }
+}
+
+void
+WCNSFVFlowPhysics::addAxisymmetricViscousSourceKernel(const std::vector<SubdomainName> & rz_blocks,
+                                                      const unsigned int radial_index)
+{
+  InputParameters params = getFactory().getValidParams("INSFVMomentumViscousSourceRZ");
+  assignBlocks(params, rz_blocks);
+  params.set<MooseFunctorName>(NS::mu) = _dynamic_viscosity_name;
+  params.set<UserObjectName>("rhie_chow_user_object") = rhieChowUOName();
+  params.set<MooseEnum>("momentum_component") = NS::directions[radial_index];
+  params.set<bool>("complete_expansion") = includeSymmetrizedViscousStress();
+  params.set<NonlinearVariableName>("variable") = _velocity_names[radial_index];
+
+  getProblem().addFVKernel("INSFVMomentumViscousSourceRZ",
+                           prefix() + "ins_momentum_viscous_source_rz_" +
+                               NS::directions[radial_index],
+                           params);
 }
 
 void
@@ -573,10 +608,13 @@ WCNSFVFlowPhysics::addMomentumBoussinesqKernels()
 
   for (const auto d : make_range(dimension()))
   {
-    params.set<MooseEnum>("momentum_component") = NS::directions[d];
-    params.set<NonlinearVariableName>("variable") = _velocity_names[d];
+    if (getParam<RealVectorValue>("gravity")(d) != 0)
+    {
+      params.set<MooseEnum>("momentum_component") = NS::directions[d];
+      params.set<NonlinearVariableName>("variable") = _velocity_names[d];
 
-    getProblem().addFVKernel(kernel_type, kernel_name + NS::directions[d], params);
+      getProblem().addFVKernel(kernel_type, kernel_name + NS::directions[d], params);
+    }
   }
 }
 
@@ -628,7 +666,7 @@ WCNSFVFlowPhysics::addMomentumFrictionKernels()
           params.set<MooseFunctorName>("Forchheimer_name") = _friction_coeffs[block_i][type_i];
         }
         else
-          paramError("momentum_friction_types",
+          paramError("friction_types",
                      "Friction type '",
                      _friction_types[block_i][type_i],
                      "' is not implemented");
@@ -1181,13 +1219,6 @@ WCNSFVFlowPhysics::checkRhieChowFunctorsDefined() const
     mooseError("Rhie Chow coefficient ay must be provided for advection by auxiliary velocities");
   if (dimension() == 3 && !getProblem().hasFunctor("az", /*thread_id=*/0))
     mooseError("Rhie Chow coefficient az must be provided for advection by auxiliary velocities");
-}
-
-UserObjectName
-WCNSFVFlowPhysics::rhieChowUOName() const
-{
-  mooseAssert(!_rc_uo_name.empty(), "The Rhie-Chow user-object name should be set!");
-  return _rc_uo_name;
 }
 
 MooseFunctorName

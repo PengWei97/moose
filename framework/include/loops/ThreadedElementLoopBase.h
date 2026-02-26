@@ -264,20 +264,18 @@ ThreadedElementLoopBase<RangeType>::operator()(const RangeType & range, bool byp
           continue;
         }
 
+        const auto elem_boundary_ids = _mesh.getBoundaryIDs(elem);
         for (unsigned int side = 0; side < elem->n_sides(); side++)
         {
-          std::vector<BoundaryID> boundary_ids = _mesh.getBoundaryIDs(elem, side);
+          const auto & boundary_ids = elem_boundary_ids[side];
           const Elem * lower_d_elem = _mesh.getLowerDElem(elem, side);
 
-          if (boundary_ids.size() > 0)
-            for (std::vector<BoundaryID>::iterator it = boundary_ids.begin();
-                 it != boundary_ids.end();
-                 ++it)
-            {
-              preBoundary(elem, side, *it, lower_d_elem);
-              printBoundaryExecutionInformation(*it);
-              onBoundary(elem, side, *it, lower_d_elem);
-            }
+          for (const auto bnd_id : boundary_ids)
+          {
+            preBoundary(elem, side, bnd_id, lower_d_elem);
+            printBoundaryExecutionInformation(bnd_id);
+            onBoundary(elem, side, bnd_id, lower_d_elem);
+          }
 
           const Elem * neighbor = elem->neighbor_ptr(side);
           if (neighbor)
@@ -292,11 +290,8 @@ ThreadedElementLoopBase<RangeType>::operator()(const RangeType & range, bool byp
             if (shouldComputeInternalSide(*elem, *neighbor))
               onInternalSide(elem, side);
 
-            if (boundary_ids.size() > 0)
-              for (std::vector<BoundaryID>::iterator it = boundary_ids.begin();
-                   it != boundary_ids.end();
-                   ++it)
-                onInterface(elem, side, *it);
+            for (const auto bnd_id : boundary_ids)
+              onInterface(elem, side, bnd_id);
 
             postInternalSide(elem, side);
           }
@@ -429,24 +424,29 @@ bool
 ThreadedElementLoopBase<RangeType>::shouldComputeInternalSide(const Elem & elem,
                                                               const Elem & neighbor) const
 {
-  auto level = [this](const auto & elem_arg)
-  {
-    if (_mesh.doingPRefinement())
-      return elem_arg.p_level();
-    else
-      return elem_arg.level();
-  };
-  const auto elem_id = elem.id(), neighbor_id = neighbor.id();
-  const auto elem_level = level(elem), neighbor_level = level(neighbor);
+  // If we're going to compute the internal side with this elem-neighbor pair, then they must both
+  // be active. Note that if elem is an active coarse element at an interface with finer elements,
+  // then its neighbor will be an equal-level inactive element, hence the following
+  // neighbor.active() check. In that case we'll catch current 'elem' when we come around and
+  // examine one of the finer elements as 'elem'
+  mooseAssert(elem.active(), "This method should never be called with an inactive element");
+  if (!neighbor.active())
+    return false;
 
-  // When looping over elements and then sides, we need to make sure that we do not duplicate
-  // effort, e.g. if a face is shared by element 1 and element 2, then we do not want to do compute
-  // work both when we are visiting element 1 *and* then later when visiting element 2. Our rule is
-  // to only compute when we are visiting the element that has the lower element id when element and
-  // neighbor are of the same adaptivity level, and then if they are not of the same level, then
-  // we only compute when we are visiting the finer element
-  return (neighbor.active() && (neighbor_level == elem_level) && (elem_id < neighbor_id)) ||
-         (neighbor_level < elem_level);
+  //
+  // Define an ordering: first prefer finer by h (higher level()), then prefer finer by p (higher
+  // p_level()), then prefer smaller id()"
+  //
+
+  const auto elem_level = elem.level(), neighbor_level = neighbor.level();
+  if (elem_level != neighbor_level)
+    return elem_level > neighbor_level;
+
+  const auto elem_p_level = elem.p_level(), neighbor_p_level = neighbor.p_level();
+  if (elem_p_level != neighbor_p_level)
+    return elem_p_level > neighbor_p_level;
+
+  return elem.id() < neighbor.id();
 }
 
 template <typename RangeType>

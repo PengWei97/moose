@@ -13,6 +13,8 @@
 #include "MooseApp.h"
 #include "Parser.h"
 #include "MooseMain.h"
+#include "Capabilities.h"
+#include "MooseStringUtils.h"
 
 AppFactory &
 AppFactory::instance()
@@ -157,7 +159,7 @@ AppFactory::create(const std::string & app_type,
 
   auto parser = parameters.get<std::shared_ptr<Parser>>("_parser");
   mooseAssert(parser, "Parser not valid");
-  mooseAssert(parser->queryRoot() && parser->queryCommandLineRoot(), "Parser has not parsed");
+  mooseAssert(parser->queryRoot(), "Parser has not parsed");
 
   auto command_line = parameters.get<std::shared_ptr<CommandLine>>("_command_line");
   mooseAssert(command_line, "Command line not valid");
@@ -217,4 +219,11 @@ AppFactory::getAppParamsID(const InputParameters & params) const
     mooseError("AppFactory::getAppParamsID(): Invalid application parameters (missing "
                "'_app_params_id')");
   return params.get<std::size_t>("_app_params_id");
+}
+
+void
+AppFactory::registerAppCapability(const std::string & app_name)
+{
+  Moose::internal::Capabilities::get({}).add(
+      MooseUtils::toLower(app_name), true, "MOOSE application " + app_name + " is available.");
 }

@@ -9,9 +9,7 @@
 
 #include "KokkosNodalKernel.h"
 
-namespace Moose
-{
-namespace Kokkos
+namespace Moose::Kokkos
 {
 
 InputParameters
@@ -26,6 +24,7 @@ NodalKernel::NodalKernel(const InputParameters & parameters)
     _u(_var, Moose::SOLUTION_TAG, true),
     _boundary_restricted(boundaryRestricted())
 {
+  addMooseVariableDependency(&_var);
 }
 
 void
@@ -68,5 +67,4 @@ NodalKernel::computeJacobian()
   }
 }
 
-} // namespace Kokkos
-} // namespace Moose
+} // namespace Moose::Kokkos

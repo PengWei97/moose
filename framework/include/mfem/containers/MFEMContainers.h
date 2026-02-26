@@ -10,14 +10,11 @@
 #ifdef MOOSE_MFEM_ENABLED
 
 #pragma once
+
 #include <map>
 #include <set>
 #include <string>
-#include <memory>
 #include <vector>
-#include "libmesh/ignore_warnings.h"
-#include <mfem.hpp>
-#include "libmesh/restore_warnings.h"
 
 namespace Moose::MFEM
 {
@@ -254,8 +251,9 @@ private:
 
 using FECollections = Moose::MFEM::NamedFieldsMap<mfem::FiniteElementCollection>;
 using FESpaces = Moose::MFEM::NamedFieldsMap<mfem::ParFiniteElementSpace>;
-using GridFunctions = Moose::MFEM::NamedFieldsMap<mfem::ParGridFunction>;
 using SubMeshes = Moose::MFEM::NamedFieldsMap<mfem::ParSubMesh>;
+using GridFunctions = Moose::MFEM::NamedFieldsMap<mfem::ParGridFunction>;
+using ComplexGridFunctions = Moose::MFEM::NamedFieldsMap<mfem::ParComplexGridFunction>;
 
 } // namespace Moose::MFEM
 

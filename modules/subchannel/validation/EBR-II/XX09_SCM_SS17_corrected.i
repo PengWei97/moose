@@ -63,9 +63,9 @@ unheated_length_exit = '${fparse 26.9*scale_factor}'
 [Functions]
   [axial_heat_rate]
     type = ParsedFunction
-    value = '(pi/2)*sin(pi*z/L)*exp(-alpha*z)/(1.0/alpha*(1.0 - exp(-alpha*L)))*L'
-    vars = 'L alpha'
-    vals = '${heated_length} 1.8012'
+    expression = '(pi/2)*sin(pi*z/L)*exp(-alpha*z)/(1.0/alpha*(1.0 - exp(-alpha*L)))*L'
+    symbol_names = 'L alpha'
+    symbol_values = '${heated_length} 1.8012'
   []
 []
 
@@ -101,6 +101,9 @@ unheated_length_exit = '${fparse 26.9*scale_factor}'
     block = subchannel
   []
   [displacement]
+    block = subchannel
+  []
+  [ff]
     block = subchannel
   []
   [q_prime]
@@ -141,10 +144,20 @@ unheated_length_exit = '${fparse 26.9*scale_factor}'
   segregated = false
   interpolation_scheme = 'upwind'
   verbose_subchannel = true
-
   # Heat Transfer Correlations
-  pin_htc_correlation = 'gnielinski'
-  duct_htc_correlation = 'gnielinski'
+  pin_HTC_closure = 'gnielinski'
+  duct_HTC_closure = 'gnielinski'
+  # friction model
+  friction_closure = 'cheng'
+[]
+
+[SCMClosures]
+  [cheng]
+    type = SCMFrictionUpdatedChengTodreas
+  []
+  [gnielinski]
+    type = SCMHTCGnielinski
+  []
 []
 
 [ICs]

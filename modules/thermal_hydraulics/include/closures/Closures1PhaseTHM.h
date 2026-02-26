@@ -36,7 +36,8 @@ public:
   enum class WallFFClosureType
   {
     CHENG_TODREAS,
-    CHURCHILL
+    CHURCHILL,
+    COLEBROOK_WHITE
   };
 
   virtual void checkFlowChannel(const FlowChannelBase & flow_channel) const override;
@@ -62,14 +63,6 @@ protected:
    */
   void addWallHTCMaterial(const FlowChannel1Phase & flow_channel, unsigned int i) const;
 
-  /**
-   * Adds computation of wall temperature when heat flux is specified
-   *
-   * @param[in] flow_channel   Flow channel component
-   * @param[in] i   Heat transfer index
-   */
-  void addTemperatureWallFromHeatFluxMaterial(const FlowChannel1Phase & flow_channel,
-                                              unsigned int i) const;
   /// Wall heat transfer coefficient closure
   const WallHTCClosureType _wall_htc_closure;
 

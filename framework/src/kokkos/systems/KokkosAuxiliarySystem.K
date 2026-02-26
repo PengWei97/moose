@@ -29,7 +29,7 @@ AuxiliarySystem::addKokkosKernel(const std::string & kernel_name,
 void
 AuxiliarySystem::kokkosCompute(ExecFlagType type)
 {
-  TIME_SECTION("computeKokkosAuxKernel", 1);
+  TIME_SECTION("computeKokkosAuxKernel", 3);
 
   if (!_kokkos_elemental_aux_storage[type].size() && !_kokkos_nodal_aux_storage[type].size())
     return;
@@ -50,44 +50,25 @@ AuxiliarySystem::kokkosCompute(ExecFlagType type)
 
   associateVectorToTag(solution(), solution_tag);
 
-  for (auto block : _fe_problem.mesh().meshSubdomains())
+  _kokkos_elemental_aux_storage[type].updateVariableDependency(needed_moose_vars);
+  _kokkos_elemental_aux_storage[type].updateFEVariableCoupledVectorTagDependency(
+      needed_fe_var_vector_tags);
+  _kokkos_elemental_aux_storage[type].updateMatPropDependency(needed_mat_props);
+
+  _kokkos_nodal_aux_storage[type].updateVariableDependency(needed_moose_vars);
+  _kokkos_nodal_aux_storage[type].updateFEVariableCoupledVectorTagDependency(
+      needed_fe_var_vector_tags);
+
+  if (needed_mat_props.size())
   {
-    _fe_problem.getKokkosMaterialsWarehouse().updateBlockVariableDependency(block,
-                                                                            needed_moose_vars);
-    _fe_problem.getKokkosMaterialsWarehouse().updateBlockFEVariableCoupledVectorTagDependency(
-        block, needed_fe_var_vector_tags);
-
-    _kokkos_elemental_aux_storage[type].updateBlockVariableDependency(block, needed_moose_vars);
-    _kokkos_elemental_aux_storage[type].updateBlockFEVariableCoupledVectorTagDependency(
-        block, needed_fe_var_vector_tags);
-    _kokkos_elemental_aux_storage[type].updateBlockMatPropDependency(block, needed_mat_props);
-
-    _kokkos_nodal_aux_storage[type].updateBlockVariableDependency(block, needed_moose_vars);
-    _kokkos_nodal_aux_storage[type].updateBlockFEVariableCoupledVectorTagDependency(
-        block, needed_fe_var_vector_tags);
-  }
-
-  for (auto boundary : _fe_problem.mesh().meshBoundaryIds())
-  {
-    _fe_problem.getKokkosMaterialsWarehouse().updateBoundaryVariableDependency(boundary,
-                                                                               needed_moose_vars);
-    _fe_problem.getKokkosMaterialsWarehouse().updateBoundaryFEVariableCoupledVectorTagDependency(
-        boundary, needed_fe_var_vector_tags);
-
-    _kokkos_elemental_aux_storage[type].updateBoundaryVariableDependency(boundary,
-                                                                         needed_moose_vars);
-    _kokkos_elemental_aux_storage[type].updateBoundaryFEVariableCoupledVectorTagDependency(
-        boundary, needed_fe_var_vector_tags);
-    _kokkos_elemental_aux_storage[type].updateBoundaryMatPropDependency(boundary, needed_mat_props);
-
-    _kokkos_nodal_aux_storage[type].updateBoundaryVariableDependency(boundary, needed_moose_vars);
-    _kokkos_nodal_aux_storage[type].updateBoundaryFEVariableCoupledVectorTagDependency(
-        boundary, needed_fe_var_vector_tags);
+    _fe_problem.getKokkosMaterialsWarehouse().updateVariableDependency(needed_moose_vars);
+    _fe_problem.getKokkosMaterialsWarehouse().updateFEVariableCoupledVectorTagDependency(
+        needed_fe_var_vector_tags);
   }
 
   // Copy data and cache variable values at element quadature points
 
-  systems[number()].sync(solution_tag, Moose::Kokkos::MemcpyKind::HOST_TO_DEVICE);
+  systems[number()].sync(solution_tag, Moose::Kokkos::MemcpyType::HOST_TO_DEVICE);
 
   for (auto & system : systems)
   {
@@ -96,7 +77,7 @@ AuxiliarySystem::kokkosCompute(ExecFlagType type)
 
     {
       TIME_SECTION("KokkosCopy", 1);
-      system.sync(Moose::Kokkos::MemcpyKind::HOST_TO_DEVICE);
+      system.sync(Moose::Kokkos::MemcpyType::HOST_TO_DEVICE);
     }
     {
       TIME_SECTION("KokkosReinit", 1);
@@ -111,8 +92,11 @@ AuxiliarySystem::kokkosCompute(ExecFlagType type)
 
     // Compute material properties
 
-    _fe_problem.prepareKokkosMaterials(needed_mat_props);
-    _fe_problem.reinitKokkosMaterials();
+    if (needed_mat_props.size())
+    {
+      _fe_problem.prepareKokkosMaterials(needed_mat_props);
+      _fe_problem.reinitKokkosMaterials();
+    }
   }
 
   {
@@ -133,9 +117,9 @@ AuxiliarySystem::kokkosCompute(ExecFlagType type)
     TIME_SECTION("KokkosCopy", 1);
 
     for (auto & system : systems)
-      system.sync(Moose::Kokkos::MemcpyKind::DEVICE_TO_HOST);
+      system.sync(Moose::Kokkos::MemcpyType::DEVICE_TO_HOST);
 
-    systems[number()].sync(solution_tag, Moose::Kokkos::MemcpyKind::DEVICE_TO_HOST);
+    systems[number()].sync(solution_tag, Moose::Kokkos::MemcpyType::DEVICE_TO_HOST);
 
     _sys.update();
   }

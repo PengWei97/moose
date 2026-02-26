@@ -4,6 +4,8 @@
 
 ## Benchmark Description
 
+!! Intentional comment to provide extra spacing
+
 The Toshiba 37-pin benchmark is based on liquid sodium experiments conducted by the Toshiba Corporation Nuclear Engineering Laboratory in Japan [!citep](namekawa1984buoyancy).
 Its assembly consists of four outer rings of electrically heated pins.
 However, the resistances in the electrically heated pins are adapted to reproduce a chopped cosine power distribution in the axial direction.
@@ -16,7 +18,7 @@ south-to-north line in the fuel assembly. This one involves, in south to north o
 !media subchannel/v&v/toshiba/toshiba_37_config.png
        style=width:60%;margin-bottom:2%;margin:auto;
        id=configuration
-       caption= Rod and subchannel positions and numbering adopted for the Toshiba 37-pin benchmark. (a) Position and numbering of the heated pins with the subchannel center indicated with red dots. (b) Center position and numbering of the suchannels.
+       caption=Fuel pin and subchannel positions and numbering adopted for the Toshiba 37-pin benchmark. (a) Position and numbering of the heated pins with the subchannel center indicated with red dots. (b) Center position and numbering of the suchannels.
 
 The characteristics of Toshiba's benchmark are provided in [parameters].
 
@@ -24,8 +26,8 @@ The characteristics of Toshiba's benchmark are provided in [parameters].
 | Experiment Parameter (unit) | Value  |
 | :- | :- |
 | Number of pins (-) | $37$ |
-| Rod Pitch (cm) | $0.787$ |
-| Rod Diameter (cm) | $0.650$ |
+| Pin Pitch (cm) | $0.787$ |
+| Pin Diameter (cm) | $0.650$ |
 | Wire wrap diameter (cm) | $0.132$ |
 | Wire wrap axial pitch (cm) | $30.70$ |
 | Flat-to-flat duct distance (cm) | $5.04$ |
@@ -39,7 +41,7 @@ The characteristics of Toshiba's benchmark are provided in [parameters].
 Three flow configurations with reducing axial mass flow rate are selected for the validation exercise. These configurations are presented in [cases].
 
 !table id=cases caption=Validation cases selected in the Toshiba benchmark
-| Naming | Run ID | Rod Power (W/cm) | Inlet temperature ($K$) | Flow rate (m$^3$/s) | Reynolds number |
+| Naming | Run ID | Pin Power (W/cm) | Inlet temperature ($K$) | Flow rate (m$^3$/s) | Reynolds number |
 | :- | :- | :- | :- | :- | :- |
 | High flow rate | $B37P02$ | $15.57$ | $484.3$ | $1.48*10^{-3}$ | $1.12*10^4$ |
 | Medium flow rate | $0C37P06$ | $11.92$ | $476.5$ | $3.34*10^{-4}$ | $2.81*10^3$ |
@@ -70,13 +72,6 @@ For more information about the mesh generator, pelase consult the website docume
 
 !listing /validation/Toshiba_37_pin/toshiba_37_pin.i block=TriSubChannelMesh language=moose
 
-### Variables
-
-This block defines the subchannel variables for the SCM solve.
-All variables must be present at every input for the SCM solver to run.
-
-!listing /validation/Toshiba_37_pin/toshiba_37_pin.i block=AuxVariables language=moose
-
 ### FluidProperties
 
 The FluidProperties block specifies the thermophysical properties used in the SCM solve.
@@ -84,16 +79,16 @@ Sodium properties are used in this case.
 
 !listing /validation/Toshiba_37_pin/toshiba_37_pin.i block=FluidProperties language=moose
 
-### Problem
+### SubChannel
 
-The problem type specifies the solver to be used in the SCM solve.
+The SubChannel type specifies the solver to be used in the SCM solve.
 The type of problem used in this case is a liquid metal SCM problem that uses sodium fluid properties.
 The parameters *beta* and *C_T* are used are used to model the crossflow and cross enthalpy-fluxes.
 Different solve procedures can be applied.
 In this case, we use an implicit, non-segragated solve.
 For more information about the mesh generator, pelase consult the website documentation on SCM.
 
-!listing /validation/Toshiba_37_pin/toshiba_37_pin.i block=Problem language=moose
+!listing /validation/Toshiba_37_pin/toshiba_37_pin.i block=SubChannel language=moose
 
 ### Initial Conditions
 
@@ -131,6 +126,8 @@ The detailed mesh uses a *SCMDetailedTriSubChannelMeshGenerator* and the solutio
 !listing /validation/Toshiba_37_pin/toshiba_37_pin.i block=viz language=moose
 
 ## Results
+
+!! Intentional comment to provide extra spacing
 
 An example flow distribution for the high flow-rate case is depicted in [3Dres].
 As graphically observed, a flat temperature profile is obtained in the bulk of the fuel assembly.

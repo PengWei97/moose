@@ -88,6 +88,17 @@ P_out = 101325 # Pa
   P_out = ${P_out}
   implicit = true
   segregated = false
+  friction_closure = 'MATRA'
+  pin_HTC_closure = 'Dittus-Boelter'
+[]
+
+[SCMClosures]
+  [MATRA]
+    type = SCMFrictionMATRA
+  []
+  [Dittus-Boelter]
+    type = SCMHTCDittusBoelter
+  []
 []
 
 [ICs]

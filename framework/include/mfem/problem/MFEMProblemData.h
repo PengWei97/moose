@@ -10,13 +10,14 @@
 #ifdef MOOSE_MFEM_ENABLED
 
 #pragma once
+
 #include "EquationSystem.h"
+#include "ComplexEquationSystem.h"
 #include "MFEMContainers.h"
 #include "CoefficientManager.h"
 #include "MFEMSolverBase.h"
 #include <fstream>
 #include <iostream>
-#include <memory>
 
 /// Base problem data struct.
 struct MFEMProblemData
@@ -41,6 +42,7 @@ public:
   Moose::MFEM::FESpaces fespaces;
   Moose::MFEM::GridFunctions gridfunctions;
   Moose::MFEM::TimeDerivativeMap time_derivative_map;
+  Moose::MFEM::ComplexGridFunctions cmplx_gridfunctions;
 
   MPI_Comm comm;
   int myid;

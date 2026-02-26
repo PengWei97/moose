@@ -4,7 +4,7 @@
 #
 # As well as any directions pertaining to modifying those files.
 # ALSO: Follow the directions in scripts/tests/versioner_hashes.yaml
-{% set version = "2025.09.18" %}
+{% set version = "2025.09.19_02960f1" %}
 
 package:
   name: moose-wasp
@@ -33,14 +33,14 @@ source:
       - message.patch
 
 build:
-  number: 0
-  string: build_0
+  number: 4
+  string: build_4
 
 outputs:
   - name: moose-wasp-base
     build:
-      number: 0
-      string: build_0
+      number: 4
+      string: build_4
       script: ${RECIPE_DIR}/build_wasp.sh
       script_env:
         - MOOSE_JOBS
@@ -62,7 +62,7 @@ outputs:
 
   - name: moose-pyhit
     build:
-      number: 0
+      number: 4
       script: ${RECIPE_DIR}/build_pyhit.sh
       script_env:
         - MOOSE_JOBS
@@ -101,5 +101,5 @@ about:
     access, validation, and analysis of ascii text files.
 extra:
   recipe-maintainers:
-    - milljm
+    - cticenhour
     - loganharbour

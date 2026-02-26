@@ -9,12 +9,17 @@
 
 #include "KokkosTypes.h"
 #include "KokkosFunction.h"
+#include "KokkosUserObject.h"
+#include "KokkosPostprocessor.h"
 
 #include "FEProblemBase.h"
 #include "DisplacedProblem.h"
 #include "NonlinearSystemBase.h"
 #include "AuxiliarySystem.h"
 #include "MaterialBase.h"
+#include "MooseVariableDependencyInterface.h"
+#include "MaterialPropertyInterface.h"
+#include "Coupleable.h"
 
 Moose::Kokkos::System &
 FEProblemBase::getKokkosSystem(const unsigned int sys_num)
@@ -114,7 +119,7 @@ FEProblemBase::addKokkosFunction(const std::string & type,
 
   std::shared_ptr<Moose::FunctionBase> func =
       _factory.create<Moose::FunctionBase>(type, name, parameters);
-  logAdd("Function", name, type, parameters);
+  logAdd("KokkosFunction", name, type, parameters);
   _kokkos_functions.addObject(func);
 
   _has_kokkos_objects = true;
@@ -135,6 +140,48 @@ FEProblemBase::getKokkosFunction(const std::string & name)
       Moose::Kokkos::FunctorRegistry::buildFunction(&function, function.type());
 
   return Moose::Kokkos::Function(wrapper);
+}
+
+void
+FEProblemBase::addKokkosPostprocessor(const std::string & pp_name,
+                                      const std::string & name,
+                                      InputParameters & parameters)
+{
+  checkUserObjectNameCollision(name, "KokkosPostprocessor");
+
+  addKokkosUserObject(pp_name, name, parameters);
+}
+
+void
+FEProblemBase::addKokkosUserObject(const std::string & user_object_name,
+                                   const std::string & name,
+                                   InputParameters & parameters)
+{
+  parallel_object_only();
+
+  // Add the _subproblem and _sys parameters depending on use_displaced_mesh
+  addObjectParamsHelper(parameters, name);
+
+  // Create the UserObject
+  std::shared_ptr<UserObjectBase> user_object =
+      _factory.create<UserObjectBase>(user_object_name, name, parameters);
+  logAdd("KokkosUserObject", name, user_object_name, parameters);
+
+  theWarehouse().add(user_object);
+
+  _has_kokkos_objects = true;
+}
+
+bool
+FEProblemBase::hasKokkosUserObject(const std::string & name) const
+{
+  std::vector<UserObjectBase *> objs;
+  theWarehouse()
+      .query()
+      .condition<AttribSystem>("KokkosUserObject")
+      .condition<AttribName>(name)
+      .queryInto(objs);
+  return !objs.empty();
 }
 
 void
@@ -194,6 +241,8 @@ FEProblemBase::getKokkosMaterialPropertyStorageConsumers(Moose::MaterialDataType
 void
 FEProblemBase::initKokkos()
 {
+  TIME_SECTION("InitializeKokkos", 1, "Initializing Kokkos");
+
   // Error on unsupported options
 
   if (haveDisplaced())
@@ -202,8 +251,14 @@ FEProblemBase::initKokkos()
   if (adaptivity().isOn())
     mooseError("Kokkos does not support adaptivity yet.");
 
-  // Initialize Kokkos assembly
+  // Initialize Kokkos mesh
+  _mesh.getKokkosMesh()->update();
 
+  // Call functions that require Kokkos mesh to be initialized first
+  for (auto hook : _kokkos_mesh_initialization_hooks)
+    hook();
+
+  // Initialize Kokkos assembly
   _kokkos_assembly.init();
 
   // Initialize Kokkos systems
@@ -243,19 +298,8 @@ FEProblemBase::initKokkosStatefulProps()
   std::set<MooseVariableFieldBase *> needed_moose_vars;
   std::set<TagID> needed_fe_var_vector_tags;
 
-  for (auto block : _mesh.meshSubdomains())
-  {
-    _kokkos_materials.updateBlockVariableDependency(block, needed_moose_vars);
-    _kokkos_materials.updateBlockFEVariableCoupledVectorTagDependency(block,
-                                                                      needed_fe_var_vector_tags);
-  }
-
-  for (auto boundary : _mesh.meshBoundaryIds())
-  {
-    _kokkos_materials.updateBoundaryVariableDependency(boundary, needed_moose_vars);
-    _kokkos_materials.updateBoundaryFEVariableCoupledVectorTagDependency(boundary,
-                                                                         needed_fe_var_vector_tags);
-  }
+  _kokkos_materials.updateVariableDependency(needed_moose_vars);
+  _kokkos_materials.updateFEVariableCoupledVectorTagDependency(needed_fe_var_vector_tags);
 
   // Copy data and preallocate quadature point solution vectors
 
@@ -264,7 +308,7 @@ FEProblemBase::initKokkosStatefulProps()
     system.setActiveVariables(needed_moose_vars);
     system.setActiveSolutionTags(needed_fe_var_vector_tags);
 
-    system.sync(Moose::Kokkos::MemcpyKind::HOST_TO_DEVICE);
+    system.sync(Moose::Kokkos::MemcpyType::HOST_TO_DEVICE);
     system.reinit();
   }
 
@@ -298,7 +342,7 @@ FEProblemBase::initKokkosStatefulProps()
 
   for (auto & system : _kokkos_systems)
   {
-    system.sync(Moose::Kokkos::MemcpyKind::DEVICE_TO_HOST);
+    system.sync(Moose::Kokkos::MemcpyType::DEVICE_TO_HOST);
 
     system.clearActiveVariables();
     system.clearActiveSolutionTags();
@@ -309,15 +353,9 @@ void
 FEProblemBase::prepareKokkosMaterials(
     const std::unordered_set<unsigned int> & consumer_needed_mat_props)
 {
-  std::unordered_set<unsigned int> needed_mat_props;
+  auto needed_mat_props = consumer_needed_mat_props;
 
-  for (auto block : mesh().meshSubdomains())
-    _kokkos_materials.updateBlockMatPropDependency(block, needed_mat_props);
-
-  for (auto boundary : mesh().meshBoundaryIds())
-    _kokkos_materials.updateBoundaryMatPropDependency(boundary, needed_mat_props);
-
-  needed_mat_props.insert(consumer_needed_mat_props.begin(), consumer_needed_mat_props.end());
+  _kokkos_materials.updateMatPropDependency(needed_mat_props, 0, true);
 
   setActiveMaterialProperties(needed_mat_props, 0);
 }
@@ -328,19 +366,184 @@ FEProblemBase::reinitKokkosMaterials()
   if (hasActiveMaterialProperties(0))
   {
     for (auto & material : _kokkos_materials.getActiveObjects())
-      if (!material->boundaryRestricted())
+      if (material->hasActiveProperties() && !material->boundaryRestricted())
         material->computeProperties();
 
     for (auto & material : _kokkos_materials[Moose::FACE_MATERIAL_DATA].getActiveObjects())
-      material->computeProperties();
+      if (material->hasActiveProperties())
+        material->computeProperties();
 
     for (auto & material : _kokkos_materials[Moose::NEIGHBOR_MATERIAL_DATA].getActiveObjects())
-      material->computeProperties();
+      if (material->hasActiveProperties())
+        material->computeProperties();
 
     for (auto & material : _kokkos_materials.getActiveObjects())
-      if (material->boundaryRestricted())
+      if (material->hasActiveProperties() && material->boundaryRestricted())
         material->computeProperties();
   }
+}
 
-  Kokkos::fence();
+void
+FEProblemBase::computeKokkosUserObjectsInternal(const ExecFlagType & type,
+                                                const Moose::AuxGroup & group,
+                                                TheWarehouse::Query & primary_query)
+{
+  try
+  {
+    TIME_SECTION("computeKokkosUserObjects", 1, "Computing Kokkos User Objects");
+
+    // Add group to query
+
+    if (group == Moose::PRE_IC)
+      primary_query.condition<AttribPreIC>(true);
+    else if (group == Moose::PRE_AUX)
+      primary_query.condition<AttribPreAux>(type);
+    else if (group == Moose::POST_AUX)
+      primary_query.condition<AttribPostAux>(type);
+
+    // Query everything first to obtain a list of execution groups
+
+    std::vector<UserObjectBase *> uos;
+    primary_query.clone().queryIntoUnsorted(uos);
+
+    if (!uos.size())
+      return;
+
+    std::set<int> execution_groups;
+    for (const auto uo : uos)
+      execution_groups.insert(uo->getParam<int>("execution_order_group"));
+
+    // Resolve dependencies
+
+    std::set<MooseVariableFEBase *> needed_moose_vars;
+    std::unordered_set<unsigned int> needed_mat_props;
+    std::set<TagID> needed_fe_var_vector_tags;
+
+    for (const auto uo : uos)
+    {
+      auto v_uo = dynamic_cast<MooseVariableDependencyInterface *>(uo);
+      if (v_uo)
+      {
+        const auto & v_deps = v_uo->getMooseVariableDependencies();
+        needed_moose_vars.insert(v_deps.begin(), v_deps.end());
+      }
+
+      auto m_uo = dynamic_cast<MaterialPropertyInterface *>(uo);
+      if (m_uo)
+      {
+        auto & m_deps = m_uo->getMatPropDependencies();
+        needed_mat_props.insert(m_deps.begin(), m_deps.end());
+      }
+
+      auto c_uo = dynamic_cast<Coupleable *>(uo);
+      if (c_uo)
+      {
+        const auto & tag_deps = c_uo->getFEVariableCoupleableVectorTags();
+        needed_fe_var_vector_tags.insert(tag_deps.begin(), tag_deps.end());
+      }
+    }
+
+    if (needed_mat_props.size())
+    {
+      _kokkos_materials.updateVariableDependency(needed_moose_vars);
+      _kokkos_materials.updateFEVariableCoupledVectorTagDependency(needed_fe_var_vector_tags);
+    }
+
+    // Copy data and cache variable values at element quadature points
+
+    for (auto & system : _kokkos_systems)
+    {
+      system.setActiveVariables(needed_moose_vars);
+      system.setActiveSolutionTags(needed_fe_var_vector_tags);
+
+      {
+        TIME_SECTION("KokkosCopy", 1);
+        system.sync(Moose::Kokkos::MemcpyType::HOST_TO_DEVICE);
+      }
+      {
+        TIME_SECTION("KokkosReinit", 1);
+        system.reinit();
+      }
+    }
+
+    _kokkos_systems.copyToDevice();
+
+    {
+      TIME_SECTION("KokkosMaterial", 1);
+
+      // Compute material properties
+
+      if (needed_mat_props.size())
+      {
+        prepareKokkosMaterials(needed_mat_props);
+        reinitKokkosMaterials();
+      }
+    }
+
+    {
+      TIME_SECTION("KokkosUserObject", 1);
+
+      // Iterate over execution order groups
+
+      for (const auto execution_group : execution_groups)
+      {
+        std::vector<Moose::Kokkos::UserObject *> userobjs;
+        primary_query.clone()
+            .condition<AttribExecutionOrderGroup>(execution_group)
+            .queryInto(userobjs);
+
+        if (type == EXEC_LINEAR)
+          for (auto obj : userobjs)
+            obj->residualSetup();
+        else if (type == EXEC_NONLINEAR)
+          for (auto obj : userobjs)
+            obj->jacobianSetup();
+
+        for (auto obj : userobjs)
+          obj->initialize();
+
+        for (auto obj : userobjs)
+          obj->compute();
+
+        kokkosJoinAndFinalize(userobjs);
+      }
+    }
+
+    // Close and restore vectors
+
+    {
+      TIME_SECTION("KokkosCopy", 1);
+
+      for (auto & system : _kokkos_systems)
+        system.sync(Moose::Kokkos::MemcpyType::DEVICE_TO_HOST);
+    }
+
+    // Clear
+
+    for (auto & system : _kokkos_systems)
+    {
+      system.clearActiveVariables();
+      system.clearActiveSolutionTags();
+    }
+  }
+  catch (...)
+  {
+    handleException("computeKokkosUserObjectsInternal");
+  }
+}
+
+void
+FEProblemBase::kokkosJoinAndFinalize(const std::vector<Moose::Kokkos::UserObject *> & userobjs)
+{
+  for (auto obj : userobjs)
+  {
+    obj->finalize();
+
+    auto pp = dynamic_cast<const Moose::Kokkos::Postprocessor *>(obj);
+    if (pp)
+    {
+      _reporter_data.finalize(obj->name());
+      setPostprocessorValueByName(obj->name(), pp->getValue());
+    }
+  }
 }

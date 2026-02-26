@@ -205,6 +205,11 @@ public:
                                          const unsigned short int side) const;
 
   /**
+   * Returns a vector of vector of boundary IDs for the requested element on each of its sides
+   */
+  std::vector<std::vector<BoundaryID>> getBoundaryIDs(const Elem * const elem) const;
+
+  /**
    * Returns a const pointer to a lower dimensional element that
    * corresponds to a side of a higher dimensional element. This
    * relationship is established through an internal_parent; if there is
@@ -663,6 +668,7 @@ public:
    * Accessor for Kokkos mesh object.
    */
 #ifdef MOOSE_KOKKOS_ENABLED
+  Moose::Kokkos::Mesh * getKokkosMesh() { return _kokkos_mesh.get(); }
   const Moose::Kokkos::Mesh * getKokkosMesh() const { return _kokkos_mesh.get(); }
 #endif
 
@@ -1360,12 +1366,12 @@ public:
   void setupFiniteVolumeMeshData() const;
 
   /**
-   * Indicate whether the kind of adaptivity we're doing is p-refinement
+   * Indicate whether the kind of adaptivity we're doing includes p-refinement
    */
   void doingPRefinement(bool doing_p_refinement) { _doing_p_refinement = doing_p_refinement; }
 
   /**
-   * Query whether we have p-refinement
+   * Query whether the kind of adaptivity we're doing includes p-refinement
    */
   [[nodiscard]] bool doingPRefinement() const { return _doing_p_refinement; }
 
@@ -1403,17 +1409,9 @@ public:
   void buildPRefinementAndCoarseningMaps(Assembly * assembly);
 
   /**
-   * @return Whether the subdomain indicated by \p subdomain_id is a lower-dimensional manifold of
-   * some higher-dimensional subdomain, or in implementation speak, whether the elements of this
-   * subdomain have non-null interior parents
+   * @return Whether there are any lower-dimensional blocks
    */
-  bool isLowerD(const SubdomainID subdomain_id) const;
-
-  /**
-   * @return Whether there are any lower-dimensional blocks that are manifolds of higher-dimensional
-   * block faces
-   */
-  bool hasLowerD() const { return _has_lower_d; }
+  bool hasLowerD() const { return getMesh().elem_dimensions().size() > 1; }
 
   /**
    * @return The set of lower-dimensional blocks for interior sides
@@ -1537,8 +1535,8 @@ protected:
   bool _node_to_active_semilocal_elem_map_built;
 
   /**
-   * A set of subdomain IDs currently present in the mesh. For parallel meshes, includes subdomains
-   * defined on other processors as well.
+   * A set of subdomain IDs currently present in the mesh. For parallel meshes, includes
+   * subdomains defined on other processors as well.
    */
   std::set<SubdomainID> _mesh_subdomains;
 
@@ -1818,9 +1816,6 @@ private:
     /// The boundary ids that are attached. This set will include any sideset boundary ID that
     /// is a side of any part of the subdomain
     std::set<BoundaryID> boundary_ids;
-
-    /// Whether this subdomain is a lower-dimensional manifold of a higher-dimensional subdomain
-    bool is_lower_d;
   };
 
   /// Holds a map from subdomain ids to associated data
@@ -1837,10 +1832,6 @@ private:
   std::unordered_map<std::pair<const Elem *, unsigned short int>, const Elem *>
       _higher_d_elem_side_to_lower_d_elem;
   std::unordered_map<const Elem *, unsigned short int> _lower_d_elem_to_higher_d_elem_side;
-
-  /// Whether there are any lower-dimensional blocks that are manifolds of higher-dimensional block
-  /// faces
-  bool _has_lower_d;
 
   /// Whether or not this Mesh is allowed to read a recovery file
   bool _allow_recovery;
@@ -1916,7 +1907,7 @@ private:
   /// Set for holding user-provided coordinate system type block names
   std::vector<SubdomainName> _provided_coord_blocks;
 
-  /// Whether we have p-refinement (as opposed to h-refinement)
+  /// Whether we have p-refinement (whether exclusively p- or hp-refinement)
   bool _doing_p_refinement;
   /// Maximum p-refinement level of all elements
   unsigned int _max_p_level;
@@ -2234,10 +2225,4 @@ inline const std::unordered_map<std::pair<const Elem *, unsigned short int>, con
 MooseMesh::getLowerDElemMap() const
 {
   return _higher_d_elem_side_to_lower_d_elem;
-}
-
-inline bool
-MooseMesh::isLowerD(const SubdomainID subdomain_id) const
-{
-  return libmesh_map_find(_sub_to_data, subdomain_id).is_lower_d;
 }

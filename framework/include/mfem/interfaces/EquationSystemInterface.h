@@ -10,6 +10,7 @@
 #ifdef MOOSE_MFEM_ENABLED
 
 #pragma once
+
 #include "MFEMProblemData.h"
 
 namespace Moose::MFEM
@@ -17,7 +18,7 @@ namespace Moose::MFEM
 /**
  * Interface required for:
  * - EquationSystemProblemOperator
- * - TimeDomainEquationSystemProblemOperator
+ * - TimeDependentEquationSystemProblemOperator
  */
 class EquationSystemInterface
 {

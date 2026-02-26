@@ -91,6 +91,7 @@ class KernelBase;
 class IntegratedBCBase;
 class LineSearch;
 class UserObject;
+class UserObjectBase;
 class AutomaticMortarGeneration;
 class VectorPostprocessor;
 class Convergence;
@@ -108,6 +109,7 @@ namespace Moose::Kokkos
 {
 class MaterialPropertyStorage;
 class Function;
+class UserObject;
 }
 #endif
 
@@ -154,6 +156,11 @@ public:
 
   FEProblemBase(const InputParameters & parameters);
   virtual ~FEProblemBase();
+
+  /**
+   * @returns Whether the problem was initialized, i.e. whether \p init() has executed
+   */
+  [[nodiscard]] bool initialized() const { return _initialized; }
 
   enum class CoverageCheckMode
   {
@@ -565,6 +572,11 @@ public:
 
   virtual void copySolutionsBackwards();
 
+  /// Prevents the copy of the solution vector to the old solution vector in each system.
+  /// Old -> Older is still performed
+  /// This is useful for MultiApps fixed point iterations
+  void skipNextForwardSolutionCopyToOld();
+
   /**
    * Advance all of the state holding vectors / datastructures so that we can move to the next
    * timestep.
@@ -589,6 +601,13 @@ public:
    * @param iteration_type the type of iteration for which old/older states are needed
    */
   void needSolutionState(unsigned int oldest_needed, Moose::SolutionIterationType iteration_type);
+
+  /**
+   * Whether we need up to old (1) or older (2) solution states for a given type of iteration
+   * @param oldest_needed oldest solution state needed
+   * @param iteration_type the type of iteration for which old/older states are needed
+   */
+  bool hasSolutionState(unsigned int state, Moose::SolutionIterationType iteration_type) const;
 
   /**
    * Output the current step.
@@ -826,7 +845,7 @@ public:
    * Get all Kokkos systems that are associated with MOOSE nonlinear and auxiliary systems
    * @returns The array of Kokkos systems
    */
-  ///{@
+  ///@{
   Moose::Kokkos::Array<Moose::Kokkos::System> & getKokkosSystems() { return _kokkos_systems; }
   const Moose::Kokkos::Array<Moose::Kokkos::System> & getKokkosSystems() const
   {
@@ -839,7 +858,7 @@ public:
    * @param sys_num The system number
    * @returns The Kokkos system
    */
-  ///{@
+  ///@{
   Moose::Kokkos::System & getKokkosSystem(const unsigned int sys_num);
   const Moose::Kokkos::System & getKokkosSystem(const unsigned int sys_num) const;
   ///@}
@@ -1285,6 +1304,12 @@ public:
   virtual void
   addReporter(const std::string & type, const std::string & name, InputParameters & parameters);
 
+#ifdef MOOSE_KOKKOS_ENABLED
+  virtual void addKokkosPostprocessor(const std::string & pp_name,
+                                      const std::string & name,
+                                      InputParameters & parameters);
+#endif
+
   /**
    * Provides const access the ReporterData object.
    *
@@ -1305,18 +1330,10 @@ public:
   virtual std::vector<std::shared_ptr<UserObject>> addUserObject(
       const std::string & user_object_name, const std::string & name, InputParameters & parameters);
 
-  // TODO: delete this function after apps have been updated to not call it
-  const ExecuteMooseObjectWarehouse<UserObject> & getUserObjects() const
-  {
-    mooseDeprecated(
-        "This function is deprecated, use theWarehouse().query() to construct a query instead");
-    return _all_user_objects;
-  }
-
   /**
    * Get the user object by its name
    * @param name The name of the user object being retrieved
-   * @return Const reference to the user object
+   * @return Reference to the user object
    */
   template <class T>
   T & getUserObject(const std::string & name, unsigned int tid = 0) const
@@ -1332,6 +1349,7 @@ public:
       mooseError("Unable to find user object with name '" + name + "'");
     return *(objs[0]);
   }
+
   /**
    * Get the user object by its name
    * @param name The name of the user object being retrieved
@@ -1341,18 +1359,57 @@ public:
   const UserObject & getUserObjectBase(const std::string & name, const THREAD_ID tid = 0) const;
 
   /**
-   * Get the Positions object by its name
-   * @param name The name of the Positions object being retrieved
-   * @return Const reference to the Positions object
-   */
-  const Positions & getPositionsObject(const std::string & name) const;
-
-  /**
    * Check if there if a user object of given name
    * @param name The name of the user object being checked for
    * @return true if the user object exists, false otherwise
    */
   bool hasUserObject(const std::string & name) const;
+
+#ifdef MOOSE_KOKKOS_ENABLED
+  virtual void addKokkosUserObject(const std::string & user_object_name,
+                                   const std::string & name,
+                                   InputParameters & parameters);
+
+  /**
+   * Get the Kokkos user object by its name
+   * @param name The name of the Kokkos user object being retrieved
+   * @return const reference to the Kokkos user object
+   */
+  template <class T>
+  const T & getKokkosUserObject(const std::string & name) const
+  {
+    std::vector<T *> objs;
+    theWarehouse()
+        .query()
+        .condition<AttribSystem>("KokkosUserObject")
+        .condition<AttribName>(name)
+        .queryInto(objs);
+    if (objs.empty())
+      mooseError("Unable to find Kokkos user object with name '" + name + "'");
+    return *(objs[0]);
+  }
+
+  /**
+   * Check if there if a Kokkos user object of given name
+   * @param name The name of the Kokkos user object being checked for
+   * @return true if the Kokkos user object exists, false otherwise
+   */
+  bool hasKokkosUserObject(const std::string & name) const;
+#endif
+
+  /**
+   * Check for name collision between different user objects
+   * @param name The object name being added
+   * @param type The object type being added
+   */
+  void checkUserObjectNameCollision(const std::string & name, const std::string & type) const;
+
+  /**
+   * Get the Positions object by its name
+   * @param name The name of the Positions object being retrieved
+   * @return Const reference to the Positions object
+   */
+  const Positions & getPositionsObject(const std::string & name) const;
 
   /**
    * Whether or not a Postprocessor value exists by a given name.
@@ -2118,6 +2175,11 @@ public:
   }
 
   /*
+   * Return reference to function warehouse.
+   */
+  const MooseObjectWarehouse<Function> & getFunctionWarehouse() { return _functions; }
+
+  /*
    * Return a reference to the material warehouse of *all* Material objects.
    */
   const MaterialWarehouse & getMaterialWarehouse() const { return _all_materials; }
@@ -2282,6 +2344,37 @@ public:
    * @return true if the user required values of the previous Newton iterate
    */
   bool needsPreviousNewtonIteration() const;
+
+  /**
+   * Set a flag that indicated that user required values for the previous multiapp fixed point
+   * iterate for the solver systems (not auxiliary)
+   * @param needed the value that should be set to the flag
+   * @param solver_sys_num the index of the solver system for which the previous iteration is needed
+   */
+  void needsPreviousMultiAppFixedPointIterationSolution(bool needed,
+                                                        const unsigned int solver_sys_num);
+
+  /**
+   * Check to see whether we need to compute the variable values of the previous multiapp fixed
+   * point iteration for the solver systems (not auxiliary)
+   * @param solver_sys_num the index of the solver system for which the previous iteration is needed
+   * @return true if the user required values of the previous multiapp fixed point iteration
+   */
+  bool needsPreviousMultiAppFixedPointIterationSolution(const unsigned int solver_sys_num) const;
+
+  /**
+   * Set a flag that indicated that user required values for the previous multiapp fixed point
+   * iterate for the auxiliary system
+   */
+  void needsPreviousMultiAppFixedPointIterationAuxiliary(bool state);
+
+  /**
+   * Check to see whether we need to compute the variable values of the previous multiapp fixed
+   * point iteration for the auxiliary system
+   * @return true if the user required values of the previous multiapp fixed point iteration from
+   * the auxiliary system
+   */
+  bool needsPreviousMultiAppFixedPointIterationAuxiliary() const;
 
   ///@{
   /**
@@ -2758,6 +2851,14 @@ public:
    * @returns whether any Kokkos residual object was added in the problem
    */
   bool hasKokkosResidualObjects() const { return _has_kokkos_residual_objects; }
+  /**
+   * Add a function hook that needs to be called after Kokkos mesh initialization
+   * @param function The function to be called
+   */
+  void addKokkosMeshInitializationHook(std::function<void()> function)
+  {
+    _kokkos_mesh_initialization_hooks.push_back(function);
+  }
 #endif
 
 protected:
@@ -2994,9 +3095,6 @@ protected:
   // Helper class to access Reporter object values
   ReporterData _reporter_data;
 
-  // TODO: delete this after apps have been updated to not call getUserObjects
-  ExecuteMooseObjectWarehouse<UserObject> _all_user_objects;
-
   /// MultiApp Warehouse
   ExecuteMooseObjectWarehouse<MultiApp> _multi_apps;
 
@@ -3042,6 +3140,12 @@ protected:
   void computeUserObjectsInternal(const ExecFlagType & type,
                                   const Moose::AuxGroup & group,
                                   TheWarehouse::Query & query);
+
+#ifdef MOOSE_KOKKOS_ENABLED
+  void computeKokkosUserObjectsInternal(const ExecFlagType & type,
+                                        const Moose::AuxGroup & group,
+                                        TheWarehouse::Query & query);
+#endif
 
   /// Verify that SECOND order mesh uses SECOND order displacements.
   void checkDisplacementOrders();
@@ -3129,6 +3233,10 @@ protected:
 
   /// Indicates we need to save the previous NL iteration variable values
   bool _previous_nl_solution_required;
+  /// Indicates we need to save the previous multiapp fixed-point iteration solver variable values
+  std::vector<bool> _previous_multiapp_fp_nl_solution_required;
+  /// Indicates we need to save the previous multiapp fixed-point iteration auxiliary variable values
+  bool _previous_multiapp_fp_aux_solution_required;
 
   /// Indicates if nonlocal coupling is required/exists
   bool _has_nonlocal_coupling;
@@ -3287,6 +3395,10 @@ private:
 
   void joinAndFinalize(TheWarehouse::Query query, bool isgen = false);
 
+#ifdef MOOSE_KOKKOS_ENABLED
+  void kokkosJoinAndFinalize(const std::vector<Moose::Kokkos::UserObject *> & userobjs);
+#endif
+
   /**
    * Reset state of this object in preparation for the next evaluation.
    */
@@ -3387,6 +3499,9 @@ private:
 
   /// Whether we have any Kokkos residual objects
   bool _has_kokkos_residual_objects = false;
+
+  /// Container holding hooks for functions that need to be called after Kokkos mesh initialization
+  std::vector<std::function<void()>> _kokkos_mesh_initialization_hooks;
 #endif
 
   friend void Moose::PetscSupport::setSinglePetscOption(const std::string & name,

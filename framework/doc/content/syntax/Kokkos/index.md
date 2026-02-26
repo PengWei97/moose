@@ -26,11 +26,15 @@ Standard containers such as `std::vector`, `std::set`, `std::map` and others are
 Basically, it is safe to assume that any dynamically-allocated data on CPU cannot be accessed on GPU.
 Therefore, we provide alternative data containers to be used on GPU: `Moose::Kokkos::Array`, `Moose::Kokkos::JaggedArray`, and `Moose::Kokkos::Map`.
 
-`Moose::Kokkos::Array` is a template class and designed to hold arbitrary type of data.
-It receives two template arguments: data type and dimension.
+`Moose::Kokkos::Array` is a template class designed to hold arbitrary type of data.
+It receives up to four template arguments: data type, dimension, index type, and layout type.
 It supports multi-dimensional indexing, and up to five-dimensional arrays are supported.
 The dimension can either be specified through the second template argument with the default being one-dimension or using type aliases: for instance, a three-dimensional array of type `double` can be declared either by `Array<double, 3>` or `Array3D<double>`.
 The entries of an array can be accessed with either `operator()` with multi-dimensional indices or `operator[]` with a flattened, dimensionless index, where the flattening follows a layout in which the innermost dimension varies the fastest.
+The index type template argument is set to 8-byte integer by default to accomodate large arrays.
+However, 8-byte integer computation is significantly more expensive than 4-byte integer computation.
+If your array size is small enough, consider using 4-byte indices to optimize index calculations.
+If having the outermost dimension run the fastest is desired for multi-dimensional arrays, the fourth layout template argument can be optionally set to `Moose::Kokkos::LayoutType::RIGHT` (default is `LEFT`).
 They automatically return either CPU or GPU data depending on where they are being accessed.
 Arrays can be allocated through the following APIs: `create()`, `createHost()`, and `createDevice()`.
 `create()` allocates memories on both CPU and GPU, while `createHost()` or `createDevice()` only allocates memory on either CPU or GPU.
@@ -134,7 +138,7 @@ Therefore, `Moose::Kokkos::JaggedArray` stores the data of a jagged array sequen
 It is divided into inner and outer arrays.
 The outer array is the regular part of a jagged array.
 Each entry of the outer array is the inner array, whose size can vary with each other.
-As a result, it is defined with three template arguments: the data type, inner array dimension size, and outer array dimension size.
+As a result, it is defined with up to five template arguments: the data type, inner array dimension size, outer array dimension size, outer array index type (defaults to 8-byte integer; inner arrays always use 4-byte integer), and inner array layout type (defaults to `Moose::Kokkos::LayoutType::LEFT`).
 Both inner and outer arrays can be up to three-dimensional.
 However, it is not possible to have inner arrays with different dimensions in a single jagged array.
 
@@ -276,16 +280,13 @@ Namely, its copy constructor only performs a shallow copy and does not invoke th
 If it is required to explicitly invoke the copy constructor of each entry for a certain data type used in an array, you should define a specialization of the `Moose::Kokkos::ArrayDeepCopy` type trait template as follows:
 
 ```cpp
-namespace Moose
-{
-namespace Kokkos
+namespace Moose::Kokkos
 {
 template <>
 struct ArrayDeepCopy<SomeType>
 {
-  static const bool value = true;
+  static constexpr bool value = true;
 };
-}
 }
 ```
 
@@ -305,8 +306,9 @@ It holds the reference of the CPU variable and an instance of the variable at th
 Namely, the copy constructor copies the reference to the instance, which guarantees that the instance has the value of the variable at the moment of functor dispatch.
 The wrapper automatically returns the reference on CPU and the instance on GPU, depending on where it is being accessed.
 
-For arithmetic values, there exists `Moose::Kokkos::Scalar` which is a derived class from `Moose::Kokkos::ReferenceWrapper` and provides arithmetic operators that can directly operate to the stored value.
-`Moose::Kokkos::PostprocessrValue` is an alias for `Moose::Kokkos::Scalar<PostprocessorValue>`.
+For arithmetic values, there exists `Moose::Kokkos::Scalar` which is a derived class from `Moose::Kokkos::ReferenceWrapper` and provides arithmetic operators that can directly operate on the stored values for non-const types.
+For const types, those operators will be undefined.
+For example, a postprocessor value which is always provided as read-only can be held by `Moose::Kokkos::Scalar<const PostprocessorValue>` or its alias `Moose::Kokkos::PostprocessrValue`.
 
 !listing framework/include/kokkos/base/KokkosReferenceWrapper.h
          id=kokkos_reference_wrapper_source
@@ -338,7 +340,8 @@ The following pseudo-codes demonstrate a typical template method pattern impleme
 - Dynamic polymorphism
 
 ```cpp
-class Base{
+class Base
+{
 public:
   void compute()
   {
@@ -406,7 +409,7 @@ The Kokkos-MOOSE base classes are carefully designed to avoid the CRTP by levera
 Namely, the base classes themselves are not template classes, which alleviates the burden of users in dealing with templates.
 However, any polymorphic pattern implemented on GPU in the derived class level will likely require the CRTP.
 
-#### Alternative Way to Implement Static Polymorphism
+#### Alternative Way to Implement Static Polymorphism id=kokkos_shim
 
 While the CRTP is a generic design pattern for implementing static polymorphism, the use of class templates can complicate class designs.
 In Kokkos-MOOSE objects, there is an alternative way to implement static polymorphism by defining shims instead of hook methods.
@@ -472,6 +475,8 @@ The following objects are currently available in Kokkos-MOOSE:
 - [Materials](syntax/KokkosMaterials/index.md)
 - [AuxKernels](syntax/KokkosAuxKernels/index.md)
 - [Functions](syntax/KokkosFunctions/index.md)
+- [UserObjects](syntax/KokkosUserObjects/index.md)
+- [Postprocessors](syntax/KokkosPostprocessors/index.md)
 
 !if-end!
 

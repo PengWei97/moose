@@ -80,7 +80,7 @@ SideSetsAroundSubdomainGenerator::generate()
 
     for (const auto side : make_range(elem->n_sides()))
     {
-      const Elem * neighbor = elem->neighbor_ptr(side);
+      const auto * neighbor = elem->neighbor_ptr(side);
 
       // On a replicated mesh, we add all subdomain sides ourselves.
       // On a distributed mesh, we may have missed sides which
@@ -184,7 +184,7 @@ SideSetsAroundSubdomainGenerator::generate()
   for (unsigned int i = 0; i < boundary_ids.size(); ++i)
     boundary_info.sideset_name(boundary_ids[i]) = _boundary_names[i];
 
-  mesh->set_isnt_prepared();
+  mesh->unset_is_prepared();
   return dynamic_pointer_cast<MeshBase>(mesh);
 }
 

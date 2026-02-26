@@ -21,9 +21,7 @@
 class MooseMesh;
 class SystemBase;
 
-namespace Moose
-{
-namespace Kokkos
+namespace Moose::Kokkos
 {
 
 class NodalBCBase;
@@ -46,16 +44,16 @@ public:
    * Synchronize the active tagged vectors and matrices between host and device
    * @param dir Copy direction
    */
-  void sync(const MemcpyKind dir);
+  void sync(const MemcpyType dir);
   /**
    * Synchronize the specified tagged vectors between host and device
    * @param tags The vector tags
    * @param dir Copy direction
    */
-  ///{@
-  void sync(const std::set<TagID> & tags, const MemcpyKind dir);
-  void sync(const std::vector<TagID> & tags, const MemcpyKind dir);
-  void sync(const TagID tag, const MemcpyKind dir);
+  ///@{
+  void sync(const std::set<TagID> & tags, const MemcpyType dir);
+  void sync(const std::vector<TagID> & tags, const MemcpyType dir);
+  void sync(const TagID tag, const MemcpyType dir);
   ///@}
   /**
    * Allocate the quadrature point vectors for active variable and tags and cache
@@ -110,7 +108,7 @@ public:
    * Get the MOOSE system
    * @returns The MOOSE system
    */
-  ///{@
+  ///@{
   auto & getSystem() { return _system; }
   const auto & getSystem() const { return _system; }
   ///@}
@@ -647,5 +645,4 @@ private:
   const Array<System> _systems_device;
 };
 
-} // namespace Kokkos
-} // namespace Moose
+} // namespace Moose::Kokkos

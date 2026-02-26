@@ -13,16 +13,14 @@
 #include "KokkosMaterialPropertyDecl.h"
 #include "KokkosDatum.h"
 
-namespace Moose
-{
-namespace Kokkos
+namespace Moose::Kokkos
 {
 
 template <typename T, unsigned int dimension>
 KOKKOS_FUNCTION
 MaterialPropertyValueBase<T, dimension>::MaterialPropertyValueBase(
     const MaterialProperty<T, dimension> & property, const Datum & datum, const unsigned int qp)
-  : _qp(datum.qpOffset() + qp),
+  : _idx(datum.propertyIdx(property._constant_option, qp)),
     _data(property._default ? nullptr : &property._data[datum.subdomain()]),
     _value(property._value)
 {
@@ -72,7 +70,7 @@ template <typename T>
 KOKKOS_FUNCTION auto &
 MaterialPropertyValue<T, 0>::operator=(const T & value)
 {
-  (*_data)(_qp) = value;
+  (*_data)(_idx) = value;
 
   return *this;
 }
@@ -81,10 +79,9 @@ template <typename T>
 KOKKOS_FUNCTION auto &
 MaterialPropertyValue<T, 0>::operator=(const MaterialPropertyValue<T, 0> & value)
 {
-  (*_data)(_qp) = static_cast<T>(value);
+  (*_data)(_idx) = static_cast<T>(value);
 
   return *this;
 }
 
-} // namespace Kokkos
-} // namespace Moose
+} // namespace Moose::Kokkos

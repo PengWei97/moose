@@ -18,9 +18,7 @@
 class MooseMesh;
 class MaterialBase;
 
-namespace Moose
-{
-namespace Kokkos
+namespace Moose::Kokkos
 {
 
 class MaterialPropertyStorage;
@@ -35,6 +33,16 @@ class MaterialPropertyValue;
 
 class Datum;
 class Assembly;
+
+/**
+ * Property constant options
+ */
+enum class PropertyConstantOption
+{
+  NONE,
+  ELEMENT,
+  SUBDOMAIN
+};
 
 /**
  * A structure storing the metadata of Kokkos material properties
@@ -65,6 +73,14 @@ struct PropRecord
    * Flag whether this property is a face property
    */
   bool bnd = false;
+  /**
+   * Flag whether this property is an on-demand property
+   */
+  bool on_demand = false;
+  /**
+   * Whether this property is constant over element or subdomain
+   */
+  PropertyConstantOption constant_option = PropertyConstantOption::NONE;
 };
 
 using PropertyStore = std::function<void(std::ostream &, void *)>;
@@ -159,14 +175,6 @@ public:
    */
   virtual void swap(MaterialPropertyBase & prop, StorageKey) = 0;
 
-#ifdef MOOSE_KOKKOS_SCOPE
-  /**
-   * Get whether this property is valid
-   * @returns Whether this property is valid
-   */
-  KOKKOS_FUNCTION operator bool() const { return _id != libMesh::invalid_uint || _default; }
-#endif
-
 protected:
   /**
    * Pointer to the record of this property
@@ -180,6 +188,10 @@ protected:
    * Flag whether this property has a default value
    */
   bool _default = false;
+  /**
+   * Whether this property is constant over element or subdomain
+   */
+  PropertyConstantOption _constant_option = PropertyConstantOption::NONE;
 };
 
 template <typename T, unsigned int dimension>
@@ -215,6 +227,11 @@ public:
    * during parallel dispatch.
    */
   MaterialProperty(const MaterialProperty<T, dimension> & property);
+  /**
+   * Prevent initializing with properties of different rank
+   */
+  template <unsigned int D>
+  MaterialProperty(const MaterialProperty<T, D> & other) = delete;
 
   /**
    * Shallow copy another property
@@ -223,6 +240,12 @@ public:
   auto & operator=(const MaterialProperty<T, dimension> & property);
 
 #ifdef MOOSE_KOKKOS_SCOPE
+  /**
+   * Get whether this property is valid
+   * @returns Whether this property is valid
+   */
+  KOKKOS_FUNCTION operator bool() const { return _data.isAlloc() || _default; }
+
   /**
    * Get the property values of a quadrature point
    * @param datum The Datum object of the current thread
@@ -283,8 +306,7 @@ private:
 template <typename T, unsigned int dimension>
 struct ArrayDeepCopy<MaterialProperty<T, dimension>>
 {
-  static const bool value = true;
+  static constexpr bool value = true;
 };
 
-} // namespace Kokkos
-} // namespace Moose
+} // namespace Moose::Kokkos

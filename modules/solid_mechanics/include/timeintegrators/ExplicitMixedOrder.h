@@ -51,6 +51,8 @@ public:
   }
   virtual void init() override;
 
+  virtual void meshChanged() override;
+
   enum TimeOrder
   {
     FIRST,
@@ -64,13 +66,33 @@ public:
   TimeOrder findVariableTimeOrder(unsigned int var_num) const;
 
 protected:
+  /// compile the dof indices for first and second order in time variables
+  void updateDOFIndices();
+
   virtual TagID massMatrixTagID() const override;
+
+  /// Evaluate the RHS residual
+  virtual void evaluateRHSResidual();
 
   /// Whether we are reusing the mass matrix
   const bool & _constant_mass;
 
+  /**
+   * Must be set to true to use adaptivity with a constant mass
+   * matrix. This will recompute the mass matrix when the mesh changes. The user must make sure that
+   * the underlying material density stays constant, otherwise simulation results will depend on
+   * adaptivity.
+   */
+  const bool & _recompute_mass_matrix_on_mesh_change;
+
+  /// Whether the mesh changed just before the current solve
+  bool _mesh_changed;
+
   /// Mass matrix name
-  const TagName & _mass_matrix;
+  const TagName & _mass_matrix_name;
+
+  /// Lumped mass matrix
+  NumericVector<Real> * _mass_matrix_lumped;
 
   /// The older solution
   const NumericVector<Number> & _solution_older;

@@ -38,8 +38,8 @@ INSFVTKEDSourceSink::validParams()
                              wall_treatment,
                              "The method used for computing the wall functions "
                              "'eq_newton', 'eq_incremental', 'eq_linearized', 'neq'");
-  params.addParam<Real>("C1_eps", 1.44, "First epsilon coefficient");
-  params.addParam<Real>("C2_eps", 1.92, "Second epsilon coefficient");
+  params.addParam<MooseFunctorName>("C1_eps", 1.44, "First epsilon coefficient");
+  params.addParam<MooseFunctorName>("C2_eps", 1.92, "Second epsilon coefficient");
   params.addParam<Real>("C_mu", 0.09, "Coupled turbulent kinetic energy closure.");
   params.addParam<Real>("C_pl", 10.0, "Production limiter constant multiplier.");
   params.set<unsigned short>("ghost_layers") = 2;
@@ -61,8 +61,8 @@ INSFVTKEDSourceSink::INSFVTKEDSourceSink(const InputParameters & params)
     _wall_boundary_names(getParam<std::vector<BoundaryName>>("walls")),
     _linearized_model(getParam<bool>("linearized_model")),
     _wall_treatment(getParam<MooseEnum>("wall_treatment").getEnum<NS::WallTreatmentEnum>()),
-    _C1_eps(getParam<Real>("C1_eps")),
-    _C2_eps(getParam<Real>("C2_eps")),
+    _C1_eps(getFunctor<ADReal>("C1_eps")),
+    _C2_eps(getFunctor<ADReal>("C2_eps")),
     _C_mu(getParam<Real>("C_mu")),
     _C_pl(getParam<Real>("C_pl")),
     _newton_solve(getParam<bool>("newton_solve"))
@@ -163,60 +163,12 @@ INSFVTKEDSourceSink::computeQpResidual()
   }
   else
   {
-    const auto & grad_u = _u_var.gradient(elem_arg, state);
-    const auto Sij_xx = 2.0 * grad_u(0);
-    ADReal Sij_xy = 0.0;
-    ADReal Sij_xz = 0.0;
-    ADReal Sij_yy = 0.0;
-    ADReal Sij_yz = 0.0;
-    ADReal Sij_zz = 0.0;
-
-    const auto grad_xx = grad_u(0);
-    ADReal grad_xy = 0.0;
-    ADReal grad_xz = 0.0;
-    ADReal grad_yx = 0.0;
-    ADReal grad_yy = 0.0;
-    ADReal grad_yz = 0.0;
-    ADReal grad_zx = 0.0;
-    ADReal grad_zy = 0.0;
-    ADReal grad_zz = 0.0;
-
-    auto trace = Sij_xx / 3.0;
-
-    if (_dim >= 2)
-    {
-      const auto & grad_v = (*_v_var).gradient(elem_arg, state);
-      Sij_xy = grad_u(1) + grad_v(0);
-      Sij_yy = 2.0 * grad_v(1);
-
-      grad_xy = grad_u(1);
-      grad_yx = grad_v(0);
-      grad_yy = grad_v(1);
-
-      trace += Sij_yy / 3.0;
-
-      if (_dim >= 3)
-      {
-        const auto & grad_w = (*_w_var).gradient(elem_arg, state);
-
-        Sij_xz = grad_u(2) + grad_w(0);
-        Sij_yz = grad_v(2) + grad_w(1);
-        Sij_zz = 2.0 * grad_w(2);
-
-        grad_xz = grad_u(2);
-        grad_yz = grad_v(2);
-        grad_zx = grad_w(0);
-        grad_zy = grad_w(1);
-        grad_zz = grad_w(2);
-
-        trace += Sij_zz / 3.0;
-      }
-    }
-
-    const auto symmetric_strain_tensor_sq_norm =
-        (Sij_xx - trace) * grad_xx + Sij_xy * grad_xy + Sij_xz * grad_xz + Sij_xy * grad_yx +
-        (Sij_yy - trace) * grad_yy + Sij_yz * grad_yz + Sij_xz * grad_zx + Sij_yz * grad_zy +
-        (Sij_zz - trace) * grad_zz;
+    const auto subdomain_id = _current_elem->subdomain_id();
+    const auto coord_sys = _subproblem.getCoordSystem(subdomain_id);
+    const auto rz_radial_coord =
+        coord_sys == Moose::COORD_RZ ? _subproblem.getAxisymmetricRadialCoord() : 0;
+    const auto symmetric_strain_tensor_sq_norm = NS::computeShearStrainRateNormSquared<ADReal>(
+        _u_var, _v_var, _w_var, elem_arg, state, coord_sys, rz_radial_coord);
 
     ADReal production_k = _mu_t(elem_arg, state) * symmetric_strain_tensor_sq_norm;
     // Compute production limiter (needed for flows with stagnation zones)
@@ -227,8 +179,8 @@ INSFVTKEDSourceSink::computeQpResidual()
     production_k = min(production_k, production_limit);
 
     const auto time_scale = raw_value(TKE_old) / raw_value(eps_old);
-    production = _C1_eps * production_k / time_scale;
-    destruction = _C2_eps * rho * _var(elem_arg, state) / time_scale;
+    production = _C1_eps(elem_arg, state) * production_k / time_scale;
+    destruction = _C2_eps(elem_arg, state) * rho * _var(elem_arg, state) / time_scale;
 
     residual = destruction - production;
   }

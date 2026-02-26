@@ -60,9 +60,11 @@ PhysicsBase::validParams()
                               "Restart from Exodus");
 
   // Options to turn off tasks
+  params.addParam<bool>("dont_create_solver_variables",
+                        false,
+                        "Whether to skip the 'add_variable'/'add_variables_physics' task(s)");
   params.addParam<bool>(
-      "dont_create_solver_variables", false, "Whether to skip the 'add_variable' task");
-  params.addParam<bool>("dont_create_ics", false, "Whether to skip the 'add_ic'/'add_fv_ic' task");
+      "dont_create_ics", false, "Whether to skip the 'add_ic'/'add_fv_ic/add_ics_physics' task(s)");
   params.addParam<bool>(
       "dont_create_kernels", false, "Whether to skip the 'add_kernel' task for each kernel type");
   params.addParam<bool>("dont_create_bcs",
@@ -73,9 +75,10 @@ PhysicsBase::validParams()
       "dont_create_aux_variables", false, "Whether to skip the 'add_aux_variable' task");
   params.addParam<bool>(
       "dont_create_aux_kernels", false, "Whether to skip the 'add_aux_kernel' task");
-  params.addParam<bool>("dont_create_materials",
-                        false,
-                        "Whether to skip the 'add_material' task for each material type");
+  params.addParam<bool>(
+      "dont_create_materials",
+      false,
+      "Whether to skip the 'add_material'/'add_materials_physics' task(s) for each material type");
   params.addParam<bool>(
       "dont_create_user_objects",
       false,
@@ -96,7 +99,7 @@ PhysicsBase::validParams()
       "Reduce Physics object creation");
 
   params.addParamNamesToGroup("active inactive", "Advanced");
-  params.addParamNamesToGroup("preconditioning", "Numerical scheme");
+  params.addParamNamesToGroup("preconditioning system_names", "Numerical scheme");
   return params;
 }
 
@@ -128,9 +131,11 @@ PhysicsBase::act()
   // Initialization and variables
   if (_current_task == "init_physics")
     initializePhysics();
-  else if (_current_task == "add_variable" && !getParam<bool>("dont_create_solver_variables"))
+  else if ((_current_task == "add_variable" || _current_task == "add_variables_physics") &&
+           !getParam<bool>("dont_create_solver_variables"))
     addSolverVariables();
-  else if ((_current_task == "add_ic" || _current_task == "add_fv_ic") &&
+  else if ((_current_task == "add_ic" || _current_task == "add_fv_ic" ||
+            _current_task == "add_ics_physics") &&
            !getParam<bool>("dont_create_ics"))
     addInitialConditions();
 
@@ -171,7 +176,8 @@ PhysicsBase::act()
     addAuxiliaryVariables();
   else if (_current_task == "add_aux_kernel" && !getParam<bool>("dont_create_aux_kernels"))
     addAuxiliaryKernels();
-  else if (_current_task == "add_material" && !getParam<bool>("dont_create_materials"))
+  else if ((_current_task == "add_material" || _current_task == "add_materials_physics") &&
+           !getParam<bool>("dont_create_materials"))
     addMaterials();
   else if (_current_task == "add_functor_material" && !getParam<bool>("dont_create_materials"))
     addFunctorMaterials();
@@ -378,7 +384,7 @@ PhysicsBase::checkIntegrityEarly() const
   if (_system_names.size() != 1 && _system_names.size() != _solver_var_names.size())
     paramError("system_names",
                "There should be one system name per solver variable (potentially repeated), or a "
-               "single system name for all variables. Current you have '" +
+               "single system name for all variables. Currently you have '" +
                    std::to_string(_system_names.size()) + "' systems specified for '" +
                    std::to_string(_solver_var_names.size()) + "' solver variables.");
 
@@ -542,6 +548,16 @@ PhysicsBase::checkBlockRestrictionIdentical(const std::string & object_name,
 }
 
 bool
+PhysicsBase::hasBlocks(const std::vector<SubdomainName> & blocks) const
+{
+  mooseAssert(_blocks.size(), "hasBlocks called before blocks were initialized");
+  return std::all_of(blocks.begin(),
+                     blocks.end(),
+                     [this](const SubdomainName & block)
+                     { return std::find(_blocks.begin(), _blocks.end(), block) != _blocks.end(); });
+}
+
+bool
 PhysicsBase::allMeshBlocks(const std::vector<SubdomainName> & blocks) const
 {
   mooseAssert(_mesh, "The mesh should exist already");
@@ -679,8 +695,8 @@ PhysicsBase::shouldCreateIC(const VariableName & var_name,
   mooseError("There is a partial overlap between the subdomains covered by pre-existing initial "
              "conditions (ICs), defined on blocks (ids): " +
              Moose::stringify(getSubdomainNamesAndIDs(blocks_ids_covered)) +
-             "\n and a newly created IC for variable " + var_name +
-             ", to be defined on blocks: " + Moose::stringify(blocks) +
+             "\n and a newly created IC for variable '" + var_name +
+             "', to be defined on blocks: " + Moose::stringify(blocks) +
              ".\nWe should be creating the Physics' IC only for non-covered blocks. This is not "
              "implemented at this time.");
 }
@@ -788,7 +804,8 @@ PhysicsBase::shouldCreateTimeDerivative(const VariableName & var_name,
 
 void
 PhysicsBase::reportPotentiallyMissedParameters(const std::vector<std::string> & param_names,
-                                               const std::string & object_type) const
+                                               const std::string & object_type,
+                                               const std::string & object_name) const
 {
   std::vector<std::string> defaults_unused;
   std::vector<std::string> user_values_unused;
@@ -799,21 +816,23 @@ PhysicsBase::reportPotentiallyMissedParameters(const std::vector<std::string> & 
     else if (isParamValid(param))
       defaults_unused.push_back(param);
   }
+  const std::string object_name_string =
+      object_name.empty() ? "" : ("and name '" + object_name + "' ");
+
   if (defaults_unused.size() && _verbose)
     mooseInfoRepeated("Defaults for parameters '" + Moose::stringify(defaults_unused) +
-                      "' for object of type '" + object_type +
-                      "' were not used because the object was not created by this Physics.");
+                      "' for object of type '" + object_type + "' " + object_name_string +
+                      "were not used because the object was not created by this Physics.");
   if (user_values_unused.size())
   {
     if (_app.unusedFlagIsWarning())
       mooseWarning(
           "User-specifed values for parameters '" + Moose::stringify(user_values_unused) +
-          "' for object of type '" + object_type +
-          "' were not used because the corresponding object was not created by this Physics.");
+          "' for object of type '" + object_type + "' " + object_name_string +
+          "were not used because the corresponding object was not created by this Physics.");
     else if (_app.unusedFlagIsError())
-      mooseError(
-          "User-specified values for parameters '" + Moose::stringify(user_values_unused) +
-          "' for object of type '" + object_type +
-          "' were not used because the corresponding object was not created by this Physics.");
+      mooseError("User-specified values for parameters '" + Moose::stringify(user_values_unused) +
+                 "' for object of type '" + object_type + "' " + object_name_string +
+                 "were not used because the corresponding object was not created by this Physics.");
   }
 }

@@ -27,51 +27,6 @@ heated_length = 1.0
   []
 []
 
-[AuxVariables]
-  [mdot]
-    block = sub_channel
-  []
-  [SumWij]
-    block = sub_channel
-  []
-  [P]
-    block = sub_channel
-  []
-  [DP]
-    block = sub_channel
-  []
-  [h]
-    block = sub_channel
-  []
-  [T]
-    block = sub_channel
-  []
-  [Tpin]
-    block = fuel_pins
-  []
-  [Dpin]
-    block = fuel_pins
-  []
-  [rho]
-    block = sub_channel
-  []
-  [mu]
-    block = sub_channel
-  []
-  [S]
-    block = sub_channel
-  []
-  [w_perim]
-    block = sub_channel
-  []
-  [q_prime]
-    block = fuel_pins
-  []
-  [displacement]
-    block = sub_channel
-  []
-[]
-
 [FluidProperties]
   [water]
     type = Water97FluidProperties
@@ -99,7 +54,18 @@ heated_length = 1.0
   P_out = ${P_out}
 
   # Heat Transfer Correlations
-  pin_htc_correlation = 'dittus-boelter'
+  pin_HTC_closure = 'dittus-boelter'
+  friction_closure = 'MATRA'
+[]
+
+[SCMClosures]
+  [MATRA]
+    type = SCMFrictionMATRA
+  []
+  [dittus-boelter]
+    type = SCMHTCDittusBoelter
+    correction_factor = none
+  []
 []
 
 [ICs]

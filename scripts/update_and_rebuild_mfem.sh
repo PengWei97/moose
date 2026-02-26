@@ -38,12 +38,13 @@ if [ -n "$help" ]; then
   echo
   echo "Influential variables"
   echo "CONDUIT_DIR              Path to conduit; default: ../framework/contrib/conduit/installed"
-  echo "LIBMESH_DIR              Path to libmesh (for netcdf); default ../libmesh/installed"
+  echo "LIBMESH_DIR              Path to libmesh (for netcdf); default: ../libmesh/installed"
   echo "MFEM_DIR                 MFEM install prefix; default: ../framework/contrib/mfem/installed"
   echo "MFEM_SRC_DIR             Path to MFEM source; default: ../framework/contrib/mfem from submodule"
   echo "PETSC_ARCH               PETSc arch; default: arch-moose if PETSC_DIR not set"
   echo "PETSC_DIR                Path to PETSc install; default: ../petsc"
   echo "HDF5_DIR                 Path to HDF5 install; default: \$PETSC_DIR/\$PETSC_ARCH"
+  echo "GSLIB_DIR                Path to GSLIB source git repo"
   exit 0
 fi
 
@@ -55,14 +56,10 @@ fi
 
 set -e
 
-get_realpath() {
-    python3 -c "import os, sys; print(os.path.realpath(sys.argv[1]))" "$1"
-}
-
 if [ -n "$MFEM_SRC_DIR" ]; then
   skip_sub_update=1
 else
-  MFEM_SRC_DIR="$(get_realpath "${SCRIPT_DIR}"/../framework/contrib/mfem)"
+  MFEM_SRC_DIR=$(realpath "${SCRIPT_DIR}/../framework/contrib/mfem/.")
 fi
 MFEM_BUILD_DIR_BASE="${MFEM_SRC_DIR}/build"
 if [ -n "$MFEM_DIR" ]; then
@@ -73,24 +70,23 @@ else
   rm -rf "$MFEM_DIR"
 fi
 
-if [ -n "$CONDUIT_SRC_DIR" ]; then
-  skip_conduit_update=1
-else
-  CONDUIT_SRC_DIR="$(get_realpath "${SCRIPT_DIR}"/../framework/contrib/conduit)"
-fi
-CONDUIT_BUILD_DIR="${CONDUIT_SRC_DIR}/build"
-
-CONDUIT_DIR=${CONDUIT_DIR:-$(get_realpath "${SCRIPT_DIR}/../framework/contrib/conduit/installed")}
-LIBMESH_DIR=${LIBMESH_DIR:-$(get_realpath "${SCRIPT_DIR}/../libmesh/installed")}
+: ${CONDUIT_DIR:=$(realpath "${SCRIPT_DIR}/../framework/contrib/conduit/installed/.")}
+: ${LIBMESH_DIR:=$(realpath "${SCRIPT_DIR}/../libmesh/installed/.")}
 if [ -z "$PETSC_DIR" ]; then
-  PETSC_DIR=$(get_realpath "${SCRIPT_DIR}/../petsc")
+  PETSC_DIR=$(realpath "${SCRIPT_DIR}/../petsc/.")
   PETSC_ARCH="arch-moose"
 fi
-HDF5_DIR=${HDF5_DIR:-$PETSC_DIR/$PETSC_ARCH}
+: ${HDF5_DIR:=$PETSC_DIR/$PETSC_ARCH}
+
+# Overwrite GSLIB repo URL if GSLIB_DIR looks like a git repo
+if [ -n "$GSLIB_DIR" ] && [ -d "$GSLIB_DIR/.git" ]; then
+  export GIT_CONFIG_COUNT=1
+  export GIT_CONFIG_KEY_0=url.file://$GSLIB_DIR.insteadOf
+  export GIT_CONFIG_VALUE_0=https://github.com/Nek5000/gslib
+fi
 
 if [ -z "$skip_sub_update" ]; then
-  cd "${SCRIPT_DIR}/.."
-  git submodule update --init --checkout framework/contrib/mfem
+  git submodule update --init --checkout "${MFEM_SRC_DIR}"
 fi
 
 # Set of supported build methods
@@ -101,8 +97,23 @@ SUPPORTED_METHODS="oprof devel dbg opt"
 : ${METHODS:=${METHOD:-$SUPPORTED_METHODS}}
 
 # Map from the supported libMesh-like methods to CMake's build types
-typeset -A METHOD_TO_CMAKE_BUILD_TYPE_MAP
-METHOD_TO_CMAKE_BUILD_TYPE_MAP=([oprof]=PROFILE [devel]=RELWITHDEBINFO [dbg]=DEBUG [opt]=RELEASE)
+build_type_pairs=(
+  "oprof=PROFILE"
+  "devel=RELWITHDEBINFO"
+  "dbg=DEBUG"
+  "opt=RELEASE"
+)
+
+get_build_type() {
+  local key="$1"
+  local pair
+  for pair in "${build_type_pairs[@]}"; do
+    case "$pair" in
+      "$key="*) echo "${pair#*=}"; return 0 ;;
+    esac
+  done
+  return 1
+}
 
 # The order here, i.e. in METHODS, _is_ important: the libraries for the last
 # of the requested methods will be available for external use (see below)
@@ -111,7 +122,8 @@ do
   [[ $SUPPORTED_METHODS =~ $METHOD ]] ||
   { echo "Error: Build method $METHOD is not recognised, choose from $SUPPORTED_METHODS."; exit 1; }
 
-  CMAKE_BUILD_TYPE=${METHOD_TO_CMAKE_BUILD_TYPE_MAP[$METHOD]}
+
+  CMAKE_BUILD_TYPE="$(get_build_type "$METHOD")"
 
   # If we're not going fast, remove the build directory and reconfigure
   if [ -z "$go_fast" ]; then
@@ -125,38 +137,45 @@ do
       -DCMAKE_${CMAKE_BUILD_TYPE}_POSTFIX=-$METHOD \
       -DCMAKE_EXPORT_COMPILE_COMMANDS=YES \
       -DCMAKE_INSTALL_PREFIX="$MFEM_DIR" \
+      -DCMAKE_C_FLAGS_PROFILE="-O2 -g -DNDEBUG -fno-omit-frame-pointer" \
       -DCMAKE_CXX_FLAGS_PROFILE="-O2 -g -DNDEBUG -fno-omit-frame-pointer" \
       -DCMAKE_CUDA_FLAGS_PROFILE="-O2 -g -DNDEBUG -fno-omit-frame-pointer" \
       \
-      -DMFEM_ENABLE_MINIAPPS=YES \
-      \
       -DMFEM_USE_CEED=YES \
       -DMFEM_USE_CONDUIT=YES \
+      -DMFEM_USE_GSLIB=YES \
       -DMFEM_USE_MPI=YES \
+      -DMFEM_USE_MUMPS=YES \
       -DMFEM_USE_NETCDF=YES \
       -DMFEM_USE_PETSC=YES \
       -DMFEM_USE_SUPERLU=YES \
+      \
+      -DMFEM_FETCH_GSLIB=YES \
       \
       -DCEED_DIR="$PETSC_DIR/$PETSC_ARCH" \
       -DCONDUIT_DIR="$CONDUIT_DIR" \
       -DHDF5_DIR="$HDF5_DIR" \
       -DHYPRE_DIR="$PETSC_DIR/$PETSC_ARCH" \
       -DMETIS_DIR="$PETSC_DIR/$PETSC_ARCH" \
+      -DMUMPS_DIR="$PETSC_DIR/$PETSC_ARCH" \
       -DNETCDF_DIR="$LIBMESH_DIR" \
       -DParMETIS_DIR="$PETSC_DIR/$PETSC_ARCH" \
       -DPETSC_ARCH="$PETSC_ARCH" \
       -DPETSC_DIR="$PETSC_DIR" \
+      -DScaLAPACK_ROOT="$PETSC_DIR/$PETSC_ARCH" \
       -DSuperLUDist_DIR="$PETSC_DIR/$PETSC_ARCH" \
       \
       -DBLAS_LIBRARIES="$PETSC_DIR/$PETSC_ARCH/lib/libfblas.a" \
       -DLAPACK_LIBRARIES="$PETSC_DIR/$PETSC_ARCH/lib/libflapack.a" \
+      \
       "$@"
   fi
 
   cd "$MFEM_BUILD_DIR_BASE-$METHOD" ||
   { echo "Error: Need to run this script without --fast at least once."; exit 1; }
 
-  make -j ${MOOSE_JOBS:-4}
+  make -j ${MOOSE_JOBS:-4} install
+  cd miniapps/common
   make -j ${MOOSE_JOBS:-4} install
 
   # Save the configuration file for this build method

@@ -2,10 +2,6 @@
 
 !if! function=hasCapability('mfem')
 
-## Summary
-
-!syntax description /AuxKernels/MFEMCurlAux
-
 ## Overview
 
 AuxKernel for calculating the curl of an $H(\mathrm{curl})$ conforming source variable defined on a 3D Nédélec finite element
@@ -20,7 +16,7 @@ where $\vec u \in H(\mathrm{curl})$, $\vec v \in H(\mathrm{div})$ and $\lambda$ 
 
 ## Example Input File Syntax
 
-!listing curlcurl.i block=AuxKernels
+!listing mfem/kernels/curlcurl.i block=AuxKernels
 
 !syntax parameters /AuxKernels/MFEMCurlAux
 

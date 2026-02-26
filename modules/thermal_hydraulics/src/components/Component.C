@@ -95,22 +95,22 @@ Component::executeSetupMesh()
 }
 
 void
-Component::connectObject(const InputParameters & params,
-                         const std::string & mooseName,
-                         const std::string & name) const
+Component::connectObject(const InputParameters & obj_params,
+                         const std::string & obj_name,
+                         const std::string & param) const
 {
-  connectObject(params, mooseName, name, name);
+  connectObject(obj_params, obj_name, param, param);
 }
 
 void
-Component::connectObject(const InputParameters & params,
-                         const std::string & mooseName,
-                         const std::string & name,
-                         const std::string & par_name) const
+Component::connectObject(const InputParameters & obj_params,
+                         const std::string & obj_name,
+                         const std::string & comp_param,
+                         const std::string & obj_param) const
 {
-  MooseObjectParameterName alias("component", this->name(), name, "::");
-  MooseObjectParameterName par_value(params.getBase(), mooseName, par_name);
-  _app.getInputParameterWarehouse().addControllableParameterAlias(alias, par_value);
+  MooseObjectParameterName alias("component", this->name(), comp_param, "::");
+  MooseObjectParameterName obj_controlled_param(obj_params.getBase(), obj_name, obj_param);
+  _app.getInputParameterWarehouse().addControllableParameterAlias(alias, obj_controlled_param);
 }
 
 void
@@ -142,6 +142,10 @@ Component::makeFunctionControllableIfConstant(const FunctionName & fn_name,
                                               const std::string & control_name,
                                               const std::string & param) const
 {
+  mooseDeprecated("Component::makeFunctionControllableIfConstant is deprecated due to the issue "
+                  "identified in https://github.com/idaholab/moose/issues/31869. Please use an "
+                  "alternative parameter control strategy such as those identified in the issue.");
+
   const Function & fn = _sim.getFunction(fn_name);
   if (dynamic_cast<const ConstantFunction *>(&fn) != nullptr)
     connectObject(fn.parameters(), fn_name, control_name, param);
@@ -243,6 +247,54 @@ Component::setSubdomainInfo(SubdomainID subdomain_id,
 }
 
 void
+Component::addNonlinearStepFunctorMaterial(const std::string & functor_name,
+                                           const std::string & property,
+                                           bool functor_is_ad)
+{
+  const std::string class_name =
+      functor_is_ad ? "ADFunctorChangeFunctorMaterial" : "FunctorChangeFunctorMaterial";
+  InputParameters params = _factory.getValidParams(class_name);
+  params.set<std::vector<SubdomainName>>("block") = getSubdomainNames();
+  params.set<MooseFunctorName>("functor") = functor_name;
+  params.set<MooseEnum>("change_over") = "nonlinear";
+  params.set<std::string>("prop_name") = property;
+  params.set<bool>("take_absolute_value") = true;
+  getTHMProblem().addFunctorMaterial(class_name, genName(name(), property + "_fmat"), params);
+}
+
+void
+Component::addMaximumFunctorPostprocessor(const std::string & functor_name,
+                                          const std::string & pp_name,
+                                          const Real normalization,
+                                          const std::vector<SubdomainName> & subdomains)
+{
+  const std::string class_name = "ElementExtremeFunctorValue";
+  InputParameters params = _factory.getValidParams(class_name);
+  params.set<std::vector<SubdomainName>>("block") = subdomains;
+  params.set<MooseEnum>("value_type") = "max";
+  params.set<MooseFunctorName>("functor") = functor_name;
+  params.set<Real>("scale") = 1.0 / normalization;
+  params.set<ExecFlagEnum>("execute_on") = EXEC_NONLINEAR_CONVERGENCE;
+  params.set<std::vector<OutputName>>("outputs") = {"none"};
+  getTHMProblem().addPostprocessor(class_name, pp_name, params);
+}
+
+void
+Component::addMultiPostprocessorConvergence(const std::vector<PostprocessorName> & postprocessors,
+                                            const std::vector<std::string> & descriptions,
+                                            const std::vector<Real> & tolerances)
+{
+  const std::string class_name = "MultiPostprocessorConvergence";
+  InputParameters params = _factory.getValidParams(class_name);
+  params.set<std::vector<PostprocessorName>>("postprocessors") = postprocessors;
+  params.set<std::vector<std::string>>("descriptions") = descriptions;
+  params.set<std::vector<Real>>("tolerances") = tolerances;
+  params.set<unsigned int>("min_iterations") = 1;
+  params.set<unsigned int>("max_iterations") = std::numeric_limits<unsigned int>::max();
+  getTHMProblem().addConvergence(class_name, nonlinearConvergenceName(), params);
+}
+
+void
 Component::checkMutuallyExclusiveParameters(const std::vector<std::string> & params,
                                             bool need_one_specified) const
 {
@@ -317,4 +369,10 @@ Component::getCoordSysTypes() const
   checkSetupStatus(MESH_PREPARED);
 
   return _coord_sys;
+}
+
+Convergence *
+Component::getNonlinearConvergence() const
+{
+  mooseError("getNonlinearConvergence() not implemented.");
 }

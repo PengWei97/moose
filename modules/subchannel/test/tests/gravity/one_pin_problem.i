@@ -55,6 +55,18 @@ heated_length = 1.0
     compute_power = true
     P_out = ${P_out}
     verbose_subchannel = true
+    friction_closure = 'MATRA'
+    pin_HTC_closure = 'Dittus-Boelter'
+
+[]
+
+[SCMClosures]
+  [MATRA]
+    type = SCMFrictionMATRA
+  []
+  [Dittus-Boelter]
+    type = SCMHTCDittusBoelter
+  []
 []
 
 [ICs]

@@ -21,10 +21,20 @@ public:
 
   FlowChannel1Phase(const InputParameters & params);
 
+  virtual void addMooseObjects() override;
   virtual const THM::FlowModelID & getFlowModelID() const override { return THM::FM_SINGLE_PHASE; }
   virtual std::vector<std::string> ICParameters() const override;
+  virtual Convergence * getNonlinearConvergence() const override;
 
 protected:
+  virtual void check() const override;
   virtual void checkFluidProperties() const override;
   virtual std::string flowModelClassName() const override;
+  void addNumericalFluxVectorPostprocessor();
+
+  /// Adds the functor material for the flow channel
+  void addFlowChannel1PhaseFunctorMaterial();
+
+  /// Adds a residual norm Postprocessor
+  void addNormalized1PhaseResidualNorm(const VariableName & variable, const std::string & equation);
 };

@@ -17,14 +17,11 @@ InputParameters
 HeatTransferBase::validParams()
 {
   InputParameters params = ConnectorBase::validParams();
-  params.addDeprecatedParam<std::string>(
-      "pipe", "Name of pipe component to connect", "Use 'flow_channel' parameter instead.");
   params.addRequiredParam<std::string>("flow_channel",
                                        "Name of flow channel component to connect to");
   params.addParam<bool>(
       "P_hf_transferred", false, "Is heat flux perimeter transferred from an external source?");
   params.addParam<FunctionName>("P_hf", "Heat flux perimeter [m]");
-  params.declareControllable("P_hf");
   return params;
 }
 
@@ -135,8 +132,6 @@ HeatTransferBase::addHeatedPerimeter()
       InputParameters params = _factory.getValidParams(class_name);
       params.set<FunctionName>("area_function") = _A_fn_name;
       getTHMProblem().addFunction(class_name, _P_hf_fn_name, params);
-
-      makeFunctionControllableIfConstant(_P_hf_fn_name, "P_hf");
     }
 
     if (!_app.isRestarting())

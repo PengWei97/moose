@@ -25,58 +25,13 @@ P_out = 2.0e5 # Pa
   []
 []
 
-[AuxVariables]
-  [mdot]
-    block = subchannel
-  []
-  [SumWij]
-    block = subchannel
-  []
-  [P]
-    block = subchannel
-  []
-  [DP]
-    block = subchannel
-  []
-  [h]
-    block = subchannel
-  []
-  [T]
-    block = subchannel
-  []
-  [rho]
-    block = subchannel
-  []
-  [S]
-    block = subchannel
-  []
-  [w_perim]
-    block = subchannel
-  []
-  [mu]
-    block = subchannel
-  []
-  [q_prime]
-    block = subchannel
-  []
-  [displacement]
-    block = subchannel
-  []
-  [duct_heat_flux]
-    block = duct
-  []
-  [Tduct]
-    block = duct
-  []
-[]
-
 [FluidProperties]
   [sodium]
     type = PBSodiumFluidProperties
   []
 []
 
-[Problem]
+[SubChannel]
   type = TriSubChannel1PhaseProblem
   fp = sodium
   n_blocks = 1
@@ -88,9 +43,17 @@ P_out = 2.0e5 # Pa
   implicit = true
   segregated = true
   verbose_subchannel = true
+  duct_HTC_closure = 'gnielinski'
+  friction_closure = 'cheng'
+[]
 
-  # Heat Transfer Correlations
-  duct_htc_correlation = 'gnielinski'
+[SCMClosures]
+  [cheng]
+    type = SCMFrictionUpdatedChengTodreas
+  []
+  [gnielinski]
+    type = SCMHTCGnielinski
+  []
 []
 
 [ICs]

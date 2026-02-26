@@ -24,7 +24,7 @@ Closures1PhaseTHM::validParams()
                              "dittus_boelter");
   params.addParam<MooseEnum>(
       "wall_htc_closure", wall_htc_closure, "Heat transfer coefficient closure");
-  MooseEnum wall_ff_closure("cheng_todreas=0 churchill=1", "churchill");
+  MooseEnum wall_ff_closure("cheng_todreas=0 churchill=1 colebrook_white=2", "churchill");
   params.addParam<MooseEnum>("wall_ff_closure", wall_ff_closure, "Friction factor closure");
   params.addClassDescription("Closures for 1-phase flow channels");
   return params;
@@ -61,19 +61,15 @@ Closures1PhaseTHM::addMooseObjectsFlowChannel(const FlowChannelBase & flow_chann
     addWallFFMaterial(flow_channel_1phase);
 
   const unsigned int n_ht_connections = flow_channel_1phase.getNumberOfHeatTransferConnections();
-  if (n_ht_connections > 0)
+  if (n_ht_connections > 0 && flow_channel.getTemperatureMode())
   {
-
     for (unsigned int i = 0; i < n_ht_connections; i++)
     {
       // wall heat transfer coefficient material
       addWallHTCMaterial(flow_channel_1phase, i);
 
       // wall temperature material
-      if (flow_channel.getTemperatureMode())
-        addWallTemperatureFromAuxMaterial(flow_channel_1phase, i);
-      else
-        addTemperatureWallFromHeatFluxMaterial(flow_channel_1phase, i);
+      addWallTemperatureFromAuxMaterial(flow_channel_1phase, i);
     }
   }
 }
@@ -143,6 +139,22 @@ Closures1PhaseTHM::addWallFFMaterial(const FlowChannel1Phase & flow_channel) con
       }
       const std::string obj_name = genName(flow_channel.name(), "wall_friction_mat");
       _sim.addMaterial(class_name, obj_name, params);
+      break;
+    }
+    case WallFFClosureType::COLEBROOK_WHITE:
+    {
+      const std::string class_name = "ADWallFrictionColebrookWhiteMaterial";
+      InputParameters params = _factory.getValidParams(class_name);
+      params.set<std::vector<SubdomainName>>("block") = flow_channel.getSubdomainNames();
+      params.set<MaterialPropertyName>("rho") = FlowModelSinglePhase::DENSITY;
+      params.set<MaterialPropertyName>("vel") = FlowModelSinglePhase::VELOCITY;
+      params.set<MaterialPropertyName>("D_h") = FlowModelSinglePhase::HYDRAULIC_DIAMETER;
+      params.set<MaterialPropertyName>("f_D") = FlowModelSinglePhase::FRICTION_FACTOR_DARCY;
+      params.set<MaterialPropertyName>("mu") = FlowModelSinglePhase::DYNAMIC_VISCOSITY;
+      params.set<Real>("roughness") = flow_channel.getParam<Real>("roughness");
+      const std::string obj_name = genName(flow_channel.name(), "wall_friction_mat");
+      _sim.addMaterial(class_name, obj_name, params);
+      flow_channel.connectObject(params, obj_name, "roughness");
       break;
     }
     default:
@@ -303,22 +315,4 @@ Closures1PhaseTHM::addWallHTCMaterial(const FlowChannel1Phase & flow_channel, un
     default:
       mooseError("Invalid WallHTCClosureType");
   }
-}
-void
-Closures1PhaseTHM::addTemperatureWallFromHeatFluxMaterial(const FlowChannel1Phase & flow_channel,
-                                                          unsigned int i) const
-{
-  const std::string class_name = "TemperatureWallFromHeatFlux3EqnTHMMaterial";
-  InputParameters params = _factory.getValidParams(class_name);
-  params.set<std::vector<SubdomainName>>("block") = flow_channel.getSubdomainNames();
-  params.set<MaterialPropertyName>("T_wall") = flow_channel.getWallTemperatureNames()[i];
-  params.set<MaterialPropertyName>("D_h") = FlowModelSinglePhase::HYDRAULIC_DIAMETER;
-  params.set<MaterialPropertyName>("rho") = FlowModelSinglePhase::DENSITY;
-  params.set<MaterialPropertyName>("vel") = FlowModelSinglePhase::VELOCITY;
-  params.set<MaterialPropertyName>("T") = FlowModelSinglePhase::TEMPERATURE;
-  params.set<MaterialPropertyName>("k") = FlowModelSinglePhase::THERMAL_CONDUCTIVITY;
-  params.set<MaterialPropertyName>("mu") = FlowModelSinglePhase::DYNAMIC_VISCOSITY;
-  params.set<MaterialPropertyName>("cp") = FlowModelSinglePhase::SPECIFIC_HEAT_CONSTANT_PRESSURE;
-  params.set<MaterialPropertyName>("q_wall") = flow_channel.getWallHeatFluxNames()[i];
-  _sim.addMaterial(class_name, genName(flow_channel.name(), "T_from_q_wall_mat", i), params);
 }

@@ -20,7 +20,7 @@ MFEMVectorFESpace::validParams()
   params.addClassDescription(
       "Convenience class to construct vector finite element spaces, abstracting away some of the "
       "mathematical complexity of specifying the dimensions.");
-  MooseEnum fec_types("H1 ND RT L2", "H1");
+  MooseEnum fec_types("H1 ND RT L2 L2Int", "H1");
   params.addParam<MooseEnum>("fec_type", fec_types, "Specifies the family of FE shape functions.");
   MooseEnum closed_basis_types("GaussLobatto=1 ClosedUniform=4 Serendipity=6 ClosedGL=7",
                                "GaussLobatto");
@@ -36,19 +36,14 @@ MFEMVectorFESpace::validParams()
   params.addParam<MooseEnum>(
       "basis",
       basis_types,
-      "Specifies the basis used for H1 and L2 vector elements. H1 spaces require a closed basis "
-      "(GaussLobatto Positive ClosedUniform Serendipity ClosedGL)");
+      "Specifies the basis used for H1 and L2(Int) vector elements. H1 spaces require a closed "
+      "basis (GaussLobatto Positive ClosedUniform Serendipity ClosedGL)");
   params.addParam<int>("range_dim",
                        0,
                        "The number of components of the vectors in reference space. Zero "
                        "(the default) means it will be the same as the problem dimension. "
                        "Note that MFEM does not currently support 2D vectors in 1D space "
                        "for ND and RT elements.");
-  MooseEnum fec_maps("VALUE INTEGRAL", "VALUE", true);
-  params.addParam<MooseEnum>(
-      "fec_map",
-      fec_maps,
-      "Specify the FE map type used VALUE or INTEGRAL (meaningful for L2 only)");
 
   return params;
 }
@@ -73,7 +68,7 @@ MFEMVectorFESpace::getFECName() const
     actual_type += "_R" + std::to_string(pdim) + "D";
   }
 
-  std::string basis = _fec_type == "L2" ? "_T" : "@";
+  std::string basis = _fec_type == "L2" || _fec_type == "L2Int" ? "_T" : "@";
 
   if (_fec_type == "ND" || _fec_type == "RT")
   {
@@ -82,21 +77,13 @@ MFEMVectorFESpace::getFECName() const
     basis += mfem::BasisType::GetChar(getParam<MooseEnum>("closed_basis"));
     basis += mfem::BasisType::GetChar(getParam<MooseEnum>("open_basis"));
   }
-  else if (_fec_type == "H1" || _fec_type == "L2")
+  else if (_fec_type == "H1" || _fec_type == "L2" || _fec_type == "L2Int")
   {
     if (isParamSetByUser("closed_basis") || isParamSetByUser("open_basis"))
       mooseWarning("closed_basis/open_basis parameter ignored, using basis parameter instead");
-    basis += _fec_type == "L2"
+    basis += _fec_type == "L2" || _fec_type == "L2Int"
                  ? std::to_string(getParam<MooseEnum>("basis"))
                  : std::string({mfem::BasisType::GetChar(getParam<MooseEnum>("basis"))});
-  }
-
-  // This is to get around an MFEM bug (to be removed in #31525)
-  basis = (basis == "@Gg" || basis == "@G" || basis == "_T0") ? "" : basis;
-
-  if (_fec_map == "INTEGRAL" && _fec_type == "L2")
-  {
-    return "L2Int" + basis + "_" + std::to_string(pdim) + "D_P" + std::to_string(_fec_order);
   }
 
   return actual_type + basis + "_" + std::to_string(pdim) + "D_P" + std::to_string(_fec_order);
@@ -105,7 +92,7 @@ MFEMVectorFESpace::getFECName() const
 int
 MFEMVectorFESpace::getVDim() const
 {
-  if (_fec_type == "H1" || _fec_type == "L2")
+  if (_fec_type == "H1" || _fec_type == "L2" || _fec_type == "L2Int")
   {
     return _range_dim == 0 ? getProblemDim() : _range_dim;
   }

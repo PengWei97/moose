@@ -30,18 +30,14 @@ LinearFVTKEDSourceSink::validParams()
 
   params.addParam<std::vector<BoundaryName>>(
       "walls", {}, "Boundaries that correspond to solid walls.");
-  params.addParam<bool>(
-      "linearized_model",
-      true,
-      "Boolean to determine if the problem should be used in a linear or nonlinear solve");
   MooseEnum wall_treatment("eq_newton eq_incremental eq_linearized neq", "neq");
   params.addParam<MooseEnum>("wall_treatment",
                              wall_treatment,
                              "The method used for computing the wall functions "
                              "'eq_newton', 'eq_incremental', 'eq_linearized', 'neq'");
 
-  params.addParam<Real>("C1_eps", 1.44, "First epsilon coefficient");
-  params.addParam<Real>("C2_eps", 1.92, "Second epsilon coefficient");
+  params.addParam<MooseFunctorName>("C1_eps", 1.44, "First epsilon coefficient");
+  params.addParam<MooseFunctorName>("C2_eps", 1.92, "Second epsilon coefficient");
   params.addParam<Real>("C_mu", 0.09, "Coupled turbulent kinetic energy closure.");
   params.addParam<Real>("C_pl", 10.0, "Production limiter constant multiplier.");
 
@@ -59,10 +55,9 @@ LinearFVTKEDSourceSink::LinearFVTKEDSourceSink(const InputParameters & params)
     _mu(getFunctor<Real>(NS::mu)),
     _mu_t(getFunctor<Real>(NS::mu_t)),
     _wall_boundary_names(getParam<std::vector<BoundaryName>>("walls")),
-    _linearized_model(getParam<bool>("linearized_model")),
     _wall_treatment(getParam<MooseEnum>("wall_treatment").getEnum<NS::WallTreatmentEnum>()),
-    _C1_eps(getParam<Real>("C1_eps")),
-    _C2_eps(getParam<Real>("C2_eps")),
+    _C1_eps(getFunctor<Real>("C1_eps")),
+    _C2_eps(getFunctor<Real>("C2_eps")),
     _C_mu(getParam<Real>("C_mu")),
     _C_pl(getParam<Real>("C_pl"))
 {
@@ -107,7 +102,7 @@ LinearFVTKEDSourceSink::computeMatrixContribution()
     const auto epsilon = _var.getElemValue(*_current_elem_info, state);
 
     // Compute destruction
-    const auto destruction = _C2_eps * rho * epsilon / TKE;
+    const auto destruction = _C2_eps(elem_arg, state) * rho * epsilon / TKE;
 
     // Assign to matrix (term gets multiplied by TKED)
     return destruction * _current_elem_volume;
@@ -190,8 +185,12 @@ LinearFVTKEDSourceSink::computeRightHandSideContribution()
     const Real TKED = _var.getElemValue(*_current_elem_info, state);
 
     // Compute production of TKE
-    const auto symmetric_strain_tensor_sq_norm =
-        NS::computeShearStrainRateNormSquared<Real>(_u_var, _v_var, _w_var, elem_arg, state);
+    const auto subdomain_id = _current_elem_info->elem()->subdomain_id();
+    const auto coord_sys = _subproblem.getCoordSystem(subdomain_id);
+    const unsigned int rz_radial_coord =
+        coord_sys == Moose::COORD_RZ ? _subproblem.getAxisymmetricRadialCoord() : 0;
+    const auto symmetric_strain_tensor_sq_norm = NS::computeShearStrainRateNormSquared<Real>(
+        _u_var, _v_var, _w_var, elem_arg, state, coord_sys, rz_radial_coord);
     Real production = _mu_t(elem_arg, state) * symmetric_strain_tensor_sq_norm;
 
     // Limit TKE production (needed for flows with stagnation zones)
@@ -199,7 +198,7 @@ LinearFVTKEDSourceSink::computeRightHandSideContribution()
     production = std::min(production, production_limit);
 
     // Compute production - recasted with mu_t definition to avoid division by epsilon
-    const auto production_epsilon = _C1_eps * production * TKED / TKE;
+    const auto production_epsilon = _C1_eps(elem_arg, state) * production * TKED / TKE;
 
     // Assign to matrix (term gets multiplied by TKED)
     return production_epsilon * _current_elem_volume;

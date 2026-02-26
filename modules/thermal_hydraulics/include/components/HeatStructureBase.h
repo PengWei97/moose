@@ -51,9 +51,17 @@ protected:
   virtual void init() override;
   virtual void check() const override;
   virtual bool usingSecondOrderMesh() const override;
+  virtual Convergence * getNonlinearConvergence() const override;
 
   void
   loadMaterial(InputParameters & pars, const std::string & par, const std::string & material_name);
+
+  /// Adds a PP for the average element size on a block
+  void addAverageElementSizePostprocessor(const SubdomainName & block);
+  /// Adds a residual norm PP for a block
+  void addResidualNormPostprocessor(const SubdomainName & block,
+                                    const UserObjectName & sp_name,
+                                    Real T_ref);
 
   /**
    * Adds a ADConstantDensityThermalSolidPropertiesMaterial for a heat structure region
@@ -68,8 +76,6 @@ protected:
 
   /// Map from block name to block index
   std::map<std::string, unsigned int> _name_index;
-  /// Material names
-  std::vector<std::string> _material_names;
   /// The number of rods represented by this heat structure
   Real _num_rods;
 
