@@ -424,6 +424,21 @@ class Job(OutputInterface):
             # Use the variable from the outer scope
             nonlocal runner_spawned
 
+            # Fail the job if is used too much CPU
+            if (max_cpu_per_slot := self.options.max_cpu_per_slot) is not None and (
+                cpu_percent := runner.cpu_percent
+            ) is not None:
+                slots = self.getSlots()
+                cpu_per_slot = cpu_percent / slots
+                if cpu_per_slot > max_cpu_per_slot:
+                    message = (
+                        "\n\nJOB OVER CPU: "
+                        f"CPU/slot {cpu_per_slot:.2f}% "
+                        f"> allowed {max_cpu_per_slot:.2f}%"
+                    )
+                    self.setStatus(self.error, "OVER CPU")
+                    self.appendOutput(message)
+
             # Run cleanup
             if runner_spawned:
                 with self.timer.time("runner_cleanup"):
@@ -647,13 +662,23 @@ class Job(OutputInterface):
         if num_failed > 0:
             self.setStatus(self.job_status.error, "VALIDATION FAILED")
 
-    def killProcess(self):
+    def killProcess(
+        self,
+        status: Optional[StatusSystem] = None,
+        status_message: str = "",
+        output: Optional[str] = None,
+    ):
         """Kill remaining process that may be running"""
+        if status is not None:
+            self.setStatus(status, status_message)
+        if output:
+            self.appendOutput(output)
         if self._runner:
             try:
                 self._runner.kill()
             except:
                 pass
+
         self.cleanup()
 
     def getOutputObjects(self) -> dict:
@@ -735,8 +760,8 @@ class Job(OutputInterface):
 
         if env_ran:
             header += [
-                "Environment variable(s): "
-                + " ".join([f'{k}="{v}"' for k, v in env_ran.items()])
+                "Environment variable(s):",
+                *[f'  {k}="{v}"' for k, v in sorted(env_ran.items())],
             ]
         output = "\n".join(header) + "\n"
 
@@ -1055,6 +1080,11 @@ class Job(OutputInterface):
         for name, total_time in test_entry["timing"].items():
             self.timer.start(name, time_now)
             self.timer.stop(name, time_now + total_time)
+
+        # Load the command and environment ran
+        self.__tester.setCommandRan(test_entry["tester"]["command"])
+        if env := test_entry["tester"]["environment"]:
+            self.__tester.setEnvironmentRan(env)
 
         # Load the output
         output_files = test_entry.get("output_files")

@@ -7,10 +7,14 @@
 # Licensed under LGPL 2.1, please see LICENSE for details
 # https://www.gnu.org/licenses/lgpl-2.1.html
 
-import os, json
+import os
 from threading import Lock
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
 from TestHarness import OutputInterface, util
+
+if TYPE_CHECKING:
+    from TestHarness.schedulers.Scheduler import SchedulerOptions
 
 
 class Runner(OutputInterface):
@@ -22,25 +26,40 @@ class Runner(OutputInterface):
     or externally (i.e., PBS, slurm, etc on HPC)
     """
 
-    def __init__(self, job, options):
+    def __init__(self, job, options, scheduler_options: "SchedulerOptions"):
         OutputInterface.__init__(self)
 
-        # The job that this runner is for
         self.job = job
-        # The test harness options
+        """The job that this runner is for."""
         self.options = options
-        # The job's exit code, should be set after wait()
-        self.exit_code = None
-        # The job's estimated max memory in bytes, if any
-        self._max_memory: Optional[int] = None
-        # Thread lock for max_memory
-        self._max_memory_lock = Lock()
+        """The TestHarness options."""
+        self.scheduler_options = scheduler_options
 
-        # The output for the actual run of the job. We keep this
-        # separate from self.output in this Runner because HPC
-        # jobs always have a file output, so we want to store
-        # their output separately
+        """The Scheduler options."""
+        self.exit_code = None
+        """The job's exit code, should be set after wait()."""
+        self._max_memory: Optional[int] = None
+        """The job's estimated max memory in bytes, if any."""
+        self._max_memory_lock = Lock()
+        """Thread lock for _max_memory."""
+
+        self._cpu_percent: Optional[float] = None
+        """The job's average CPU % usage, if known."""
+
         self.run_output = OutputInterface()
+        """
+        The output for the actual run of the job.
+
+        We keep this separate from self.output in this Runner because HPC
+        jobs always have a file output, so we want to store their output
+        separately.
+        """
+
+    @property
+    def pid(self) -> Optional[int]:
+        """Get the pid of the running local process, if any."""
+
+        return None
 
     @property
     def max_memory(self) -> Optional[int]:
@@ -52,18 +71,46 @@ class Runner(OutputInterface):
         with self._max_memory_lock:
             return self._max_memory
 
-    def setMaxMemory(self, value: int):
+    def updateMaxMemory(self, value: int) -> bool:
         """
-        Set the max memory in bytes for the process.
+        Update the max memory in bytes for the process, if greater.
 
         Should be used by derived runners to set the memory
         as it is running if available.
 
         Is thread safe so that a running job can update its memory
         usage while being read by the long running job printer.
+
+        Returns whether or not the max memory was updated (if
+        the value was greater than the current max memory).
         """
         with self._max_memory_lock:
-            self._max_memory = value
+            if self._max_memory is None or value > self._max_memory:
+                self._max_memory = value
+                return True
+        return False
+
+    @property
+    def cpu_percent(self) -> Optional[float]:
+        """
+        Get the average CPU % usage for the process, if tracked.
+
+        This is only available after the process has completed
+        and is only thread safe _after_ the process is done.
+        """
+        return self._cpu_percent
+
+    @cpu_percent.setter
+    def cpu_percent(self, value: float):
+        """
+        Set the average CPU % usage for the process.
+
+        Should only be called by derived runner classes and
+        should only be set once.
+        """
+        assert self._cpu_percent is None, "Should not be set"
+        assert isinstance(value, float)
+        self._cpu_percent = value
 
     def getRunOutput(self):
         """Get the OutputInterface object for the actual run"""

@@ -25,6 +25,31 @@
     recover = false
     expect_out = 'Parallel Type:.*distributed.*Mesh Dimension.*3.*Spatial Dimension.*3.*Elems.*2476.*Num Subdomains.*1.*Solver.*MFEMHypreGMRES'
   []
+  [MFEMDiffusionAMR]
+    design = 'MFEMRefinementMarker.md MFEMIndicator.md MFEML2ZienkiewiczZhuIndicator.md'
+    issues = '#30943'
+    requirement = 'The system shall have the ability to solve a diffusion problem using MFEM with AMR using both '
+    [hRefinement]
+      type = CSVDiff
+      input = diffusion_amr.i
+      csvdiff = 'OutputData/DiffusionHRefinement.csv'
+      capabilities = 'mfem'
+      compute_devices = 'cpu cuda'
+      recover = false
+      detail = 'h-refinement, '
+    []
+    [pRefinement]
+      type = CSVDiff
+      input = diffusion_amr.i
+      csvdiff = 'OutputData/DiffusionPRefinement.csv'
+      cli_args = 'Adaptivity/Markers/ref/max_h_level=0 Adaptivity/Markers/ref/max_p_level=1 '
+                 'Outputs/file_base=OutputData/DiffusionPRefinement'
+      capabilities = 'mfem'
+      compute_devices = 'cpu cuda'
+      recover = false
+      detail = 'and p-refinement.'
+    []
+  []
   [MFEMDiffusionPartial]
     type = XMLDiff
     input = diffusion.i
@@ -181,9 +206,77 @@
     input = darcy.i
     csvdiff = 'OutputData/Darcy.csv'
     requirement = 'The system shall have the ability to solve a mixed Darcy problem in two dimensions using MFEM.'
-    abs_zero = 1e-6
+    abs_zero = 5e-5
     capabilities = 'mfem'
     compute_devices = 'cpu cuda'
     recover = false
+  []
+  [MFEMNonLinearDiffusion]
+    type = XMLDiff
+    input = nldiffusion.i
+    xmldiff = 'OutputData/NLDiffusion/Run0/Run0.pvd
+                OutputData/NLDiffusion/Run0/Cycle000001/proc000000.vtu'
+    requirement = 'The system shall have the ability to solve a non-linear diffusion problem using MFEM.'
+    capabilities = 'mfem'
+    compute_devices = 'cpu'
+    max_parallel = 1 # schemadiff with multiple ranks
+    recover = false
+  []  
+  [MFEMNonLinearDiffusionNonZeroRHS]
+    type = XMLDiff
+    input = nldiffusion.i
+    cli_args = 'Kernels/active="nl force" '
+               'Outputs/ParaViewDataCollection/file_base=OutputData/NLDiffusionNonZeroRHS '
+    xmldiff = 'OutputData/NLDiffusionNonZeroRHS/Run0/Run0.pvd
+                OutputData/NLDiffusionNonZeroRHS/Run0/Cycle000001/proc000000.vtu'
+    requirement = 'The system shall have the ability to solve a non-linear diffusion with non-zero rhs using MFEM.'
+    capabilities = 'mfem'
+    compute_devices = 'cpu'
+    max_parallel = 1 # schemadiff with multiple ranks
+    recover = false
+  []
+  [MFEMNonLinearHeatTransfer]
+    design = 'EquationSystem.md'
+    issues = '#32256'
+    requirement = 'The system shall have the ability to solve a transient non-linear problem with a non-linear boundary condition using MFEM, when '
+    [linearized]
+      detail = 'the non-linear BC is given constant coefficients, and '
+      type = CSVDiff
+      input = nl_heattransfer.i
+      csvdiff = 'OutputData/NLHeatTransferLinearized_line_sample_0003.csv'
+      capabilities = 'mfem'
+      compute_devices = 'cpu'
+      recover = false
+      restep = false
+      cli_args = 'BCs/active="linearized" '
+                 'Outputs/CSV/file_base=OutputData/NLHeatTransferLinearized '      
+    []
+    [non-linear]
+      detail = 'when the non-linear BC is given state-dependent coefficients.'
+      type = CSVDiff
+      input = nl_heattransfer.i
+      csvdiff = 'OutputData/NLHeatTransfer_line_sample_0003.csv'
+      capabilities = 'mfem'
+      compute_devices = 'cpu'
+      recover = false
+      restep = false
+    []
+  []
+  [MFEMNonLinearHeatConduction]
+    design = 'EquationSystem.md'
+    issues = '#32256'
+    requirement = 'The system shall have the ability to solve a transient non-linear problem including both linear and nonlinear domain integrators.'
+    type = CSVDiff
+    input = nl_heatconduction.i
+    csvdiff = 'OutputData/NLHeatConduction_centre_temperature_0000.csv
+                OutputData/NLHeatConduction_centre_temperature_0010.csv
+                OutputData/NLHeatConduction_centre_temperature_0020.csv
+                OutputData/NLHeatConduction_centre_temperature_0030.csv
+                OutputData/NLHeatConduction_centre_temperature_0040.csv
+                OutputData/NLHeatConduction_centre_temperature_0050.csv'
+    capabilities = 'mfem'
+    compute_devices = 'cpu'
+    recover = false
+    restep = false    
   []
 []

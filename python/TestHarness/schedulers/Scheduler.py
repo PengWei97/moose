@@ -6,20 +6,64 @@
 #
 # Licensed under LGPL 2.1, please see LICENSE for details
 # https://www.gnu.org/licenses/lgpl-2.1.html
+import os
 import sys
-from TestHarness.JobDAG import JobDAG
-from TestHarness.StatusSystem import StatusSystem
-from FactorySystem.MooseObject import MooseObject
-import os, traceback
+import threading
+import traceback
+from dataclasses import dataclass
+from enum import Enum
+from multiprocessing.pool import ThreadPool
 from time import sleep
 from timeit import default_timer as clock
-from multiprocessing.pool import ThreadPool
-import threading  # for thread locking and thread timers
+from typing import TYPE_CHECKING, Optional
+
 import pyhit
+from FactorySystem.MooseObject import MooseObject
+
+from TestHarness.JobDAG import JobDAG
+from TestHarness.mpi_config import (
+    MPIConfig,
+    build_hwloc_topology,
+    get_mpi_config,
+)
+from TestHarness.StatusSystem import StatusSystem
+from TestHarness.util import findBSDTime, findGNUTime, outputHeader
+
+if TYPE_CHECKING:
+    from TestHarness.schedulers.Job import Job
 
 
 class SchedulerError(Exception):
     pass
+
+
+class TimeUtilityType(Enum):
+    """The type of time utility found, if any."""
+
+    BSD = 0
+    GNU = 1
+    NONE = 2
+
+
+@dataclass(frozen=True)
+class SchedulerOptions:
+    """Options for the Scheduler."""
+
+    hwloc_topology_path: Optional[str]
+    """Path to the pre-built hwloc topology file, if any."""
+
+    mpi_config: MPIConfig
+    """The MPI configuration."""
+
+    monitor_job_cpu: bool
+    """Whether or not to monitor Job CPU usage."""
+    monitor_job_memory: bool
+    """Whether or not to monitor Job memory usage."""
+
+    time_utility_path: Optional[str]
+    """The path to the time utility found, if any."""
+    time_utility_type: TimeUtilityType
+    """The type of time utility found, if any."""
 
 
 class Scheduler(MooseObject):
@@ -56,6 +100,17 @@ class Scheduler(MooseObject):
     # This is what will be checked for when we look for valid schedulers
     IS_SCHEDULER = True
 
+    CAN_SET_HWLOC_TOPOLOGY = False
+    """Whether or not to set hwloc topology if available."""
+    CAN_SET_MAX_MEMORY = False
+    """Whether or not Job max memory can be set (Jobs can be killed if over memory)."""
+    CAN_OPENMPI_OVERSUBSCRIBE = False
+    """Whether or not OpenMPI can be set to oversubscribe."""
+    MONITOR_JOB_CPU = False
+    """Whether or not this Scheduler should monitor Job process CPU usage."""
+    MONITOR_JOB_MEMORY = False
+    """Whether or not this Scheduler should monitor Job process memory usage."""
+
     def __init__(self, harness, params):
         MooseObject.__init__(self, harness, params)
 
@@ -82,9 +137,6 @@ class Scheduler(MooseObject):
 
         # Slot lock when processing resource allocations and modifying slots_in_use
         self.slot_lock = threading.Lock()
-
-        # Job lock when modifying a jobs status
-        self.activity_lock = threading.Lock()
 
         # A combination of processors + threads (-j/-n) currently in use, that a job requires
         self.slots_in_use = 0
@@ -113,9 +165,15 @@ class Scheduler(MooseObject):
         # Private set of jobs currently running
         self.__active_jobs = set([])
 
+        # Lock for __active_jobs
+        self.__active_jobs_lock = threading.Lock()
+
         # Jobs that are taking longer to finish than the alloted time are reported back early to inform
         # the user 'stuff' is still running. Jobs entering this set will not be reported again.
         self.jobs_reported = set([])
+
+        # Lock for jobs_repoted
+        self.jobs_reported_lock = threading.Lock()
 
         # The last time the scheduler reported something
         self.last_reported_time = clock()
@@ -124,6 +182,81 @@ class Scheduler(MooseObject):
         self.report_long_jobs = True
         # Whether or not to enforce the timeout of jobs
         self.enforce_timeout = True
+
+        self.scheduler_options: SchedulerOptions = self.buildSchedulerOptions(
+            self.options
+        )
+        """The options for the scheduler."""
+
+    def buildSchedulerOptions(self, options) -> SchedulerOptions:
+        """Build the SchedulerOptions for this scheduler."""
+        # Build MPI configuration
+        mpi_config = get_mpi_config()
+
+        # Whether or not to monitor Job resources, depending on static
+        # Scheduler options and runtime command line options
+        monitor_job_cpu: bool = (
+            self.MONITOR_JOB_CPU is True and not options.no_cpu_tracking
+        )
+        monitor_job_memory: bool = (
+            self.MONITOR_JOB_MEMORY is True and not options.no_memory_tracking
+        )
+
+        # Find the time utility if needed, disabling CPU tracking
+        # if enabled but no time utility available
+        time_utility_type = TimeUtilityType.NONE
+        time_utility_path: Optional[str] = None
+        if monitor_job_cpu:
+            if time_utility_path := findGNUTime():
+                time_utility_type = TimeUtilityType.GNU
+            elif time_utility_path := findBSDTime():
+                time_utility_type = TimeUtilityType.BSD
+            else:
+                monitor_job_cpu = False
+
+        # Build hwloc topology file if set to do so
+        hwloc_topology_path: Optional[str] = None
+        if (
+            self.CAN_SET_HWLOC_TOPOLOGY
+            and mpi_config.hwloc
+            and not options.no_hwloc_topology
+        ):
+            if hwloc_topology_path := build_hwloc_topology():
+                self.harness.printInfo(
+                    f"Using cached hwloc topology in '{hwloc_topology_path}'"
+                )
+
+        # Can't restrict resources without tracking
+        if self.options.max_cpu_per_slot and not monitor_job_cpu:
+            self.harness.errorExit(
+                "Cannot specify --max-cpu-per-slot; CPU tracking is not available"
+            )
+        if self.options.max_memory_per_slot and (
+            not monitor_job_memory or not self.CAN_SET_MAX_MEMORY
+        ):
+            self.harness.errorExit(
+                "Cannot specify --max-memory-per-slot; memory tracking is not available"
+            )
+        # Can't disable hwloc topology
+        if options.no_hwloc_topology and not self.CAN_SET_HWLOC_TOPOLOGY:
+            self.harness.errorExit(
+                "Cannot --no-hwloc-topology; scheduler does not " "support setting it"
+            )
+        # Can't disable openmpi oversubscribe
+        if options.no_openmpi_oversubscribe and not self.CAN_OPENMPI_OVERSUBSCRIBE:
+            self.harness.errorExit(
+                "Cannot --no-openmpi-oversubscribe; scheduler does not "
+                "support setting it"
+            )
+
+        return SchedulerOptions(
+            hwloc_topology_path=hwloc_topology_path,
+            mpi_config=mpi_config,
+            monitor_job_cpu=monitor_job_cpu,
+            monitor_job_memory=monitor_job_memory,
+            time_utility_path=time_utility_path,
+            time_utility_type=time_utility_type,
+        )
 
     def getErrorState(self):
         """
@@ -155,7 +288,7 @@ class Scheduler(MooseObject):
 
     def killRemaining(self, keyboard=False):
         """Method to kill running jobs"""
-        with self.activity_lock:
+        with self.__active_jobs_lock:
             for job in self.__active_jobs:
                 job.killProcess()
         self.triggerErrorState()
@@ -186,8 +319,67 @@ class Scheduler(MooseObject):
         )
 
     def run(self, job):
-        """Call derived run method"""
-        return
+        """Run a tester command"""
+
+        # Build and set the runner that will actually run the commands
+        # This is abstracted away so we can support local runners and PBS/slurm runners
+        job.setRunner(self.buildRunner(job, self.options))
+
+        tester = job.getTester()
+
+        # Do not execute app, and do not processResults
+        if self.options.dry_run:
+            self.setSuccessfulMessage(tester)
+            return
+        # Load results from a previous run
+        elif self.options.show_last_run:
+            job.loadPreviousResults()
+            return
+
+        # Start job timer
+        job.timer.startMain()
+
+        # Anything that throws while running or processing a job should be caught
+        # and the job should fail
+        try:
+            # Launch and wait for the command to finish
+            job.run()
+
+            # Set the successful message
+            if not tester.isSkip() and not job.isFail():
+                self.setSuccessfulMessage(tester)
+        except:
+            trace = traceback.format_exc()
+            job.appendOutput(
+                outputHeader("Python exception encountered in Job") + trace
+            )
+            job.setStatus(job.error, "JOB EXCEPTION")
+        finally:
+            # Stop job timer
+            job.timer.stopMain()
+
+    def setSuccessfulMessage(self, tester):
+        """properly set a finished successful message for tester"""
+        message = ""
+
+        # Handle 'dry run' first, because if true, job.run() never took place
+        if self.options.dry_run:
+            message = "DRY RUN"
+
+        elif tester.specs["check_input"]:
+            message = "SYNTAX PASS"
+
+        elif self.options.scaling and tester.specs["scale_refine"]:
+            message = "SCALED"
+
+        elif (
+            self.options.enable_recover
+            and tester.specs.isValid("skip_checks")
+            and tester.specs["skip_checks"]
+        ):
+            message = "PART1"
+
+        tester.setStatus(tester.success, message)
 
     def augmentJobs(self, jobs):
         """
@@ -233,6 +425,20 @@ class Scheduler(MooseObject):
                 return False
         return True
 
+    def monitorJobProcesses(self):
+        """Monitor the running job processes; called during the poll loop."""
+
+        pass
+
+    def getActiveJobPIDMap(self) -> dict[int, "Job"]:
+        """Get the active job PID -> Job map."""
+        with self.__active_jobs_lock:
+            return {
+                pid: job
+                for job in self.__active_jobs
+                if ((runner := job.getRunner()) and (pid := runner.pid))
+            }
+
     def waitFinish(self):
         """
         Inform the Scheduler to begin running. Block until all jobs finish.
@@ -246,6 +452,7 @@ class Scheduler(MooseObject):
                 if not self.isRunning():
                     break
                 sleep(0.1)
+                self.monitorJobProcesses()
 
             error_state = self.getErrorState()
 
@@ -351,7 +558,7 @@ class Scheduler(MooseObject):
     def satisfyLoad(self):
         """Method for controlling load average"""
         while self.slots_in_use > 1 and self.getLoad() >= self.average_load:
-            sleep(1.0)
+            sleep(0.1)
 
     def getJobSlots(self, job):
         """
@@ -397,8 +604,7 @@ class Scheduler(MooseObject):
         """Handle jobs that have timed out"""
         with job.getLock():
             if job.isRunning():
-                job.setStatus(job.timeout, "TIMEOUT")
-                job.killProcess()
+                job.killProcess(job.timeout, "TIMEOUT")
 
     def handleJobStatus(self, job, caveats=None):
         """
@@ -447,12 +653,13 @@ class Scheduler(MooseObject):
                 force_status = job.force_report_status
 
                 if force_status:
-                    with self.activity_lock:
+                    with self.jobs_reported_lock:
                         self.jobs_reported.add(job)
                     job.force_report_status = False
                 elif job.isRunning():
-                    if job in self.jobs_reported:
-                        return
+                    with self.jobs_reported_lock:
+                        if job in self.jobs_reported:
+                            return
 
                     # this job will be reported as 'RUNNING'
                     if clock() - self.last_reported_time >= self.min_report_time:
@@ -465,7 +672,7 @@ class Scheduler(MooseObject):
                         ):
                             job.addCaveats("FINISHED")
 
-                        with self.activity_lock:
+                        with self.jobs_reported_lock:
                             self.jobs_reported.add(job)
                     # TestHarness has not yet been inactive long enough to warrant a report
                     else:
@@ -534,7 +741,7 @@ class Scheduler(MooseObject):
                     else:
                         job.report_timer = None
 
-                with self.activity_lock:
+                with self.__active_jobs_lock:
                     self.__active_jobs.add(job)
 
                 if self.enforce_timeout:
@@ -575,14 +782,8 @@ class Scheduler(MooseObject):
                     # All done
                     job.setStatus(StatusSystem().finished)
 
-                with self.activity_lock:
-                    if job in self.__active_jobs:
-                        self.__active_jobs.remove(job)
-                    else:
-                        job.setStatus(StatusSystem().error, "SCHEDULER ERROR")
-                        job.appendOutput(
-                            f"Failed to remove job from active jobs in Scheduler; did not exist"
-                        )
+                with self.__active_jobs_lock:
+                    self.__active_jobs.remove(job)
 
             # Not enough slots to run the job...
             else:
@@ -590,7 +791,6 @@ class Scheduler(MooseObject):
                 if not job.isFinished():
                     with job.getLock():
                         job.setStatus(job.hold)
-                    sleep(0.1)
 
             # Job is done (or needs to re-enter the queue)
             self.queueJobs(jobs)

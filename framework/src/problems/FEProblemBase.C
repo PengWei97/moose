@@ -1992,6 +1992,21 @@ FEProblemBase::addCachedResidualDirectly(NumericVector<Number> & residual, const
     _assembly[tid][_current_nl_sys->number()]->addCachedResidualDirectly(
         residual, Assembly::GlobalDataKey{}, getVectorTag(_current_nl_sys->nonTimeVectorTag()));
 
+  std::vector<VectorTag> extra_residual_vector_tags;
+  extra_residual_vector_tags.reserve(currentResidualVectorTags().size());
+  const auto time_tag = _current_nl_sys->timeVectorTag();
+  const auto non_time_tag = _current_nl_sys->nonTimeVectorTag();
+  for (const auto & vector_tag : currentResidualVectorTags())
+    if (vector_tag._id != time_tag && vector_tag._id != non_time_tag)
+      extra_residual_vector_tags.push_back(vector_tag);
+
+  // Flush extra vector tag caches (e.g. from extra_vector_tags on NodalConstraints)
+  // to their respective system vectors after the standard TIME/NONTIME caches above.
+  // Without this, NodalConstraint contributions to extra vector tags are silently
+  // discarded by the blanket clearCachedResiduals.
+  _assembly[tid][_current_nl_sys->number()]->addCachedResiduals(Assembly::GlobalDataKey{},
+                                                                extra_residual_vector_tags);
+
   // We do this because by adding the cached residual directly, we cannot ensure that all of the
   // cached residuals are emptied after only the two add calls above
   _assembly[tid][_current_nl_sys->number()]->clearCachedResiduals(Assembly::GlobalDataKey{});
@@ -3276,6 +3291,14 @@ FEProblemBase::addAuxVariable(const std::string & var_type,
 }
 
 void
+FEProblemBase::addElementalFieldVariable(const std::string & var_type,
+                                         const std::string & var_name,
+                                         InputParameters & params)
+{
+  addAuxVariable(var_type, var_name, params);
+}
+
+void
 FEProblemBase::addAuxVariable(const std::string & var_name,
                               const FEType & type,
                               const std::set<SubdomainID> * const active_subdomains)
@@ -3881,43 +3904,26 @@ FEProblemBase::projectFunctionOnCustomRange(ConstElemRange & elem_range,
                                                                   const std::string &,
                                                                   const std::string &),
                                             const libMesh::Parameters & params,
-                                            const VariableName & target_var)
+                                            const std::vector<VariableName> & target_vars)
 {
   mooseAssert(!Threads::in_threads,
               "We're performing a projection based on data from just the thread 0 variable, so any "
               "modifications to the variable solution must have been thread joined already");
 
-  const auto & var = getStandardVariable(0, target_var);
-  const auto var_num = var.number();
-  const auto sn = systemNumForVariable(target_var);
-  auto & sys = getSystemBase(sn);
+  std::unordered_map<unsigned int, std::vector<unsigned int>> sys_to_var_nums;
 
-  // Let libmesh handle the projection
-  System & libmesh_sys = getSystem(target_var);
-  auto temp_vec = libmesh_sys.current_local_solution->zero_clone();
-  libmesh_sys.project_vector(func, func_grad, params, *temp_vec);
-  temp_vec->close();
-
-  // Get the dof indices to copy
-  DofMap & dof_map = sys.dofMap();
-  std::set<dof_id_type> dof_indices;
-  std::vector<dof_id_type> elem_dof_indices;
-
-  for (const auto & elem : elem_range)
+  for (const auto & target_var : target_vars)
   {
-    dof_map.dof_indices(elem, elem_dof_indices, var_num);
-    dof_indices.insert(elem_dof_indices.begin(), elem_dof_indices.end());
+    const auto sn = systemNumForVariable(target_var);
+    const auto & var = getStandardVariable(0, target_var);
+    sys_to_var_nums[sn].push_back(var.number());
   }
-  std::vector<dof_id_type> dof_indices_v(dof_indices.begin(), dof_indices.end());
 
-  // Copy the projected values into the solution vector
-  std::vector<Real> dof_vals;
-  temp_vec->get(dof_indices_v, dof_vals);
-  mooseAssert(sys.solution().closed(),
-              "The solution should be closed before mapping our projection");
-  sys.solution().insert(dof_vals, dof_indices_v);
-  sys.solution().close();
-  sys.solution().localize(*libmesh_sys.current_local_solution, sys.dofMap().get_send_list());
+  for (const auto & [sys_num, var_nums] : sys_to_var_nums)
+  {
+    System & libmesh_sys = getSystemBase(sys_num).system();
+    libmesh_sys.project_solution(func, func_grad, params, elem_range, var_nums);
+  }
 }
 
 std::shared_ptr<MaterialBase>
@@ -5056,6 +5062,34 @@ FEProblemBase::joinAndFinalize(TheWarehouse::Query query, bool isgen)
   }
 }
 
+TheWarehouse::Query
+FEProblemBase::getUOQuery(const std::string & system,
+                          const ExecFlagType & type,
+                          const Moose::AuxGroup & group) const
+{
+  TheWarehouse::Query query =
+      theWarehouse().query().condition<AttribSystem>(system).condition<AttribExecOns>(type);
+
+  if (group == Moose::PRE_IC)
+    query.condition<AttribPreIC>(true);
+  else if (group == Moose::PRE_AUX)
+    query.condition<AttribPreAux>(type);
+  else if (group == Moose::POST_AUX)
+    query.condition<AttribPostAux>(type);
+
+  return query;
+}
+
+void
+FEProblemBase::getUOExecutionGroups(TheWarehouse::Query & query,
+                                    std::set<int> & execution_groups) const
+{
+  std::vector<UserObjectBase *> uos;
+  query.queryIntoUnsorted(uos);
+  for (const auto & uo : uos)
+    execution_groups.insert(uo->getParam<int>("execution_order_group"));
+}
+
 void
 FEProblemBase::computeUserObjectByName(const ExecFlagType & type,
                                        const Moose::AuxGroup & group,
@@ -5064,23 +5098,27 @@ FEProblemBase::computeUserObjectByName(const ExecFlagType & type,
   const auto old_exec_flag = _current_execute_on_flag;
   _current_execute_on_flag = type;
 
-  TheWarehouse::Query query = theWarehouse()
-                                  .query()
-                                  .condition<AttribSystem>("UserObject")
-                                  .condition<AttribExecOns>(type)
-                                  .condition<AttribName>(name);
-  computeUserObjectsInternal(type, group, query);
+  std::set<int> execution_groups;
 
 #ifdef MOOSE_KOKKOS_ENABLED
-  {
-    TheWarehouse::Query query = theWarehouse()
-                                    .query()
-                                    .condition<AttribSystem>("KokkosUserObject")
-                                    .condition<AttribExecOns>(type)
-                                    .condition<AttribName>(name);
-    computeKokkosUserObjectsInternal(type, group, query);
-  }
+  TheWarehouse::Query kokkos_query =
+      getUOQuery("KokkosUserObject", type, group).condition<AttribName>(name);
+  getUOExecutionGroups(kokkos_query, execution_groups);
 #endif
+
+  TheWarehouse::Query query = getUOQuery("UserObject", type, group).condition<AttribName>(name);
+  getUOExecutionGroups(query, execution_groups);
+
+  for (const auto execution_group : execution_groups)
+  {
+#ifdef MOOSE_KOKKOS_ENABLED
+    computeKokkosUserObjectsInternal(
+        type, kokkos_query.clone().condition<AttribExecutionOrderGroup>(execution_group));
+#endif
+
+    computeUserObjectsInternal(type,
+                               query.clone().condition<AttribExecutionOrderGroup>(execution_group));
+  }
 
   _current_execute_on_flag = old_exec_flag;
 }
@@ -5088,227 +5126,209 @@ FEProblemBase::computeUserObjectByName(const ExecFlagType & type,
 void
 FEProblemBase::computeUserObjects(const ExecFlagType & type, const Moose::AuxGroup & group)
 {
-  TheWarehouse::Query query =
-      theWarehouse().query().condition<AttribSystem>("UserObject").condition<AttribExecOns>(type);
-  computeUserObjectsInternal(type, group, query);
+  std::set<int> execution_groups;
 
 #ifdef MOOSE_KOKKOS_ENABLED
-  {
-    TheWarehouse::Query query = theWarehouse()
-                                    .query()
-                                    .condition<AttribSystem>("KokkosUserObject")
-                                    .condition<AttribExecOns>(type);
-    computeKokkosUserObjectsInternal(type, group, query);
-  }
+  TheWarehouse::Query kokkos_query = getUOQuery("KokkosUserObject", type, group);
+  getUOExecutionGroups(kokkos_query, execution_groups);
 #endif
+
+  TheWarehouse::Query query = getUOQuery("UserObject", type, group);
+  getUOExecutionGroups(query, execution_groups);
+
+  for (const auto execution_group : execution_groups)
+  {
+#ifdef MOOSE_KOKKOS_ENABLED
+    computeKokkosUserObjectsInternal(
+        type, kokkos_query.clone().condition<AttribExecutionOrderGroup>(execution_group));
+#endif
+
+    computeUserObjectsInternal(type,
+                               query.clone().condition<AttribExecutionOrderGroup>(execution_group));
+  }
 }
 
 void
-FEProblemBase::computeUserObjectsInternal(const ExecFlagType & type,
-                                          const Moose::AuxGroup & group,
-                                          TheWarehouse::Query & primary_query)
+FEProblemBase::computeUserObjectsInternal(const ExecFlagType & type, TheWarehouse::Query & query)
 {
   try
   {
     TIME_SECTION("computeUserObjects", 1, "Computing User Objects");
 
-    // Add group to query
-    if (group == Moose::PRE_IC)
-      primary_query.condition<AttribPreIC>(true);
-    else if (group == Moose::PRE_AUX)
-      primary_query.condition<AttribPreAux>(type);
-    else if (group == Moose::POST_AUX)
-      primary_query.condition<AttribPostAux>(type);
+    std::vector<GeneralUserObject *> genobjs;
+    query.clone().condition<AttribInterfaces>(Interfaces::GeneralUserObject).queryInto(genobjs);
 
-    // query everything first to obtain a list of execution groups
-    std::vector<UserObject *> uos;
-    primary_query.clone().queryIntoUnsorted(uos);
-    std::set<int> execution_groups;
-    for (const auto & uo : uos)
-      execution_groups.insert(uo->getParam<int>("execution_order_group"));
+    std::vector<UserObject *> userobjs;
+    query.clone()
+        .condition<AttribInterfaces>(Interfaces::ElementUserObject | Interfaces::SideUserObject |
+                                     Interfaces::InternalSideUserObject |
+                                     Interfaces::InterfaceUserObject | Interfaces::DomainUserObject)
+        .queryInto(userobjs);
 
-    // iterate over execution order groups
-    for (const auto execution_group : execution_groups)
+    std::vector<UserObject *> tgobjs;
+    query.clone()
+        .condition<AttribInterfaces>(Interfaces::ThreadedGeneralUserObject)
+        .queryInto(tgobjs);
+
+    std::vector<UserObject *> nodal;
+    query.clone().condition<AttribInterfaces>(Interfaces::NodalUserObject).queryInto(nodal);
+
+    std::vector<MortarUserObject *> mortar;
+    query.clone().condition<AttribInterfaces>(Interfaces::MortarUserObject).queryInto(mortar);
+
+    if (userobjs.empty() && genobjs.empty() && tgobjs.empty() && nodal.empty() && mortar.empty())
+      return;
+
+    // Start the timer here since we have at least one active user object
+    std::string compute_uo_tag = "computeUserObjects(" + Moose::stringify(type) + ")";
+
+    // Perform Residual/Jacobian setups
+    if (type == EXEC_LINEAR)
     {
-      auto query = primary_query.clone().condition<AttribExecutionOrderGroup>(execution_group);
-
-      std::vector<GeneralUserObject *> genobjs;
-      query.clone().condition<AttribInterfaces>(Interfaces::GeneralUserObject).queryInto(genobjs);
-
-      std::vector<UserObject *> userobjs;
-      query.clone()
-          .condition<AttribInterfaces>(Interfaces::ElementUserObject | Interfaces::SideUserObject |
-                                       Interfaces::InternalSideUserObject |
-                                       Interfaces::InterfaceUserObject |
-                                       Interfaces::DomainUserObject)
-          .queryInto(userobjs);
-
-      std::vector<UserObject *> tgobjs;
-      query.clone()
-          .condition<AttribInterfaces>(Interfaces::ThreadedGeneralUserObject)
-          .queryInto(tgobjs);
-
-      std::vector<UserObject *> nodal;
-      query.clone().condition<AttribInterfaces>(Interfaces::NodalUserObject).queryInto(nodal);
-
-      std::vector<MortarUserObject *> mortar;
-      query.clone().condition<AttribInterfaces>(Interfaces::MortarUserObject).queryInto(mortar);
-
-      if (userobjs.empty() && genobjs.empty() && tgobjs.empty() && nodal.empty() && mortar.empty())
-        continue;
-
-      // Start the timer here since we have at least one active user object
-      std::string compute_uo_tag = "computeUserObjects(" + Moose::stringify(type) + ")";
-
-      // Perform Residual/Jacobian setups
-      if (type == EXEC_LINEAR)
-      {
-        for (auto obj : userobjs)
-          obj->residualSetup();
-        for (auto obj : nodal)
-          obj->residualSetup();
-        for (auto obj : mortar)
-          obj->residualSetup();
-        for (auto obj : tgobjs)
-          obj->residualSetup();
-        for (auto obj : genobjs)
-          obj->residualSetup();
-      }
-      else if (type == EXEC_NONLINEAR)
-      {
-        for (auto obj : userobjs)
-          obj->jacobianSetup();
-        for (auto obj : nodal)
-          obj->jacobianSetup();
-        for (auto obj : mortar)
-          obj->jacobianSetup();
-        for (auto obj : tgobjs)
-          obj->jacobianSetup();
-        for (auto obj : genobjs)
-          obj->jacobianSetup();
-      }
-
       for (auto obj : userobjs)
-        obj->initialize();
-
-      // Execute Side/InternalSide/Interface/Elemental/DomainUserObjects
-      if (!userobjs.empty())
-      {
-        // non-nodal user objects have to be run separately before the nodal user objects run
-        // because some nodal user objects (NodalNormal related) depend on elemental user objects
-        // :-(
-        ComputeUserObjectsThread cppt(*this, query);
-        Threads::parallel_reduce(getCurrentAlgebraicElementRange(), cppt);
-
-        // There is one instance in rattlesnake where an elemental user object's finalize depends
-        // on a side user object having been finalized first :-(
-        joinAndFinalize(query.clone().condition<AttribInterfaces>(Interfaces::SideUserObject));
-        joinAndFinalize(
-            query.clone().condition<AttribInterfaces>(Interfaces::InternalSideUserObject));
-        joinAndFinalize(query.clone().condition<AttribInterfaces>(Interfaces::InterfaceUserObject));
-        joinAndFinalize(query.clone().condition<AttribInterfaces>(Interfaces::ElementUserObject));
-        joinAndFinalize(query.clone().condition<AttribInterfaces>(Interfaces::DomainUserObject));
-      }
-
-      // if any userobject may have written to variables we need to close the aux solution
-      for (const auto & uo : userobjs)
-        if (auto euo = dynamic_cast<const ElementUserObject *>(uo);
-            euo && euo->hasWritableCoupledVariables())
-        {
-          _aux->solution().close();
-          _aux->system().update();
-          break;
-        }
-
-      // Execute NodalUserObjects
-      // BISON has an axial reloc elemental user object that has a finalize func that depends on a
-      // nodal user object's prev value. So we can't initialize this until after elemental objects
-      // have been finalized :-(
+        obj->residualSetup();
       for (auto obj : nodal)
-        obj->initialize();
-      if (query.clone().condition<AttribInterfaces>(Interfaces::NodalUserObject).count() > 0)
-      {
-        ComputeNodalUserObjectsThread cnppt(*this, query);
-        Threads::parallel_reduce(getCurrentAlgebraicNodeRange(), cnppt);
-        joinAndFinalize(query.clone().condition<AttribInterfaces>(Interfaces::NodalUserObject));
-      }
-
-      // if any userobject may have written to variables we need to close the aux solution
-      for (const auto & uo : nodal)
-        if (auto nuo = dynamic_cast<const NodalUserObject *>(uo);
-            nuo && nuo->hasWritableCoupledVariables())
-        {
-          _aux->solution().close();
-          _aux->system().update();
-          break;
-        }
-
-      // Execute MortarUserObjects
-      {
-        for (auto obj : mortar)
-          obj->initialize();
-        if (!mortar.empty())
-        {
-          auto create_and_run_mortar_functors = [this, type, &mortar](const bool displaced)
-          {
-            // go over mortar interfaces and construct functors
-            const auto & mortar_interfaces = getMortarInterfaces(displaced);
-            for (const auto & [primary_secondary_boundary_pair, mortar_generation_ptr] :
-                 mortar_interfaces)
-            {
-              auto mortar_uos_to_execute =
-                  getMortarUserObjects(primary_secondary_boundary_pair.first,
-                                       primary_secondary_boundary_pair.second,
-                                       displaced,
-                                       mortar);
-
-              auto * const subproblem = displaced
-                                            ? static_cast<SubProblem *>(_displaced_problem.get())
-                                            : static_cast<SubProblem *>(this);
-              MortarUserObjectThread muot(mortar_uos_to_execute,
-                                          *mortar_generation_ptr,
-                                          *subproblem,
-                                          *this,
-                                          displaced,
-                                          subproblem->assembly(0, 0));
-
-              muot();
-            }
-          };
-
-          create_and_run_mortar_functors(false);
-          if (_displaced_problem)
-            create_and_run_mortar_functors(true);
-        }
-        for (auto obj : mortar)
-          obj->finalize();
-      }
-
-      // Execute threaded general user objects
+        obj->residualSetup();
+      for (auto obj : mortar)
+        obj->residualSetup();
       for (auto obj : tgobjs)
-        obj->initialize();
-      std::vector<GeneralUserObject *> tguos_zero;
-      query.clone()
-          .condition<AttribThread>(0)
-          .condition<AttribInterfaces>(Interfaces::ThreadedGeneralUserObject)
-          .queryInto(tguos_zero);
-      for (auto obj : tguos_zero)
-      {
-        std::vector<GeneralUserObject *> tguos;
-        auto q = query.clone()
-                     .condition<AttribName>(obj->name())
-                     .condition<AttribInterfaces>(Interfaces::ThreadedGeneralUserObject);
-        q.queryInto(tguos);
+        obj->residualSetup();
+      for (auto obj : genobjs)
+        obj->residualSetup();
+    }
+    else if (type == EXEC_NONLINEAR)
+    {
+      for (auto obj : userobjs)
+        obj->jacobianSetup();
+      for (auto obj : nodal)
+        obj->jacobianSetup();
+      for (auto obj : mortar)
+        obj->jacobianSetup();
+      for (auto obj : tgobjs)
+        obj->jacobianSetup();
+      for (auto obj : genobjs)
+        obj->jacobianSetup();
+    }
 
-        ComputeThreadedGeneralUserObjectsThread ctguot(*this);
-        Threads::parallel_reduce(GeneralUserObjectRange(tguos.begin(), tguos.end()), ctguot);
-        joinAndFinalize(q);
+    for (auto obj : userobjs)
+      obj->initialize();
+
+    // Execute Side/InternalSide/Interface/Elemental/DomainUserObjects
+    if (!userobjs.empty())
+    {
+      // non-nodal user objects have to be run separately before the nodal user objects run
+      // because some nodal user objects (NodalNormal related) depend on elemental user objects
+      // :-(
+      ComputeUserObjectsThread cppt(*this, query);
+      Threads::parallel_reduce(getCurrentAlgebraicElementRange(), cppt);
+
+      // There is one instance in rattlesnake where an elemental user object's finalize depends
+      // on a side user object having been finalized first :-(
+      joinAndFinalize(query.clone().condition<AttribInterfaces>(Interfaces::SideUserObject));
+      joinAndFinalize(
+          query.clone().condition<AttribInterfaces>(Interfaces::InternalSideUserObject));
+      joinAndFinalize(query.clone().condition<AttribInterfaces>(Interfaces::InterfaceUserObject));
+      joinAndFinalize(query.clone().condition<AttribInterfaces>(Interfaces::ElementUserObject));
+      joinAndFinalize(query.clone().condition<AttribInterfaces>(Interfaces::DomainUserObject));
+    }
+
+    // if any elemental user object may have written to variables we need to close the aux solution
+    for (const auto & uo : userobjs)
+      if (auto euo = dynamic_cast<const ElementUserObject *>(uo);
+          euo && euo->hasWritableCoupledVariables())
+      {
+        _aux->solution().close();
+        _aux->system().update();
+        break;
       }
+
+    // Execute NodalUserObjects
+    // BISON has an axial reloc elemental user object that has a finalize func that depends on a
+    // nodal user object's prev value. So we can't initialize this until after elemental objects
+    // have been finalized :-(
+    for (auto obj : nodal)
+      obj->initialize();
+    if (query.clone().condition<AttribInterfaces>(Interfaces::NodalUserObject).count() > 0)
+    {
+      ComputeNodalUserObjectsThread cnppt(*this, query);
+      Threads::parallel_reduce(getCurrentAlgebraicNodeRange(), cnppt);
+      joinAndFinalize(query.clone().condition<AttribInterfaces>(Interfaces::NodalUserObject));
+    }
+
+    // if any nodal user object may have written to variables we need to close the aux solution
+    for (const auto & uo : nodal)
+      if (auto nuo = dynamic_cast<const NodalUserObject *>(uo);
+          nuo && nuo->hasWritableCoupledVariables())
+      {
+        _aux->solution().close();
+        _aux->system().update();
+        break;
+      }
+
+    // Execute MortarUserObjects
+    {
+      for (auto obj : mortar)
+        obj->initialize();
+      if (!mortar.empty())
+      {
+        auto create_and_run_mortar_functors = [this, type, &mortar](const bool displaced)
+        {
+          // go over mortar interfaces and construct functors
+          const auto & mortar_interfaces = getMortarInterfaces(displaced);
+          for (const auto & [primary_secondary_boundary_pair, mortar_generation_ptr] :
+               mortar_interfaces)
+          {
+            auto mortar_uos_to_execute =
+                getMortarUserObjects(primary_secondary_boundary_pair.first,
+                                     primary_secondary_boundary_pair.second,
+                                     displaced,
+                                     mortar);
+
+            auto * const subproblem = displaced
+                                          ? static_cast<SubProblem *>(_displaced_problem.get())
+                                          : static_cast<SubProblem *>(this);
+            MortarUserObjectThread muot(mortar_uos_to_execute,
+                                        *mortar_generation_ptr,
+                                        *subproblem,
+                                        *this,
+                                        displaced,
+                                        subproblem->assembly(0, 0));
+
+            muot();
+          }
+        };
+
+        create_and_run_mortar_functors(false);
+        if (_displaced_problem)
+          create_and_run_mortar_functors(true);
+      }
+      for (auto obj : mortar)
+        obj->finalize();
+    }
+
+    // Execute threaded general user objects
+    for (auto obj : tgobjs)
+      obj->initialize();
+    std::vector<GeneralUserObject *> tguos_zero;
+    query.clone()
+        .condition<AttribThread>(0)
+        .condition<AttribInterfaces>(Interfaces::ThreadedGeneralUserObject)
+        .queryInto(tguos_zero);
+    for (auto obj : tguos_zero)
+    {
+      std::vector<GeneralUserObject *> tguos;
+      auto q = query.clone()
+                   .condition<AttribName>(obj->name())
+                   .condition<AttribInterfaces>(Interfaces::ThreadedGeneralUserObject);
+      q.queryInto(tguos);
+
+      ComputeThreadedGeneralUserObjectsThread ctguot(*this);
+      Threads::parallel_reduce(GeneralUserObjectRange(tguos.begin(), tguos.end()), ctguot);
+      joinAndFinalize(q);
+    }
 
       // Execute general user objects
-      joinAndFinalize(query.clone().condition<AttribInterfaces>(Interfaces::GeneralUserObject),
-                      true);
-    }
+    joinAndFinalize(query.clone().condition<AttribInterfaces>(Interfaces::GeneralUserObject), true);
   }
   catch (...)
   {
@@ -8843,7 +8863,7 @@ FEProblemBase::checkUserObjects()
   // and the blocks that they are defined on
   std::set<std::string> names;
 
-  std::vector<UserObject *> objects;
+  std::vector<UserObjectBase *> objects;
   theWarehouse().query().condition<AttribInterfaces>(Interfaces::UserObject).queryInto(objects);
 
   for (const auto & obj : objects)

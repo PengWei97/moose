@@ -11,6 +11,8 @@
 #include "KokkosFunction.h"
 #include "KokkosUserObject.h"
 #include "KokkosPostprocessor.h"
+#include "KokkosVectorPostprocessor.h"
+#include "KokkosReporter.h"
 
 #include "FEProblemBase.h"
 #include "DisplacedProblem.h"
@@ -153,6 +155,26 @@ FEProblemBase::addKokkosPostprocessor(const std::string & pp_name,
 }
 
 void
+FEProblemBase::addKokkosVectorPostprocessor(const std::string & pp_name,
+                                            const std::string & name,
+                                            InputParameters & parameters)
+{
+  checkUserObjectNameCollision(name, "KokkosVectorPostprocessor");
+
+  addKokkosUserObject(pp_name, name, parameters);
+}
+
+void
+FEProblemBase::addKokkosReporter(const std::string & pp_name,
+                                 const std::string & name,
+                                 InputParameters & parameters)
+{
+  checkUserObjectNameCollision(name, "KokkosReporter");
+
+  addKokkosUserObject(pp_name, name, parameters);
+}
+
+void
 FEProblemBase::addKokkosUserObject(const std::string & user_object_name,
                                    const std::string & name,
                                    InputParameters & parameters)
@@ -272,7 +294,7 @@ FEProblemBase::initKokkos()
 
   // Kokkos system does not have a default constructor, so this simply allocates buffer to which we
   // should do placement new later
-  _kokkos_systems.create(max_system_number + 1);
+  _kokkos_systems.create<false>(max_system_number + 1);
 
   for (unsigned int s = 0; s < numNonlinearSystems(); ++s)
   {
@@ -385,33 +407,19 @@ FEProblemBase::reinitKokkosMaterials()
 
 void
 FEProblemBase::computeKokkosUserObjectsInternal(const ExecFlagType & type,
-                                                const Moose::AuxGroup & group,
-                                                TheWarehouse::Query & primary_query)
+                                                TheWarehouse::Query & query)
 {
   try
   {
     TIME_SECTION("computeKokkosUserObjects", 1, "Computing Kokkos User Objects");
 
-    // Add group to query
-
-    if (group == Moose::PRE_IC)
-      primary_query.condition<AttribPreIC>(true);
-    else if (group == Moose::PRE_AUX)
-      primary_query.condition<AttribPreAux>(type);
-    else if (group == Moose::POST_AUX)
-      primary_query.condition<AttribPostAux>(type);
-
     // Query everything first to obtain a list of execution groups
 
-    std::vector<UserObjectBase *> uos;
-    primary_query.clone().queryIntoUnsorted(uos);
+    std::vector<Moose::Kokkos::UserObject *> uos;
+    query.clone().queryIntoUnsorted(uos);
 
     if (!uos.size())
       return;
-
-    std::set<int> execution_groups;
-    for (const auto uo : uos)
-      execution_groups.insert(uo->getParam<int>("execution_order_group"));
 
     // Resolve dependencies
 
@@ -449,7 +457,7 @@ FEProblemBase::computeKokkosUserObjectsInternal(const ExecFlagType & type,
       _kokkos_materials.updateFEVariableCoupledVectorTagDependency(needed_fe_var_vector_tags);
     }
 
-    // Copy data and cache variable values at element quadature points
+    // Copy vectors and cache variable values at element quadature points
 
     for (auto & system : _kokkos_systems)
     {
@@ -483,30 +491,22 @@ FEProblemBase::computeKokkosUserObjectsInternal(const ExecFlagType & type,
     {
       TIME_SECTION("KokkosUserObject", 1);
 
-      // Iterate over execution order groups
+      // Compute user objects
 
-      for (const auto execution_group : execution_groups)
-      {
-        std::vector<Moose::Kokkos::UserObject *> userobjs;
-        primary_query.clone()
-            .condition<AttribExecutionOrderGroup>(execution_group)
-            .queryInto(userobjs);
+      if (type == EXEC_LINEAR)
+        for (auto obj : uos)
+          obj->residualSetup();
+      else if (type == EXEC_NONLINEAR)
+        for (auto obj : uos)
+          obj->jacobianSetup();
 
-        if (type == EXEC_LINEAR)
-          for (auto obj : userobjs)
-            obj->residualSetup();
-        else if (type == EXEC_NONLINEAR)
-          for (auto obj : userobjs)
-            obj->jacobianSetup();
+      for (auto obj : uos)
+        obj->initialize();
 
-        for (auto obj : userobjs)
-          obj->initialize();
+      for (auto obj : uos)
+        obj->compute();
 
-        for (auto obj : userobjs)
-          obj->compute();
-
-        kokkosJoinAndFinalize(userobjs);
-      }
+      kokkosJoinAndFinalize(uos);
     }
 
     // Close and restore vectors
@@ -545,5 +545,13 @@ FEProblemBase::kokkosJoinAndFinalize(const std::vector<Moose::Kokkos::UserObject
       _reporter_data.finalize(obj->name());
       setPostprocessorValueByName(obj->name(), pp->getValue());
     }
+
+    auto vpp = dynamic_cast<Moose::Kokkos::VectorPostprocessor *>(obj);
+    if (vpp)
+      _reporter_data.finalize(obj->name());
+
+    auto reporter = dynamic_cast<Moose::Kokkos::Reporter *>(obj);
+    if (reporter)
+      _reporter_data.finalize(obj->name());
   }
 }

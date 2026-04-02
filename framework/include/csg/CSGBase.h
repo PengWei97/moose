@@ -14,6 +14,7 @@
 #include "CSGCellList.h"
 #include "CSGUniverseList.h"
 #include "CSGLatticeList.h"
+#include "CSGTransformationHelper.h"
 #include "nlohmann/json.h"
 
 #ifdef MOOSE_UNIT_TEST
@@ -22,6 +23,26 @@
 
 namespace CSG
 {
+
+/**
+ * Enumeration of axis types for rotations
+ */
+enum class RotationAxisType
+{
+  X = 0, // X axis
+  Y = 1, // Y axis
+  Z = 2  // Z axis
+};
+
+/**
+ * Define a variant type that can hold references to different CSG object types
+ */
+typedef std::variant<std::reference_wrapper<const CSGSurface>,
+                     std::reference_wrapper<const CSGCell>,
+                     std::reference_wrapper<const CSGUniverse>,
+                     std::reference_wrapper<const CSGRegion>,
+                     std::reference_wrapper<const CSGLattice>>
+    CSGObjectVariant;
 
 /**
  * CSGBase creates an internal representation of a Constructive Solid Geometry (CSG)
@@ -61,6 +82,13 @@ public:
   }
 
   /**
+   * @brief Remove a Surface object passed in by reference from the stored surface list
+   *
+   * @param surface reference to surface to delete
+   */
+  void deleteSurface(const CSGSurface & surface);
+
+  /**
    * @brief Get all surface objects
    *
    * @return list of references to all CSGSurface objects in CSGBase
@@ -80,6 +108,14 @@ public:
   {
     return _surface_list.getSurface(name);
   }
+
+  /**
+   * @brief Check if a surface with given name exists in CSGBase object
+   *
+   * @param name surface name
+   * @return true if surface with given name exists in CSGBase
+   */
+  bool hasSurface(const std::string & name) const { return _surface_list.hasSurface(name); }
 
   /**
    * @brief rename the specified surface
@@ -151,6 +187,13 @@ public:
                              const CSGUniverse * add_to_univ = nullptr);
 
   /**
+   * @brief Remove a Cell object passed in by reference from the stored cell list
+   *
+   * @param cell reference to cell to delete
+   */
+  void deleteCell(const CSGCell & cell);
+
+  /**
    * @brief Get all cell objects
    *
    * @return list of references to all CSGCell objects in CSGBase
@@ -167,6 +210,14 @@ public:
    * @return reference to CSGCell object
    */
   const CSGCell & getCellByName(const std::string & name) const { return _cell_list.getCell(name); }
+
+  /**
+   * @brief Check if a cell with given name exists in CSGBase object
+   *
+   * @param name cell name
+   * @return true if cell with given name exists in CSGBase
+   */
+  bool hasCell(const std::string & name) const { return _cell_list.hasCell(name); }
 
   /**
    * @brief rename the specified cell
@@ -186,6 +237,37 @@ public:
    * @param region new region to assign to cell
    */
   void updateCellRegion(const CSGCell & cell, const CSGRegion & region);
+
+  /**
+   * @brief reset the fill of the specified cell to void
+   *
+   * @param cell cell to update the fill for
+   */
+  void resetCellFill(const CSGCell & cell);
+
+  /**
+   * @brief change the fill of the specified cell to a material fill
+   *
+   * @param cell cell to update the fill for
+   * @param mat_name name of material fill
+   */
+  void updateCellFill(const CSGCell & cell, const std::string & mat_name);
+
+  /**
+   * @brief change the fill of the specified cell to a universe fill
+   *
+   * @param cell cell to update the fill for
+   * @param univ pointer to universe fill
+   */
+  void updateCellFill(const CSGCell & cell, const CSGUniverse * univ);
+
+  /**
+   * @brief change the fill of the specified cell to a lattice fill
+   *
+   * @param cell cell to update the fill for
+   * @param lattice pointer to lattice fill
+   */
+  void updateCellFill(const CSGCell & cell, const CSGLattice * lattice);
 
   /**
    * @brief Get the Root Universe object
@@ -235,6 +317,13 @@ public:
    */
   const CSGUniverse & createUniverse(const std::string & name,
                                      std::vector<std::reference_wrapper<const CSGCell>> & cells);
+
+  /**
+   * @brief Remove a Universe object passed in by reference from the stored universe list
+   *
+   * @param univ reference to universe to delete
+   */
+  void deleteUniverse(const CSGUniverse & univ);
 
   /**
    * @brief Add a cell to an existing universe
@@ -292,6 +381,14 @@ public:
   }
 
   /**
+   * @brief Check if a universe with given name exists in CSGBase object
+   *
+   * @param name universe name
+   * @return true if universe with given name exists in CSGBase
+   */
+  bool hasUniverse(const std::string & name) const { return _universe_list.hasUniverse(name); }
+
+  /**
    * @brief add a unique lattice pointer to this base instance; universes that make the lattice
    * must already be a part of this CSGBase instance.
    *
@@ -321,6 +418,13 @@ public:
     auto & lat_ref = _lattice_list.addLattice(std::move(lattice));
     return dynamic_cast<LatticeType &>(lat_ref);
   }
+
+  /**
+   * @brief Remove a Lattice object passed in by reference from the stored lattice list
+   *
+   * @param lattice reference to lattice to delete
+   */
+  void deleteLattice(const CSGLattice & lattice);
 
   /**
    * @brief set location in the lattice to be the provided universe
@@ -413,6 +517,14 @@ public:
   }
 
   /**
+   * @brief Check if a lattice with given name exists in CSGBase object
+   *
+   * @param name lattice name
+   * @return true if lattice with given name exists in CSGBase
+   */
+  bool hasLattice(const std::string & name) const { return _lattice_list.hasLattice(name); }
+
+  /**
    * @brief Join another CSGBase object to this one. The cells of the root universe
    * of the incoming CSGBase will be added to the existing root universe of this
    * CSGBase.
@@ -461,6 +573,63 @@ public:
 
   /// Operator overload for checking if two CSGBase objects are not equal
   bool operator!=(const CSGBase & other) const;
+
+  /**
+   * @brief Apply a transformation to a CSG object
+   *
+   * @param csg_object The CSG object to transform (Surface, Cell, Universe, Region, or Lattice)
+   * @param type The type of transformation to apply (TRANSLATION, ROTATION, SCALE)
+   * @param values tuple of transformation values (3 values for any transformation type)
+   */
+  void addTransformation(const CSGObjectVariant & csg_object,
+                         TransformationType type,
+                         const std::tuple<Real, Real, Real> & values);
+
+  /**
+   * @brief Apply a translation to a CSG object in the specified x, y, and z directions.
+   *
+   * @param csg_object The CSG object to translate (Surface, Cell, Universe, Region, or Lattice)
+   * @param distances size 3 tuple with translation distances in x, y, and z directions {x, y, z}
+   */
+  void applyTranslation(const CSGObjectVariant & csg_object,
+                        const std::tuple<Real, Real, Real> & distances)
+  {
+    addTransformation(csg_object, TransformationType::TRANSLATION, distances);
+  }
+
+  /**
+   * @brief Apply a rotation to a CSG object using (phi, theta, psi) angle notation (in degrees).
+   *
+   * @param csg_object The CSG object to rotate (Surface, Cell, Universe, Region, or Lattice)
+   * @param angles size 3 tuple {phi, theta, psi} with rotation angles in degrees
+   */
+  void applyRotation(const CSGObjectVariant & csg_object,
+                     const std::tuple<Real, Real, Real> & angles)
+  {
+    addTransformation(csg_object, TransformationType::ROTATION, angles);
+  }
+
+  /**
+   * @brief Apply a rotation to a CSG object about a specified axis (X, Y, Z).
+   *
+   * @param csg_object The CSG object to rotate (Surface, Cell, Universe, Region, or Lattice)
+   * @param axis Axis type (X, Y, or Z) about which to rotate
+   * @param angle angle in degrees to rotate about the specified axis
+   */
+  void
+  applyAxisRotation(const CSGObjectVariant & csg_object, RotationAxisType axis, const Real angle);
+
+  /**
+   * @brief Scale a CSG object in the specified x, y, and z directions.
+   *
+   * @param csg_object The CSG object to scale (Surface, Cell, Universe, Region, or Lattice)
+   * @param values size 3 tuple with scaling values in x, y, and z directions {x, y, z}
+   */
+  void applyScaling(const CSGObjectVariant & csg_object,
+                    const std::tuple<Real, Real, Real> & values)
+  {
+    addTransformation(csg_object, TransformationType::SCALE, values);
+  }
 
 private:
   /**
@@ -599,6 +768,9 @@ private:
 
   // check that surfaces used in this region are a part of this CSGBase instance
   void checkRegionSurfaces(const CSGRegion & region) const;
+
+  // check that surface being accessed is a part of this CSGBase instance
+  bool checkSurfaceInBase(const CSGSurface & surface) const;
 
   // check that cell being accessed is a part of this CSGBase instance
   bool checkCellInBase(const CSGCell & cell) const;

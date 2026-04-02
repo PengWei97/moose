@@ -1,11 +1,11 @@
-# * This file is part of the MOOSE framework
-# * https://mooseframework.inl.gov
-# *
-# * All rights reserved, see COPYRIGHT for full restrictions
-# * https://github.com/idaholab/moose/blob/master/COPYRIGHT
-# *
-# * Licensed under LGPL 2.1, please see LICENSE for details
-# * https://www.gnu.org/licenses/lgpl-2.1.html
+# This file is part of the MOOSE framework
+# https://mooseframework.inl.gov
+#
+# All rights reserved, see COPYRIGHT for full restrictions
+# https://github.com/idaholab/moose/blob/master/COPYRIGHT
+#
+# Licensed under LGPL 2.1, please see LICENSE for details
+# https://www.gnu.org/licenses/lgpl-2.1.html
 
 import importlib.util
 import inspect
@@ -15,7 +15,6 @@ import re
 import shutil
 import sys
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Optional, Tuple
 
 import mooseutils
@@ -23,7 +22,7 @@ from FactorySystem.InputParameters import InputParameters
 from FactorySystem.MooseObject import MooseObject
 
 from TestHarness import OutputInterface
-from TestHarness.capability_util import CapabilityException, checkAppCapabilities
+from TestHarness.capability_util import checkAppCapabilities
 from TestHarness.StatusSystem import StatusSystem
 from TestHarness.validation import ValidationCase, ValidationCaseClasses
 
@@ -32,6 +31,10 @@ class Tester(MooseObject, OutputInterface):
     """
     Base class from which all tester objects are instanced.
     """
+
+    SUPPORTS_TIME: bool = True
+    """Whether or not this Tester supports having /usr/bin/time wrapped around
+    the command that it runs."""
 
     @staticmethod
     def validParams():
@@ -104,7 +107,9 @@ class Tester(MooseObject, OutputInterface):
             False,
             "Allow all tests in test spec file to run in parallel (adheres to prereq rules).",
         )
-
+        params.addParam(
+            "min_slots", None, "The minimum number of slots this test must use."
+        )
         # Test Filters
         params.addParam(
             "mesh_mode",
@@ -434,6 +439,10 @@ class Tester(MooseObject, OutputInterface):
             raise RuntimeError(message)
 
         self._augmented_capabilities: Optional[dict] = None
+        """The capabilities that are augmented on the app from this test."""
+
+        self._capability_names: Optional[set[str]] = None
+        """The capability names from the checked "capabilities" param, if any."""
 
     def getStatus(self):
         return self.test_status.getStatus()
@@ -488,9 +497,15 @@ class Tester(MooseObject, OutputInterface):
         """Get the results dict for this Tester"""
         results = {
             "name": self.__class__.__name__,
-            "command": self.getCommand(options),
+            "command": (
+                command_ran
+                if (command_ran := self.getCommandRan())
+                else self.getCommand(options)
+            ),
             "input_file": self.getInputFile(),
         }
+        if env := self.getEnvironmentRan():
+            results["environment"] = env
         json_metadata = {}
         for key, value in self.json_metadata.items():
             if value.data:
@@ -663,30 +678,13 @@ class Tester(MooseObject, OutputInterface):
 
     def getSlots(self, options):
         """return number of slots to use for this tester"""
-        return self.getThreads(options) * self.getProcs(options)
-
-    def hasOpenMPI(self):
-        """return whether we have openmpi for execution
-
-        The hacky way to do this is look for "ompi_info" (which only comes
-        with openmpi), and then if it does exist make sure that "mpiexec" is
-        in the same directory.
-
-        We could probably move this somewhere so that it's not called multiple
-        times, but I don't think that's a concern because the PATH should be
-        very hot in cache and it's nice to keep this method local to where
-        it's actually used.
-        """
-        which_ompi_info = shutil.which("ompi_info")
-        if which_ompi_info is None:  # no ompi_info
-            return False
-        which_mpiexec = shutil.which("mpiexec")
-        if which_mpiexec is None:  # no mpiexec
-            return False
-        return (
-            Path(which_mpiexec).parent.absolute()
-            == Path(which_ompi_info).parent.absolute()
-        )
+        slots = self.getThreads(options) * self.getProcs(options)
+        if (min_slots := self.specs["min_slots"]) is not None:
+            min_slots = int(min_slots)
+            if min_slots > slots:
+                self.addCaveats(f"slots={min_slots}")
+                return min_slots
+        return slots
 
     def getCommand(self, options):
         """
@@ -823,16 +821,31 @@ class Tester(MooseObject, OutputInterface):
         # Try to check the capabilities; this could fail if the
         # capabilities string is bad or if the registry is bad
         try:
-            present = checkAppCapabilities(
-                options._capabilities,
-                self.specs["capabilities"],
-                bool(self.specs["dynamic_capabilities"]),
+            success, result = checkAppCapabilities(
+                capabilities=options._capabilities,
+                required=self.specs["capabilities"],
+                certain=not bool(self.specs["dynamic_capabilities"]),
+                ignore_capabilities=options.ignore_capability,
                 add_capabilities=self._augmented_capabilities,
             )
-        # Check failed, so add an error message to the Tester
-        # that has a file:line link to the "capabilities" param
-        except CapabilityException as e:
-            self.setStatus(self.error, "INVALID CAPABILITIES")
+        except Exception as e:
+            from pycapabilities.exceptions import (
+                CapabilityException,
+                UnknownCapabilitiesException,
+            )
+
+            # Only catch CapabilityException here
+            if not isinstance(e, CapabilityException):
+                raise
+
+            # Capability check failed, so add an error message to the Tester
+            # that has a file:line link to the "capabilities" param
+            status_message = (
+                "UNKNOWN"
+                if issubclass(type(e), UnknownCapabilitiesException)
+                else "INVALID"
+            ) + " CAPABILITIES"
+            self.setStatus(self.error, status_message)
             node = self.specs["_node"]
             output = ""
             if (filename := node.filename("capabilities")) or (
@@ -848,21 +861,30 @@ class Tester(MooseObject, OutputInterface):
             return None
 
         # Capabilities are missing
-        if not present:
+        if not success:
             return f"Need {self.specs['capabilities']}"
+
+        # Capability pass but something ignored
+        if (ignore := options.ignore_capability) is not None and (
+            ignored := result.capability_names.intersection(ignore)
+        ):
+            self.addCaveats(f"ignored: {','.join(sorted(ignored))}")
+
+        # Store the capability names that were consumed
+        self._capability_names = result.capability_names
 
         # Check required capabilities
         if options._required_capabilities:
             missing = []
             for value in options._required_capabilities:
-                present = checkAppCapabilities(
+                success, _ = checkAppCapabilities(
                     options._capabilities,
                     self.specs["capabilities"],
-                    True,
+                    certain=True,
                     add_capabilities=self._augmented_capabilities,
                     negate_capabilities=[value],
                 )
-                if present:
+                if success:
                     missing.append(value)
 
             if missing:

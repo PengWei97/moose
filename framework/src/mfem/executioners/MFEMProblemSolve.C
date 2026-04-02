@@ -18,6 +18,10 @@ MFEMProblemSolve::validParams()
 {
   InputParameters params = emptyInputParameters();
   params.addClassDescription("Solve object for MFEM problems.");
+  params.addParam<unsigned int>("nl_max_its", 1, "Max Nonlinear Iterations");
+  params.addParam<Real>("nl_abs_tol", 1.0e-50, "Nonlinear Absolute Tolerance");
+  params.addParam<Real>("nl_rel_tol", 1.0e-8, "Nonlinear Relative Tolerance");
+  params.addParam<unsigned int>("print_level", 1, "Print level");
   params.addParam<std::string>("device", "Run app on the chosen device.");
   MooseEnum assembly_levels("legacy full element partial none", "legacy", true);
   params.addParam<MooseEnum>("assembly_level", assembly_levels, "Matrix assembly level.");
@@ -29,7 +33,11 @@ MFEMProblemSolve::MFEMProblemSolve(
     std::vector<std::shared_ptr<Moose::MFEM::ProblemOperatorBase>> & problem_operators)
   : SolveObject(ex),
     _mfem_problem(dynamic_cast<MFEMProblem &>(_problem)),
-    _problem_operators(problem_operators)
+    _problem_operators(problem_operators),
+    _nl_max_its(getParam<unsigned int>("nl_max_its")),
+    _nl_abs_tol(getParam<mfem::real_t>("nl_abs_tol")),
+    _nl_rel_tol(getParam<mfem::real_t>("nl_rel_tol")),
+    _print_level(getParam<unsigned int>("print_level"))
 {
   if (const auto compute_device = _app.getComputeDevice())
     _app.setMFEMDevice(*compute_device, Moose::PassKey<MFEMProblemSolve>());
@@ -38,6 +46,7 @@ MFEMProblemSolve::MFEMProblemSolve(
                        : _app.isUltimateMaster() ? "cpu"
                                                  : "",
                        Moose::PassKey<MFEMProblemSolve>());
+  _mfem_problem.addMFEMNonlinearSolver(_nl_max_its, _nl_abs_tol, _nl_rel_tol, _print_level);
 }
 
 bool
@@ -72,8 +81,28 @@ MFEMProblemSolve::solve()
   _mfem_problem.updateActiveObjects();
 
   if (_mfem_problem.shouldSolve())
+  {
     for (const auto & problem_operator : _problem_operators)
       problem_operator->Solve();
+
+    // Short-circuit evaluation guarantees we only do one of p- or h-refinement between solves
+    while (_mfem_problem.pRefine() || _mfem_problem.hRefine())
+    {
+      // Fix me: rebuild equation system (should probably be called per operator)
+      _mfem_problem.getProblemData().eqn_system->BuildEquationSystem();
+
+      // Remove me: reconstruct the solver due to possible mfem/hypre bug
+      _mfem_problem.getProblemData().jacobian_solver->constructSolver(emptyInputParameters());
+
+      // Reset gridfunctions
+      for (const auto & problem_operator : _problem_operators)
+        problem_operator->SetGridFunctions();
+
+      // Solve again
+      for (const auto & problem_operator : _problem_operators)
+        problem_operator->Solve();
+    }
+  }
   _mfem_problem.displaceMesh();
 
   // Execute user objects, transfers, and multiapps at timestep end
@@ -95,4 +124,5 @@ MFEMProblemSolve::solve()
 
   return converged;
 }
+
 #endif

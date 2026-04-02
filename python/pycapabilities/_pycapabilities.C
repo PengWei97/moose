@@ -27,6 +27,7 @@
 
 using Moose::Capability;
 using Moose::CapabilityException;
+using Moose::UnknownCapabilitiesException;
 using Moose::internal::CapabilityRegistry;
 
 /*******************************************************************************/
@@ -41,13 +42,6 @@ static struct PyModuleDef pycapabilitiesmodule = {
     capabilities_doc, /* module documentation, may be nullptr */
     -1,               /* size of per-interpreter state of the module,
                          or -1 if the module keeps state in global variables. */};
-
-/*******************************************************************************/
-/* Python pycapabilities.CapabilityException                                   */
-/*******************************************************************************/
-
-static PyObject * CapabilityExceptionObject;
-
 /*******************************************************************************/
 /* Python capabilities helpers                                                 */
 /*******************************************************************************/
@@ -182,6 +176,200 @@ addCapabilities(CapabilityRegistry & registry, PyObject * capabilities_dict)
   }
 }
 
+PyObject *
+getPythonAttribute(const char * module_name, const char * attribute_name)
+{
+  // get module
+  PyObject * module = PyImport_ImportModule(module_name);
+  if (!module)
+    return nullptr;
+
+  // get attribute type
+  PyObject * attribute = PyObject_GetAttrString(module, attribute_name);
+  if (!attribute)
+  {
+    Py_DECREF(module);
+    return nullptr;
+  }
+
+  Py_DECREF(module);
+  return attribute;
+}
+
+/// Set the current error to a Python CapabilityException
+void
+setPythonCapabilityException(const std::exception & e)
+{
+  // get exception type
+  auto exception_type = getPythonAttribute("pycapabilities.exceptions", "CapabilityException");
+  if (!exception_type || !PyCallable_Check(exception_type))
+    return;
+
+  // build CapabilityException
+  PyObject * exception_instance =
+      PyObject_CallFunctionObjArgs(exception_type, PyUnicode_FromString(e.what()), nullptr);
+
+  // set error
+  if (exception_instance)
+    PyErr_SetObject(exception_type, exception_instance);
+
+  // cleanup
+  Py_DECREF(exception_type);
+  Py_DECREF(exception_instance);
+}
+
+/// Set the current error to a python UnknownCapabilitiesException
+void
+setPythonUnknownCapabilitiesException(const UnknownCapabilitiesException & e)
+{
+  // get exception type
+  auto exception_type =
+      getPythonAttribute("pycapabilities.exceptions", "UnknownCapabilitiesException");
+  if (!exception_type || !PyCallable_Check(exception_type))
+    return;
+
+  // Form list[str] of unknown capabilities
+  PyObject * unknown_capabilities = PyList_New(0);
+  if (!unknown_capabilities)
+  {
+    Py_DECREF(exception_type);
+    return;
+  }
+  for (const auto & capability : e.unknown_capabilities)
+    PyList_Append(unknown_capabilities, PyUnicode_FromString(capability.c_str()));
+
+  // build UnknownCapabiltiesException
+  PyObject * exception_instance = PyObject_CallFunctionObjArgs(
+      exception_type, PyUnicode_FromString(e.what()), unknown_capabilities, nullptr);
+
+  // set error
+  if (exception_instance)
+    PyErr_SetObject(exception_type, exception_instance);
+
+  // cleanup
+  Py_DECREF(unknown_capabilities);
+  Py_DECREF(exception_type);
+  Py_DECREF(exception_instance);
+}
+
+/// Get a python type from the exceptions module
+PyObject *
+buildPythonCheckResult(const CapabilityRegistry::CheckResult & result)
+{
+  // get python CheckState
+  auto checkstate_type = getPythonAttribute("pycapabilities", "CheckState");
+  if (!checkstate_type || !PyCallable_Check(checkstate_type))
+    return nullptr;
+  // build python CheckState
+  PyObject * checkstate_obj = PyObject_CallFunction(checkstate_type, "l", result.state);
+  Py_DECREF(checkstate_type);
+  if (!checkstate_obj)
+    return nullptr;
+
+  // build python capability_names: set[str]
+  PyObject * capability_names_obj = PySet_New(0);
+  if (!capability_names_obj)
+  {
+    Py_DECREF(checkstate_obj);
+    return nullptr;
+  }
+  for (const auto & name : result.capability_names)
+    PySet_Add(capability_names_obj, PyUnicode_FromString(name.c_str()));
+
+  // get python CheckResult
+  auto checkresult_type = getPythonAttribute("pycapabilities.dataclasses", "CheckResult");
+  if (!checkresult_type || !PyCallable_Check(checkresult_type))
+  {
+    Py_DECREF(checkstate_obj);
+    Py_DECREF(capability_names_obj);
+    return nullptr;
+  }
+  // build python CheckResult
+  PyObject * checkresult_instance =
+      PyObject_CallFunctionObjArgs(checkresult_type, checkstate_obj, capability_names_obj, nullptr);
+  Py_DECREF(checkresult_type);
+  Py_DECREF(checkstate_obj);
+  Py_DECREF(capability_names_obj);
+
+  return checkresult_instance;
+}
+
+bool
+setCheckOptions(PyObject * const check_options_instance,
+                CapabilityRegistry::CheckOptions & check_options)
+{
+  if (check_options_instance == Py_None)
+    return true;
+
+  auto checkoptions_type = getPythonAttribute("pycapabilities.dataclasses", "CheckOptions");
+  if (!checkoptions_type)
+    return false;
+  if (!PyCallable_Check(checkoptions_type))
+  {
+    Py_DECREF(checkoptions_type);
+    return false;
+  }
+  if (!PyObject_TypeCheck(check_options_instance, (PyTypeObject *)checkoptions_type))
+  {
+    Py_DECREF(checkoptions_type);
+    setPythonError(PyExc_TypeError,
+                   "options must be of type pycapabilities.dataclasses.CheckOptions");
+    return false;
+  }
+  Py_DECREF(checkoptions_type);
+
+  // load "certain" attribute
+  PyObject * certain = PyObject_GetAttrString(check_options_instance, "certain");
+  if (!certain)
+    return false;
+  if (certain != Py_True && certain != Py_False)
+  {
+    Py_DECREF(certain);
+    setPythonError(PyExc_TypeError, "CheckOptions certain must be a boolean");
+    return false;
+  }
+  check_options.certain = certain == Py_True;
+  Py_DECREF(certain);
+
+  // load "ignore_capabilities" attribute
+  PyObject * ignore_capabilities =
+      PyObject_GetAttrString(check_options_instance, "ignore_capabilities");
+  if (!ignore_capabilities)
+    return false;
+  if (!PySet_Check(ignore_capabilities))
+  {
+    Py_DECREF(ignore_capabilities);
+    setPythonError(PyExc_TypeError, "CheckOptions ignore_capabilities must be a set");
+    return false;
+  }
+  PyObject * ignore_capabilities_iter = PyObject_GetIter(ignore_capabilities);
+  if (!ignore_capabilities_iter)
+  {
+    Py_DECREF(ignore_capabilities);
+    return false;
+  }
+  check_options.ignore_capabilities.clear();
+  PyObject * ignore_capabilities_item;
+  while ((ignore_capabilities_item = PyIter_Next(ignore_capabilities_iter)))
+  {
+    const auto ignore_capabilities_str = PyUnicode_AsUTF8(ignore_capabilities_item);
+    if (!ignore_capabilities_str)
+    {
+      setPythonError(PyExc_TypeError, "CheckOptions ignore_capabilities entry not a str");
+      Py_DECREF(ignore_capabilities_item);
+      Py_DECREF(ignore_capabilities_iter);
+      Py_DECREF(ignore_capabilities);
+      return false;
+    }
+    check_options.ignore_capabilities.insert(ignore_capabilities_str);
+    Py_DECREF(ignore_capabilities_item);
+  }
+  Py_DECREF(ignore_capabilities_iter);
+  Py_DECREF(ignore_capabilities);
+
+  return true;
+}
+
 /*******************************************************************************/
 /* Python pycapabilities.CheckState: IntEnum                                   */
 /*******************************************************************************/
@@ -197,11 +385,7 @@ CheckState_enum(PyObject * module)
   PyObject * members = nullptr;
   PyObject * checkstate = nullptr;
 
-  enum_mod = PyImport_ImportModule("enum");
-  if (!enum_mod)
-    goto done;
-
-  IntEnum = PyObject_GetAttrString(enum_mod, "IntEnum");
+  IntEnum = getPythonAttribute("enum", "IntEnum");
   if (!IntEnum)
     goto done;
 
@@ -356,7 +540,7 @@ Capabilities_init(CapabilitiesObject * self, PyObject * args, PyObject * /* kwds
   }
   catch (const CapabilityException & e)
   {
-    PyErr_SetString(CapabilityExceptionObject, e.what());
+    setPythonCapabilityException(e);
     return -1;
   }
   catch (const std::exception & e)
@@ -374,20 +558,24 @@ Capabilities_check(CapabilitiesObject * self, PyObject * args, PyObject * kwargs
 {
   // Parse arguments
   const char * requirement = nullptr;
+  PyObject * options = Py_None;
   PyObject * add_capabilities = Py_None;
   PyObject * negate_capabilities = Py_None;
   static const char * kwlist[] = {
-      "requirement", "add_capabilities", "negate_capabilities", nullptr};
+      "requirement", "options", "add_capabilities", "negate_capabilities", nullptr};
   if (!PyArg_ParseTupleAndKeywords(args,
                                    kwargs,
-                                   "s|OO",
+                                   "s|OOO",
                                    const_cast<char **>(kwlist),
                                    &requirement,
+                                   &options,
                                    &add_capabilities,
                                    &negate_capabilities))
-    return returnPythonError(PyExc_ValueError,
-                             "Capabilities.check(requirement: str, add_capabilities: "
-                             "Optional[dict] = None, negate_capabilities: Iterable[str]] = None)");
+    return returnPythonError(
+        PyExc_ValueError,
+        "Capabilities.check(requirement: str, certain: "
+        "Optional[pycapabilities.dataclasses.CheckOptions] = None, add_capabilities: "
+        "Optional[dict] = None, negate_capabilities: Iterable[str]] = None)");
 
   // Possible copy of the registry for when we need to augment it
   std::unique_ptr<CapabilityRegistry> registry_copy;
@@ -408,7 +596,7 @@ Capabilities_check(CapabilitiesObject * self, PyObject * args, PyObject * kwargs
     }
     catch (const CapabilityException & e)
     {
-      PyErr_SetString(CapabilityExceptionObject, e.what());
+      setPythonCapabilityException(e);
       return nullptr;
     }
     catch (const std::exception & e)
@@ -457,7 +645,7 @@ Capabilities_check(CapabilitiesObject * self, PyObject * args, PyObject * kwargs
       }
       catch (const CapabilityException & e)
       {
-        PyErr_SetString(CapabilityExceptionObject, e.what());
+        setPythonCapabilityException(e);
         Py_DECREF(iter);
         return nullptr;
       }
@@ -478,34 +666,25 @@ Capabilities_check(CapabilitiesObject * self, PyObject * args, PyObject * kwargs
   // otherwise use the stored registry
   auto & registry = registry_copy ? *registry_copy : self->state->registry;
 
-  // Get a CheckState enum
-  PyObject * m = PyState_FindModule(&pycapabilitiesmodule);
-  if (!m)
-  {
-    PyErr_SetString(PyExc_RuntimeError, "module not initialized");
+  // Build the CheckOptions for calling check
+  CapabilityRegistry::CheckOptions check_options;
+  if (!setCheckOptions(options, check_options))
     return nullptr;
-  }
 
   // Run the check
   try
   {
-    const auto result = registry.check(requirement);
-
-    PyObject * checkstate = PyObject_GetAttrString(m, "CheckState");
-    if (!checkstate)
-      return nullptr;
-
-    PyObject * checkstate_obj = PyObject_CallFunction(checkstate, "l", result.state);
-    Py_DECREF(checkstate);
-
-    return Py_BuildValue("(NNN)",
-                         checkstate_obj,
-                         PyUnicode_FromString(result.reason.c_str()),
-                         PyUnicode_FromString(result.doc.c_str()));
+    const auto result = registry.check(requirement, check_options);
+    return buildPythonCheckResult(result);
+  }
+  catch (const UnknownCapabilitiesException & e)
+  {
+    setPythonUnknownCapabilitiesException(e);
+    return nullptr;
   }
   catch (const CapabilityException & e)
   {
-    PyErr_SetString(CapabilityExceptionObject, e.what());
+    setPythonCapabilityException(e);
     return nullptr;
   }
   catch (const std::exception & e)
@@ -564,18 +743,6 @@ PyInit__pycapabilities(void)
     return nullptr;
 
   auto module = PyModule_Create(&pycapabilitiesmodule);
-
-  // CapabilityException
-  CapabilityExceptionObject =
-      PyErr_NewException("pycapabilities.CapabilityException", PyExc_Exception, nullptr);
-  if (!CapabilityExceptionObject)
-  {
-    Py_DECREF(module);
-    return nullptr;
-  }
-  Py_INCREF(CapabilityExceptionObject);
-  PyModule_AddObject(
-      module, "CapabilityException", CapabilityExceptionObject); // steals a ref to CustomError
 
   // CheckState: IntEnum
   if (CheckState_enum(module) < 0)

@@ -49,7 +49,7 @@ Capabilities::Capabilities() : CapabilityRegistry()
 }
 
 Capabilities &
-Capabilities::get(const Capabilities::GetPassKey)
+Capabilities::getCapabilities(const Capabilities::GetCapabilitiesPassKey)
 {
   // We need a naked new here (_not_ a smart pointer or object instance) due to what seems like a
   // bug in clang's static object destruction when using dynamic library loading.
@@ -113,6 +113,14 @@ Capabilities::augment(const nlohmann::json & input, const Capabilities::AugmentP
     if (const auto it = entry.find("enumeration"); it != entry.end())
       capability.setEnumeration(it->get<std::set<std::string>>());
   }
+}
+
+bool
+Capabilities::isInstallationType(const std::string & installation_type) const
+{
+  const auto & capability = get("installation_type");
+  mooseAssert(capability.getEnumeration().count(installation_type), "Not a valid enumeration");
+  return capability.getStringValue() == installation_type;
 }
 
 void
@@ -371,6 +379,26 @@ Capabilities::registerMooseCapabilities()
     add_string("ptscotch", version, doc);
 #else
     petsc_missing("ptscotch", doc);
+#endif
+  }
+
+  {
+    const auto doc = "Optimized BLAS library";
+#ifdef PETSC_HAVE_OPENBLAS
+    const std::string version = QUOTE(PETSC_PKG_OPENBLAS_VERSION_MAJOR) "." QUOTE(
+        PETSC_PKG_OPENBLAS_VERSION_MINOR) "." QUOTE(PETSC_PKG_OPENBLAS_VERSION_SUBMINOR);
+    add_string("openblas", version, doc);
+#else
+    petsc_missing("openblas", doc);
+#endif
+  }
+
+  {
+    const auto doc = "Umpire resource management library";
+#ifdef PETSC_HAVE_UMPIRE
+    have("umpire", doc);
+#else
+    petsc_missing("umpire", doc);
 #endif
   }
 
@@ -676,6 +704,8 @@ Capabilities::registerMooseCapabilities()
     add_string("installation_type", value, "The installation type of the application.")
         .setExplicit()
         .setEnumeration({"in_tree", "relocated", "unknown"});
+
+    mooseAssert(isInstallationType(value), "Value mismatch");
   }
 }
 

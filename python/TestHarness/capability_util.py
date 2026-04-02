@@ -12,10 +12,11 @@
 import re
 import subprocess
 import sys
-from typing import TYPE_CHECKING, Iterable, Optional, Set, Union
+from typing import TYPE_CHECKING, Iterable, Optional, Tuple, Union
 
 if TYPE_CHECKING:
     from pycapabilities import Capabilities
+    from pycapabilities.dataclasses import CheckOptions, CheckResult
 
 from TestHarness.util import outputHeader, parseMOOSEJSON, runCommand
 
@@ -36,17 +37,14 @@ def getAppCapabilities(executable: str) -> dict:
     return parseMOOSEJSON(output, "--show-capabilities")
 
 
-class CapabilityException(Exception):
-    """Exception for a capability initialization or evaluation error."""
-
-
 def checkAppCapabilities(
     capabilities: "Capabilities",
     required: str,
     certain: bool,
+    ignore_capabilities: Optional[Iterable[str]] = None,
     add_capabilities: Optional[dict] = None,
     negate_capabilities: Optional[Iterable[str]] = None,
-):
+) -> Tuple[bool, "CheckResult"]:
     """
     Check a capability requirement against known capabilities.
 
@@ -61,31 +59,46 @@ def checkAppCapabilities(
 
     Optional arguments:
     ------------------
+    ignore_capabilities : Optional[dict]
+        Capabilities to ignore during the check.
     add_capabilities : Optional[dict]
         Capabilities to add to the registry during the check.
     negate_capabilities : Optional[Iterable[str]]
         Capabilities to negate in the registry during the check.
 
+
+    Returns:
+    -------
+    bool:
+        Whether or not the check passed.
+    pycapabilities.dataclasses.CheckResult:
+        The CheckResult from calling Capabilities.check().
+
     """
     # This is one of the few places where we actually
     # load the pycapabilities module and that is
     # intentional as it can trigger a build
-    import pycapabilities
+    from pycapabilities import CheckState
+    from pycapabilities.dataclasses import CheckOptions
 
-    try:
-        status, _, _ = capabilities.check(
-            required,
-            add_capabilities=add_capabilities,
-            negate_capabilities=negate_capabilities,
-        )
-    # Re-cast this exception as one that doesn't
-    # need the pycapabilities module to use
-    except pycapabilities.CapabilityException as e:
-        raise CapabilityException(e)
-
-    return status == pycapabilities.CheckState.CERTAIN_PASS or (
-        status == pycapabilities.CheckState.POSSIBLE_PASS and not certain
+    options = CheckOptions(
+        certain=certain,
+        ignore_capabilities=set(ignore_capabilities) if ignore_capabilities else set(),
     )
+
+    result = capabilities.check(
+        required,
+        add_capabilities=add_capabilities,
+        negate_capabilities=negate_capabilities,
+        options=options,
+    )
+
+    status = result.state
+    success = status == CheckState.CERTAIN_PASS or (
+        status == CheckState.POSSIBLE_PASS and not certain
+    )
+
+    return success, result
 
 
 def addAugmentedCapability(
@@ -96,6 +109,7 @@ def addAugmentedCapability(
     doc: str,
     enumeration: Optional[list[str]] = None,
     explicit: Optional[bool] = None,
+    registered_augmented_capability: bool = True,
 ):
     """
     Append a runtime augmented capability.
@@ -112,6 +126,8 @@ def addAugmentedCapability(
         The capability value; None will become False.
     doc : str
         The documentation string for the capability.
+    registered_augmented_capability : bool
+        Whether or not to check the capability against known augmented capabilities.
 
     Optional arguments:
     ------------------
@@ -153,7 +169,7 @@ def addAugmentedCapability(
         enumeration = [v.lower() for v in enumeration]
         assert value in enumeration, "Value is not in enumeration"
 
-    if name not in AUGMENTED_CAPABILITY_NAMES:
+    if name not in AUGMENTED_CAPABILITY_NAMES and registered_augmented_capability:
         raise ValueError(
             f"Capability {name} is not a registered augmented capability name"
         )

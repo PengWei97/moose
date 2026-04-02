@@ -986,6 +986,13 @@ public:
                               const std::string & var_name,
                               InputParameters & params);
 
+  /**
+   * Add an elemental field variable for use in the adaptivity system
+   */
+  virtual void addElementalFieldVariable(const std::string & var_type,
+                                         const std::string & var_name,
+                                         InputParameters & params);
+
   virtual void addAuxVariable(const std::string & var_name,
                               const libMesh::FEType & type,
                               const std::set<SubdomainID> * const active_subdomains = NULL);
@@ -1082,16 +1089,11 @@ public:
   /**
    * Project a function onto a range of elements for a given variable
    *
-   * @warning The current implementation is not ideal. The projection takes place on all local
-   * active elements, ignoring the specified \p elem_range. After the projection, dof values on the
-   * specified \p elem_range are copied over to the current solution vector. This should be fixed
-   * once the project_vector or project_solution API is modified to take a custom element range.
-   *
    * \param elem_range          Element range to project on
    * \param func                Function to project
    * \param func_grad           Gradient of the function
    * \param params              Parameters to pass to the function
-   * \param target_var          variable name to project
+   * \param target_vars         variable names to project
    */
   void projectFunctionOnCustomRange(ConstElemRange & elem_range,
                                     Number (*func)(const Point &,
@@ -1103,7 +1105,7 @@ public:
                                                           const std::string &,
                                                           const std::string &),
                                     const libMesh::Parameters & params,
-                                    const VariableName & target_var);
+                                    const std::vector<VariableName> & target_vars);
 
   // Materials
   virtual void addMaterial(const std::string & material_name,
@@ -1308,6 +1310,12 @@ public:
   virtual void addKokkosPostprocessor(const std::string & pp_name,
                                       const std::string & name,
                                       InputParameters & parameters);
+  virtual void addKokkosVectorPostprocessor(const std::string & pp_name,
+                                            const std::string & name,
+                                            InputParameters & parameters);
+  virtual void addKokkosReporter(const std::string & type,
+                                 const std::string & name,
+                                 InputParameters & parameters);
 #endif
 
   /**
@@ -2842,6 +2850,8 @@ public:
 
   void createTagMatrices(CreateTaggedMatrixKey);
 
+  bool useHashTableMatrixAssembly() const { return _use_hash_table_matrix_assembly; }
+
 #ifdef MOOSE_KOKKOS_ENABLED
   /**
    * @returns whether any Kokkos object was added in the problem
@@ -2923,6 +2933,12 @@ private:
    * Make basic solver params for linear solves
    */
   static SolverParams makeLinearSolverParams();
+
+  TheWarehouse::Query getUOQuery(const std::string & system,
+                                 const ExecFlagType & type,
+                                 const Moose::AuxGroup & group) const;
+
+  void getUOExecutionGroups(TheWarehouse::Query & query, std::set<int> & execution_groups) const;
 
 protected:
   bool _initialized;
@@ -3137,14 +3153,10 @@ protected:
                               bool is_aux,
                               const std::set<SubdomainID> * const active_subdomains);
 
-  void computeUserObjectsInternal(const ExecFlagType & type,
-                                  const Moose::AuxGroup & group,
-                                  TheWarehouse::Query & query);
+  void computeUserObjectsInternal(const ExecFlagType & type, TheWarehouse::Query & query);
 
 #ifdef MOOSE_KOKKOS_ENABLED
-  void computeKokkosUserObjectsInternal(const ExecFlagType & type,
-                                        const Moose::AuxGroup & group,
-                                        TheWarehouse::Query & query);
+  void computeKokkosUserObjectsInternal(const ExecFlagType & type, TheWarehouse::Query & query);
 #endif
 
   /// Verify that SECOND order mesh uses SECOND order displacements.

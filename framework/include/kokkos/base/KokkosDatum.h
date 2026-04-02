@@ -37,18 +37,15 @@ public:
         const Array<System> & systems)
     : _assembly(assembly),
       _systems(systems),
-      _elem(assembly.kokkosMesh().getElementInfo(elem)),
+      _mesh(assembly.kokkosMesh()),
+      _elem(_mesh.getElementInfo(elem)),
       _side(side),
-      _neighbor(_side == libMesh::invalid_uint ? libMesh::DofObject::invalid_id
-                                               : assembly.kokkosMesh().getNeighbor(_elem.id, side)),
-      _n_qps(side == libMesh::invalid_uint ? assembly.getNumQps(_elem)
-                                           : assembly.getNumFaceQps(_elem, side)),
-      _qp_offset(side == libMesh::invalid_uint ? assembly.getQpOffset(_elem)
-                                               : assembly.getQpFaceOffset(_elem, side)),
-      _elem_property_idx(
-          _side == libMesh::invalid_uint
-              ? _elem.id - assembly.kokkosMesh().getStartingContiguousElementID(_elem.subdomain)
-              : assembly.getElemFacePropertyIndex(_elem, _side))
+      _neighbor(!isSide() ? libMesh::DofObject::invalid_id : _mesh.getNeighbor(_elem.id, side)),
+      _n_qps(!isSide() ? assembly.getNumQps(_elem) : assembly.getNumFaceQps(_elem, side)),
+      _qp_offset(!isSide() ? assembly.getQpOffset(_elem) : assembly.getQpFaceOffset(_elem, side)),
+      _elem_property_idx(!isSide()
+                             ? _elem.id - _mesh.getStartingContiguousElementID(_elem.subdomain)
+                             : assembly.getElemFacePropertyIndex(_elem, _side))
   {
   }
   /**
@@ -59,7 +56,7 @@ public:
    */
   KOKKOS_FUNCTION
   Datum(const ContiguousNodeID node, const Assembly & assembly, const Array<System> & systems)
-    : _assembly(assembly), _systems(systems), _node(node)
+    : _assembly(assembly), _systems(systems), _mesh(assembly.kokkosMesh()), _node(node)
   {
   }
 
@@ -74,12 +71,31 @@ public:
    * @returns The Kokkos system
    */
   KOKKOS_FUNCTION const System & system(unsigned int sys) const { return _systems[sys]; }
+  /**
+   * Get the Kokkos mesh
+   * @returns The Kokkos mesh
+   */
+  KOKKOS_FUNCTION const Mesh & mesh() const { return _mesh; }
 
   /**
    * Get the element information object
    * @returns The element information object
    */
   KOKKOS_FUNCTION const ElementInfo & elem() const { return _elem; }
+  /**
+   * Get the contiguous element ID
+   * @returns The contiguous element ID
+   */
+  KOKKOS_FUNCTION ContiguousElementID elemID() const { return _elem.id; }
+  /**
+   * Get the extra element ID
+   * @param index The extra element ID index
+   * @returns The extra element ID
+   */
+  KOKKOS_FUNCTION dof_id_type extraElemID(unsigned int index) const
+  {
+    return isNodal() ? libMesh::DofObject::invalid_id : _mesh.getExtraElementID(_elem.id, index);
+  }
   /**
    * Get the contiguous subdomain ID
    * @returns The contiguous subdomain ID
@@ -119,6 +135,11 @@ public:
    */
   KOKKOS_FUNCTION bool hasNeighbor() const { return _neighbor != libMesh::DofObject::invalid_id; }
   /**
+   * Get whether the current datum is on a side
+   * @returns Whether the current datum is on a side
+   */
+  KOKKOS_FUNCTION bool isSide() const { return _side != libMesh::invalid_uint; }
+  /**
    * Get whether the current datum is on a node
    * @returns Whether the current datum is on a node
    */
@@ -151,6 +172,12 @@ public:
    * @returns The physical quadrature point coordinate
    */
   KOKKOS_FUNCTION Real3 q_point(const unsigned int qp);
+  /**
+   * Get the normal vector on surface
+   * @param qp The local quadrature point index
+   * @returns The normal vector
+   */
+  KOKKOS_FUNCTION Real3 normals(const unsigned int qp);
 
   /**
    * Reset the reinit flag
@@ -166,6 +193,10 @@ protected:
    * Reference of the Kokkos systems
    */
   const Array<System> & _systems;
+  /**
+   * Reference of the Kokkos mesh
+   */
+  const Mesh & _mesh;
   /**
    * Current element information object
    */
@@ -213,6 +244,7 @@ private:
   Real33 _J;
   Real _JxW;
   Real3 _xyz;
+  Real3 _normal;
   ///@}
 };
 
@@ -271,20 +303,31 @@ Datum::q_point(const unsigned int qp)
   return _xyz;
 }
 
+KOKKOS_FUNCTION inline Real3
+Datum::normals(const unsigned int qp)
+{
+  KOKKOS_ASSERT(isSide());
+
+  if (isSide())
+    reinitTransform(qp);
+
+  return _normal;
+}
+
 KOKKOS_FUNCTION inline void
 Datum::reinitTransform(const unsigned int qp)
 {
   if (_transform_reinit)
     return;
 
-  if (_side == libMesh::invalid_uint)
+  if (!isSide())
   {
     _J = _assembly.getJacobian(_elem, qp);
     _JxW = _assembly.getJxW(_elem, qp);
     _xyz = _assembly.getQPoint(_elem, qp);
   }
   else
-    _assembly.computePhysicalMap(_elem, _side, qp, &_J, &_JxW, &_xyz);
+    _assembly.computePhysicalMap(_elem, _side, qp, &_J, &_JxW, &_xyz, &_normal);
 
   _transform_reinit = true;
 }

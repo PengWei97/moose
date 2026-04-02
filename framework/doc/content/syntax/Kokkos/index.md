@@ -20,22 +20,22 @@ Here we provide instructions on some programming practices to write an efficient
 
 ### Separate Memory Space
 
-Except for a very few rare cases that provide physically unified memory space for CPU and GPU (such as AMD MI300A), most GPUs have separate memory spaces from their conuterpart CPUs.
-Therefore, the you need to take a special care to properly identify which data are accessible and not accessible on either CPU or GPU and whether the data on CPU and GPU are properly synchronized.
+Except for a very few rare cases that provide physically unified memory space for CPU and GPU (such as AMD MI300A), most GPUs have separate memory spaces from their counterpart CPUs.
+Therefore, you need to take a special care to properly identify which data are accessible and not accessible on either CPU or GPU and whether the data on CPU and GPU are properly synchronized.
 Standard containers such as `std::vector`, `std::set`, `std::map` and others are not usable on GPU, and managed pointers are also inaccessible on GPU.
 Basically, it is safe to assume that any dynamically-allocated data on CPU cannot be accessed on GPU.
 Therefore, we provide alternative data containers to be used on GPU: `Moose::Kokkos::Array`, `Moose::Kokkos::JaggedArray`, and `Moose::Kokkos::Map`.
 
 `Moose::Kokkos::Array` is a template class designed to hold arbitrary type of data.
 It receives up to four template arguments: data type, dimension, index type, and layout type.
-It supports multi-dimensional indexing, and up to five-dimensional arrays are supported.
+It supports multi-dimensional indexing.
 The dimension can either be specified through the second template argument with the default being one-dimension or using type aliases: for instance, a three-dimensional array of type `double` can be declared either by `Array<double, 3>` or `Array3D<double>`.
 The entries of an array can be accessed with either `operator()` with multi-dimensional indices or `operator[]` with a flattened, dimensionless index, where the flattening follows a layout in which the innermost dimension varies the fastest.
+They automatically return either CPU or GPU data depending on where they are being accessed.
 The index type template argument is set to 8-byte integer by default to accomodate large arrays.
 However, 8-byte integer computation is significantly more expensive than 4-byte integer computation.
 If your array size is small enough, consider using 4-byte indices to optimize index calculations.
 If having the outermost dimension run the fastest is desired for multi-dimensional arrays, the fourth layout template argument can be optionally set to `Moose::Kokkos::LayoutType::RIGHT` (default is `LEFT`).
-They automatically return either CPU or GPU data depending on where they are being accessed.
 Arrays can be allocated through the following APIs: `create()`, `createHost()`, and `createDevice()`.
 `create()` allocates memories on both CPU and GPU, while `createHost()` or `createDevice()` only allocates memory on either CPU or GPU.
 It is important to note that if the creation APIs are called for an initialized array, the original array will be destroyed and a new array will be created.
@@ -61,14 +61,15 @@ vector.aliasHost(petsc_ptr);
 vector.copyToDevice();
 ```
 
-If the data type is not default-constructable, `create()` will only allocate a raw block of uninitialized memory using `malloc()`.
-It is your responsibility to loop over the array and perform placement new to properly construct each entry.
+If the data type is not default-constructible or if you do not want to initialize array using the default constructor, you can set an optional template argument to `false` when calling `create()` or `createHost()`.
+It will only allocate a raw chunk of uninitialized memory using `malloc()` instead of `new`.
+Then, it becomes your responsibility to loop over the array and properly construct each entry using placement new.
 For example:
 
 ```cpp
 Array<NotDefaultConstructable> data;
 
-data.create(n);
+data.create<false>(n);
 
 for (auto & datum : data)
   new (&datum) NotDefaultConstructable(...);
@@ -139,7 +140,6 @@ It is divided into inner and outer arrays.
 The outer array is the regular part of a jagged array.
 Each entry of the outer array is the inner array, whose size can vary with each other.
 As a result, it is defined with up to five template arguments: the data type, inner array dimension size, outer array dimension size, outer array index type (defaults to 8-byte integer; inner arrays always use 4-byte integer), and inner array layout type (defaults to `Moose::Kokkos::LayoutType::LEFT`).
-Both inner and outer arrays can be up to three-dimensional.
 However, it is not possible to have inner arrays with different dimensions in a single jagged array.
 
 The accessors of a jagged array, `operator()` (dimensional) or `operator[]` (dimensionless), receive the indices for the outer array.
@@ -406,46 +406,8 @@ If you accidentally derive a class from a non-template class, the base class wil
 In this case, you are encouraged to prevent unintended inheritance by explicitly adding the `final` keyword to the last level derived class.
 
 The Kokkos-MOOSE base classes are carefully designed to avoid the CRTP by leveraging a registry design pattern where external dispatchers are registered together with the objects.
-Namely, the base classes themselves are not template classes, which alleviates the burden of users in dealing with templates.
-However, any polymorphic pattern implemented on GPU in the derived class level will likely require the CRTP.
-
-#### Alternative Way to Implement Static Polymorphism id=kokkos_shim
-
-While the CRTP is a generic design pattern for implementing static polymorphism, the use of class templates can complicate class designs.
-In Kokkos-MOOSE objects, there is an alternative way to implement static polymorphism by defining shims instead of hook methods.
-Analogously to the original MOOSE objects, Kokkos-MOOSE objects also provide the hook methods for the user to implement their own algorithms (e.g., `computeQpResidual()` in [Kokkos Kernels](syntax/KokkosKernels/index.md)).
-These hook methods, if implemented in the base class, do not have the information about the derived class type.
-Therefore, the user should rely on the CRTP to know the derived class type at compile time if they want to implement a polymorphic pattern in the hook methods.
-
-To alleviate the burden of the CRTP implementation, Kokkos-MOOSE provides additional shims around the hook methods for advanced users.
-These shims simply invoke the hook methods and relay the arguments, but they receive an additional argument which is the object itself in its actual type.
-Namely, the user can call the desired derived class methods using the actual objects available in the shims.
-In case of the [Kokkos Kernels](syntax/KokkosKernels/index.md) as an example, `computeQpResidual()` is called by the shim `computeQpResidualShim()`.
-`computeQpResidual()` has the following signature with arbitrary user codes in it:
-
-```cpp
-KOKKOS_FUNCTION Real computeQpResidual(const unsigned int i,
-                                       const unsigned int qp,
-                                       AssemblyDatum & datum) const;
-{
-  // User codes
-}
-```
-
-And `computeQpResidualShim()` is defined as the following by default, which is a single line function that simply calls `computeQpResidual()`:
-
-```cpp
-template <typename Derived>
-KOKKOS_FUNCTION Real computeQpResidualShim(const Derived & kernel,
-                                           const unsigned int i,
-                                           const unsigned int qp,
-                                           AssemblyDatum & datum) const
-{
-  return kernel.computeQpResidual(i, qp, datum);
-}
-```
-
-If the user defines `computeQpResidualShim()` in their base class with the given signature instead of `computeQpResidual()`, they can customize it to call any method of `kernel` whose type is known in compile time.
+Namely, the base classes themselves are not template classes, which alleviates the burden of users in dealing with class templates.
+The hook methods provided by Kokkos-MOOSE are also template functions with respect to your object type, so you can directly cast `this` pointer in the hook methods without having to rely on class templates.
 
 ### Separate Compilation
 
@@ -476,7 +438,9 @@ The following objects are currently available in Kokkos-MOOSE:
 - [AuxKernels](syntax/KokkosAuxKernels/index.md)
 - [Functions](syntax/KokkosFunctions/index.md)
 - [UserObjects](syntax/KokkosUserObjects/index.md)
-- [Postprocessors](syntax/KokkosPostprocessors/index.md)
+- [Postprocessors](syntax/KokkosUserObjects/index.md)
+- [VectorPostprocessors](syntax/KokkosUserObjects/index.md)
+- [Reporters](syntax/KokkosUserObjects/index.md)
 
 !if-end!
 

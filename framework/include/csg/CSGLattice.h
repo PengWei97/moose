@@ -10,6 +10,7 @@
 #pragma once
 
 #include "CSGUniverse.h"
+#include "CSGTransformationHelper.h"
 #include "JsonIO.h"
 #include <variant>
 #include <optional>
@@ -30,7 +31,7 @@ typedef std::variant<std::reference_wrapper<const CSGUniverse>, std::string> Out
 /**
  * CSGLattice is the abstract class for defining lattices.
  */
-class CSGLattice
+class CSGLattice : public CSGTransformationHelper
 {
 public:
   /**
@@ -168,7 +169,7 @@ public:
    *
    * @return list of references to unique CSGUniverse objects
    */
-  const std::vector<std::reference_wrapper<const CSGUniverse>> getUniqueUniverses();
+  const std::vector<std::reference_wrapper<const CSGUniverse>> getUniqueUniverses() const;
 
   /// Operator overload for checking if two CSGLattice objects are equal
   bool operator==(const CSGLattice & other) const;
@@ -243,6 +244,7 @@ protected:
   FRIEND_TEST(CSGLatticeTest, testSetName);
   FRIEND_TEST(CSGLatticeTest, testUpdateOuter);
   FRIEND_TEST(CSGBaseTest, testAddLattice);
+  FRIEND_TEST(CSGLatticeTest, testCartLatticeEquality);
   ///@}
 #endif
 };

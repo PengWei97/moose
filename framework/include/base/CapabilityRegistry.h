@@ -64,7 +64,8 @@ public:
     POSSIBLE_FAIL = 1,
     UNKNOWN = 2,
     POSSIBLE_PASS = 3,
-    CERTAIN_PASS = 4
+    CERTAIN_PASS = 4,
+    IGNORE = 5
   };
 
   /**
@@ -74,10 +75,21 @@ public:
   {
     /// State of the check
     CheckState state;
-    /// Reason associated with the check (currently unused)
-    std::string reason;
-    /// Documentation associated with the check (currently unused)
-    std::string doc;
+    /// The capability names that existed in the check string
+    std::set<std::string> capability_names;
+  };
+
+  /**
+   * Options for check().
+   */
+  struct CheckOptions
+  {
+    CheckOptions() : certain(true), ignore_capabilities() {}
+
+    /// Whether or not all capabilities must be known
+    bool certain;
+    /// Capabilities to ignore; checks using them will always pass
+    std::set<std::string> ignore_capabilities;
   };
 
   /**
@@ -110,7 +122,12 @@ public:
    *
    * Will convert the capability name to lowercase.
    */
+  ///@{
   const Capability & get(const std::string & capability) const;
+#ifdef MOOSE_UNIT_TEST
+  inline Capability & get(const std::string & capability);
+#endif
+  ///@}
 
   /**
    * @return The size of the registry (number of capabilities registered).
@@ -120,8 +137,8 @@ public:
   /**
    * Checks if a set of requirements is satisified by the capabilities
    *
-   * @param capabilities The registry that contains the capabilities
    * @param requirements The requirement string
+   * @param options Options to apply to the check
    *
    * This method is exposed to Python within pycapabilities.Capabilities.check in
    * python/pycapabilities/_pycapabilities.C. This external method is used
@@ -140,11 +157,10 @@ public:
    * The logic operators & and | can be used to chain multiple checks as
    * "thermochimica & thermochimica>1.0". Parenthesis can be used to build
    * complex logic expressions.
-   *
-   * See the description for CheckState for more information on why a
-   * certain state would be returned.
    */
-  CheckResult check(std::string requirements) const;
+  CheckResult check(
+      std::string requirements,
+      const CapabilityRegistry::CheckOptions & options = CapabilityRegistry::CheckOptions()) const;
 
 protected:
 #ifdef MOOSE_UNIT_TEST
@@ -163,4 +179,11 @@ CapabilityRegistry::query(std::string capability)
 }
 #endif
 
+#ifdef MOOSE_UNIT_TEST
+Capability &
+CapabilityRegistry::get(const std::string & capability)
+{
+  return const_cast<Capability &>(std::as_const(*this).get(capability));
+}
+#endif
 } // namespace Moose::internal

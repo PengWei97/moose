@@ -424,10 +424,7 @@ class TestHarness:
             self.options._capabilities,
             self.options._augmented_capabilities,
             self.options._required_capabilities,
-        ) = self.getCapabilities(
-            self.options,
-            self.executable,
-        )
+        ) = self.getCapabilities(self.options, self.executable, self.root_params)
 
         checks = {}
         checks["submodules"] = util.getInitializedSubmodules(self.run_tests_dir)
@@ -454,12 +451,15 @@ class TestHarness:
 
         # Initialize the scheduler
         self.initialize()
+        self.options.scheduler = self.scheduler.scheduler_options
 
         os.chdir(self._orig_cwd)
 
     @staticmethod
     def getCapabilities(
-        options: argparse.Namespace, executable: Optional[str]
+        options: argparse.Namespace,
+        executable: Optional[str],
+        test_root_params: Optional[pyhit.Node],
     ) -> Tuple["Capabilities", dict, list[str]]:
         """
         Get the application capabilities.
@@ -470,6 +470,8 @@ class TestHarness:
             The TestHarness options.
         executable : Optional[str]
             Path to the executable; needed when not --minimal-capabilities.
+        test_root_params : Optional[pyhit.Node]
+            The parsed test_root, if any.
 
         Returns:
         -------
@@ -479,6 +481,7 @@ class TestHarness:
             The augmented capabilities.
         list[Tuple[str, bool]]]:
             The capabilities when --only-tests-that-require.
+
         """
         required = []
         app_capabilities: dict = {}
@@ -510,10 +513,29 @@ class TestHarness:
         if options.minimal_capabilities:
             augment("platform", util.getPlatform(), "Operating system", None, True)
 
+        # Add extra capabilities that are known even though they might not
+        # exist (if they are not set by the app). This is needed in specific
+        # when testing against known applications. For example, in the
+        # fluid_properties module, we check against "airapp". We don't want
+        # to error when "airapp" doesn't exist in the app because we know
+        # that it could actually be false.
+        if test_root_params is not None and (
+            known_capabilities := test_root_params.get("known_capabilities")
+        ):
+            known_capabilities = known_capabilities.split()
+            for v in known_capabilities:
+                if v not in app_capabilities:
+                    augment(
+                        v,
+                        False,
+                        "TestHarness known capability",
+                        registered_augmented_capability=False,
+                    )
+
         # This is one of the few places where we actually
         # load the pycapabilities module and that is
         # intentional as it can trigger a build
-        from pycapabilities import Capabilities
+        from pycapabilities import Capabilities, AUGMENTED_CAPABILITY_NAMES
 
         # Build the capabilities.Capabilities object, which
         # has the application capabilities plus the ones
@@ -537,7 +559,21 @@ class TestHarness:
                     required_capabilities, capabilities
                 )
             except Exception as e:
-                TestHarness.errorExit(f"--only-tests-that-require: {e}")
+                util.errorExit(
+                    f"--only-tests-that-require: {e}", colored=options.colored
+                )
+
+        # Check --ignore-capability to make sure they exist
+        if (ignore := options.ignore_capability) is not None:
+            for name in ignore:
+                if (
+                    name not in capabilities.values
+                    and name not in AUGMENTED_CAPABILITY_NAMES
+                ):
+                    util.errorExit(
+                        "--ignore-capability: Unknown " f"capability '{name}'",
+                        colored=options.colored,
+                    )
 
         return capabilities, augmented_capabilities, required
 
@@ -828,6 +864,10 @@ class TestHarness:
         else:
             return True
 
+    def shouldOutputMemory(self) -> bool:
+        """Whether or not memory should be output in the Job status."""
+        return self.scheduler.MONITOR_JOB_MEMORY and not self.options.no_memory_tracking
+
     def handleJobStatus(self, job, caveats=None):
         """
         The Scheduler is calling back the TestHarness to inform us of a status change.
@@ -836,6 +876,8 @@ class TestHarness:
         if self.options.show_last_run and job.isSkip():
             return
         elif not job.isSilent():
+            memory = None if self.shouldOutputMemory() else False
+
             # Print results and perform any desired post job processing
             if job.isFinished():
                 joint_status = job.getJointStatus()
@@ -849,7 +891,10 @@ class TestHarness:
                 # Print status with caveats (if caveats not overridden)
                 caveats = True if caveats is None else caveats
                 print(
-                    util.formatJobResult(job, self.options, caveats=caveats), flush=True
+                    util.formatJobResult(
+                        job, self.options, caveats=caveats, memory=memory
+                    ),
+                    flush=True,
                 )
 
                 # Store job as finished for printing
@@ -868,7 +913,11 @@ class TestHarness:
                 caveats = False if caveats is None else caveats
                 print(
                     util.formatJobResult(
-                        job, self.options, status_message=False, caveats=caveats
+                        job,
+                        self.options,
+                        status_message=False,
+                        caveats=caveats,
+                        memory=memory,
                     ),
                     flush=True,
                 )
@@ -916,7 +965,7 @@ class TestHarness:
         jobs = [j for j in self.finished_jobs if (not j.isSkip() and j.getMaxMemory())]
         jobs = sorted(
             jobs,
-            key=lambda job: job.getMaxMemory() / job.getTester().getProcs(self.options),
+            key=lambda job: job.getMaxMemory() / job.getSlots(),
             reverse=True,
         )
         return jobs[0:num]
@@ -983,22 +1032,32 @@ class TestHarness:
                 for job in longest_jobs:
                     print(
                         util.formatJobResult(
-                            job, self.options, caveats=True, timing=True
+                            job,
+                            self.options,
+                            caveats=True,
+                            timing=True,
+                            memory=None if self.shouldOutputMemory() else False,
                         )
                     )
 
-            # Heaviest jobs by memory; disabled for now, see #32243
-            # heaviest_jobs = self.getHeaviestJobs(self.options.longest_jobs)
-            # if heaviest_jobs:
-            #     print(header(f'{self.options.longest_jobs} Heaviest Jobs (memory/proc)'))
-            #     for job in heaviest_jobs:
-            #         print(util.formatJobResult(
-            #             job,
-            #             self.options,
-            #             caveats=True,
-            #             timing=True,
-            #             memory_per_proc=True,
-            #         ))
+            # Heaviest jobs by memory
+            if self.shouldOutputMemory() and (
+                heaviest_jobs := self.getHeaviestJobs(self.options.longest_jobs)
+            ):
+                print(
+                    header(f"{self.options.longest_jobs} Heaviest Jobs (memory/slot)")
+                )
+                for job in heaviest_jobs:
+                    print(
+                        util.formatJobResult(
+                            job,
+                            self.options,
+                            caveats=True,
+                            timing=True,
+                            memory=True,
+                            memory_per_slot=True,
+                        )
+                    )
 
             longest_folders = self.getLongestFolders(self.options.longest_jobs)
             if longest_folders:
@@ -1094,7 +1153,7 @@ class TestHarness:
         elif self.options.hpc == "slurm":
             return "RunSlurm"
         # The default scheduler plugin
-        return "RunParallel"
+        return "RunLocal"
 
     def initializeResults(self):
         """Initializes the results storage
@@ -1475,6 +1534,25 @@ class TestHarness:
             help="Ignore specified caveats when checking if a test should run; using --ignore without a conditional will ignore all caveats",
         )
         filtergroup.add_argument(
+            "--ignore-capability",
+            action="extend",
+            nargs=1,
+            type=str,
+            help="Ignore the specified capability when checking if a test should run",
+        )
+        filtergroup.add_argument(
+            "--min-parallel",
+            dest="min_parallel",
+            type=int,
+            help="Skip tests that cannot run with at least this many MPI procs",
+        )
+        filtergroup.add_argument(
+            "--min-threads",
+            dest="min_threads",
+            type=int,
+            help="Skip tests that cannot run with at least this many threads",
+        )
+        filtergroup.add_argument(
             "--no-check-input",
             action="store_true",
             help="Do not run check_input (syntax) tests",
@@ -1486,18 +1564,18 @@ class TestHarness:
             help="Run only tests NOT in the named group",
         )
         filtergroup.add_argument(
-            "--re",
-            action="store",
-            type=str,
-            dest="reg_exp",
-            help="Run tests that match the given regular expression",
-        )
-        filtergroup.add_argument(
             "--only-tests-that-require",
             action="extend",
             nargs=1,
             type=str,
             help="Require that a test depend on this capability name",
+        )
+        filtergroup.add_argument(
+            "--re",
+            action="store",
+            type=str,
+            dest="reg_exp",
+            help="Run tests that match the given regular expression",
         )
         filtergroup.add_argument(
             "--valgrind",
@@ -1647,6 +1725,20 @@ class TestHarness:
             help="Test the <app_name>-oprof binary",
         )
 
+        envgroup = parser.add_argument_group(
+            "Environment Options", "Control the runtime environment"
+        )
+        envgroup.add_argument(
+            "--no-hwloc-topology",
+            action="store_true",
+            help="Disable pre-caching the hwloc topology for MPI execution",
+        )
+        envgroup.add_argument(
+            "--no-openmpi-oversubscribe",
+            action="store_true",
+            help="Disable allowing oversubscribe with OpenMPI",
+        )
+
         screengroup = parser.add_argument_group(
             "On-screen Output", "Control the on-screen output"
         )
@@ -1758,8 +1850,32 @@ class TestHarness:
             default=5,
             help="The number of valgrind tests allowed to fail before any additional valgrind tests will run",
         )
-        # disabled for now; see #32243
-        # failgroup.add_argument('--max-memory', nargs=1, type=float, help='The maximum memory to allow for a job in MB, per slot')
+
+        resourcesgroup = parser.add_argument_group(
+            "Resource tracking", "Control tracking of resources"
+        )
+        resourcesgroup.add_argument(
+            "--max-cpu-per-slot",
+            nargs=1,
+            type=float,
+            help=("The maximum percent CPU to allow for a job, per slot"),
+        )
+        resourcesgroup.add_argument(
+            "--max-memory-per-slot",
+            nargs=1,
+            type=float,
+            help="The maximum memory to allow for a job in MB, per slot",
+        )
+        resourcesgroup.add_argument(
+            "--no-cpu-tracking",
+            action="store_true",
+            help="Disable all CPU tracking of jobs",
+        )
+        resourcesgroup.add_argument(
+            "--no-memory-tracking",
+            action="store_true",
+            help="Disable all memory tracking of jobs",
+        )
 
         hpcgroup = parser.add_argument_group("HPC", "Enable and control HPC execution")
         hpcgroup.add_argument(
@@ -1795,6 +1911,11 @@ class TestHarness:
             action="store",
             metavar="",
             help="The host(s) to use for submitting HPC jobs",
+        )
+        hpcgroup.add_argument(
+            "--hpc-srun",
+            action="store_true",
+            help="Set to run HPC MPI jobs with srun instead of mpiexec/mpirun",
         )
         hpcgroup.add_argument(
             "--hpc-no-hold",
@@ -1859,13 +1980,22 @@ class TestHarness:
         options = parser.parse_args(argv[1:])
         options.code = code
 
+        def print_info(*args):
+            util.printInfo(*args, colored=options.colored)
+
         # Try to guess the --hpc option if --hpc-host is set
         if options.hpc_host and not options.hpc:
             hpc_host = options.hpc_host[0]
             hpc_config = TestHarness.queryHPCCluster(hpc_host)
             if hpc_config is not None:
                 options.hpc = hpc_config.scheduler
-                print(f"INFO: Setting --hpc={options.hpc} for known host {hpc_host}")
+                options_set = [f"--hpc={options.hpc}"]
+                if hpc_config.srun:
+                    options_set.append("--hpc-srun")
+                    options.hpc_srun = True
+                print_info(
+                    f"Setting --hpc={options.hpc} for known host {hpc_host}",
+                )
 
         # Convert all list based options of length one to scalars
         for key, value in list(vars(options).items()):
@@ -1879,6 +2009,10 @@ class TestHarness:
     ## Called after options are parsed from the command line
     # Exit if options don't make any sense, print warnings if they are merely weird
     def checkAndUpdateCLArgs(self, opts: argparse.Namespace):
+
+        def print_info(*args):
+            util.printInfo(*args, colored=opts.colored)
+
         if opts.group == opts.not_group:
             self.errorExit(
                 "The group and not_group options cannot specify the same group"
@@ -1936,20 +2070,31 @@ class TestHarness:
             opts.input_file_name = "tests"
 
         if self.app_name is None:
-            print(
-                "INFO: Setting --minimal-capabilities because there is not an application"
+            print_info(
+                "Setting --minimal-capabilities because there is not an application",
             )
             opts.minimal_capabilities = True
 
-        # Set --max-memory from MOOSE_MAX_MEMORY if --max-memory not set;
-        # disabled for now, see #32243
-        # if (
-        #     opts.max_memory is None
-        #     and (MOOSE_MAX_MEMORY := os.environ.get("MOOSE_MAX_MEMORY")) is not None
-        # ):
-        #     value = float(MOOSE_MAX_MEMORY)
-        #     print(f"INFO: Setting --max-memory={value} MB from MOOSE_MAX_MEMORY")
-        #     opts.max_memory = value
+        # Set --max-memory-per-slot from MOOSE_MAX_MEMORY_PER_SLOT
+        # if --max-memory-per-slot is not not set
+        if (
+            opts.max_memory_per_slot is None
+            and (
+                MOOSE_MAX_MEMORY_PER_SLOT := os.environ.get("MOOSE_MAX_MEMORY_PER_SLOT")
+            )
+            is not None
+        ):
+            value = float(MOOSE_MAX_MEMORY_PER_SLOT)
+            print_info(
+                f"Setting --max-memory-per-slot={value} MB from "
+                "MOOSE_MAX_MEMORY_PER_SLOT",
+            )
+            opts.max_memory_per_slot = value
+
+        # Convert extend action params to lists if they have a single value
+        for name in ["ignore_capability"]:
+            if (value := getattr(opts, name)) is not None and isinstance(value, str):
+                setattr(opts, name, [value])
 
     def preRun(self):
         if self.options.json:
@@ -1966,18 +2111,25 @@ class TestHarness:
         return self.options
 
     # Helper tuple for storing information about a cluster
-    HPCCluster = namedtuple("HPCCluster", ["scheduler", "apptainer_modules"])
+    HPCCluster = namedtuple("HPCCluster", ["scheduler", "apptainer_modules", "srun"])
     # Define INL HPC clusters
-    sawtooth_config = HPCCluster(
-        scheduler="slurm",
-        apptainer_modules=["container-openmpi/5.0.8-gcc13.4.0-ucx1.19.0"],
-    )
     br_wr_config = HPCCluster(
-        scheduler="slurm", apptainer_modules=["container-openmpi/5.0.5-gcc13.2.0"]
+        scheduler="slurm",
+        apptainer_modules=["container-openmpi/5.0.5-gcc13.2.0"],
+        srun=False,
     )
     hpc_configs = {
-        "sawtooth": sawtooth_config,
         "bitterroot": br_wr_config,
+        "sawtooth": HPCCluster(
+            scheduler="slurm",
+            apptainer_modules=["container-openmpi/5.0.8-gcc13.4.0-ucx1.19.0"],
+            srun=False,
+        ),
+        "teton": HPCCluster(
+            scheduler="slurm",
+            apptainer_modules=["container-mpich/4.3.2-gcc13.4.0-nopmix"],
+            srun=True,
+        ),
         "windriver": br_wr_config,
     }
 
@@ -1996,10 +2148,12 @@ class TestHarness:
                 return config
         return None
 
-    @staticmethod
-    def errorExit(*args):
+    def errorExit(self, *args):
         """
         Helper for printing an error and exiting
         """
-        message = " ".join([f"{v}" for v in args])
-        raise SystemExit(f"ERROR: {message}")
+        util.errorExit(*args, colored=self.options.colored is True)
+
+    def printInfo(self, *args):
+        """Print the given message as information."""
+        util.printInfo(*args, colored=self.options.colored)

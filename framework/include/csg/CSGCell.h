@@ -14,6 +14,7 @@
 #endif
 
 #include "CSGRegion.h"
+#include "CSGTransformationHelper.h"
 
 namespace CSG
 {
@@ -25,7 +26,7 @@ class CSGLattice;
  * CSGCell creates an internal representation of a Constructive Solid Geometry (CSG)
  * cell, which represents a region of space filled by a material or void
  */
-class CSGCell
+class CSGCell : public CSGTransformationHelper
 {
 public:
   /**
@@ -117,6 +118,33 @@ public:
    */
   const CSGRegion & getRegion() const { return _region; }
 
+  /**
+   * @brief Reset the cell fill to void
+   *
+   */
+  void resetCellFill();
+
+  /**
+   * @brief Set the cell fill to a material name
+   *
+   * @param mat_name name of material fill
+   */
+  void updateCellFill(const std::string & mat_name);
+
+  /**
+   * @brief Set the cell fill to a universe
+   *
+   * @param univ universe fill
+   */
+  void updateCellFill(const CSGUniverse * univ);
+
+  /**
+   * @brief Set the cell fill to a lattice
+   *
+   * @param lattice lattice fill
+   */
+  void updateCellFill(const CSGLattice * lattice);
+
   /// Operator overload for checking if two CSGCell objects are equal
   bool operator==(const CSGCell & other) const;
 
@@ -158,6 +186,7 @@ protected:
   ///@{
   FRIEND_TEST(CSGCellTest, testSetName);
   FRIEND_TEST(CSGCellTest, testUpdateRegion);
+  FRIEND_TEST(CSGCellTest, testCellEquality);
   ///@}
 #endif
 };

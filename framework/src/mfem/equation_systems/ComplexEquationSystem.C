@@ -44,6 +44,9 @@ ComplexEquationSystem::Init(GridFunctions & gridfunctions,
   for (auto & eliminated_var_name : _eliminated_var_names)
     _cmplx_eliminated_variables.Register(eliminated_var_name,
                                          cmplx_gridfunctions.GetShared(eliminated_var_name));
+
+  // Get a reference to the complex GridFunctions
+  _complex_gfuncs = &cmplx_gridfunctions;
 }
 
 void
@@ -128,7 +131,13 @@ ComplexEquationSystem::ApplyEssentialBCs()
   {
     const auto & trial_var_name = _trial_var_names.at(i);
     mfem::ParComplexGridFunction & trial_gf = *_cmplx_var_ess_constraints.at(i);
+
+    // Make sure we update the size, if this mesh has changed recently for instance
+    trial_gf.Update();
+
+    // For now, we zero out the gridfunction before populating it with the essential dofs
     trial_gf = std::complex<mfem::real_t>(0, 0);
+
     mfem::Array<int> global_ess_markers(trial_gf.ParFESpace()->GetParMesh()->bdr_attributes.Max());
     global_ess_markers = 0;
     // Set strongly constrained DoFs of trial_gf on essential boundaries and add markers for all
@@ -267,14 +276,24 @@ ComplexEquationSystem::FormSystemMatrix(mfem::OperatorHandle & op,
   op.Reset(mfem::HypreParMatrixFromBlocks(_h_blocks));
 }
 
+// Equation system Mult
 void
-ComplexEquationSystem::RecoverComplexFEMSolution(
-    mfem::BlockVector & trueX,
-    Moose::MFEM::GridFunctions & /*gridfunctions*/,
-    Moose::MFEM::ComplexGridFunctions & cmplx_gridfunctions)
+ComplexEquationSystem::Mult(const mfem::Vector & x, mfem::Vector & residual) const
+{
+  _linear_operator->Mult(x, residual);
+  x.HostRead();
+  residual.HostRead();
+}
+
+void
+ComplexEquationSystem::SetTrialVariablesFromTrueVectors(const mfem::BlockVector & trueX) const
 {
   for (const auto i : index_range(_trial_var_names))
-    cmplx_gridfunctions.Get(_trial_var_names.at(i))->Distribute(&(trueX.GetBlock(i)));
+  {
+    auto & trial_var_name = _trial_var_names.at(i);
+    trueX.GetBlock(i).SyncAliasMemory(trueX);
+    _complex_gfuncs->Get(trial_var_name)->Distribute(&(trueX.GetBlock(i)));
+  }
 }
 
 }

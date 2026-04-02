@@ -13,6 +13,7 @@
 #include "MFEMInitialCondition.h"
 #include "MFEMVariable.h"
 #include "MFEMComplexVariable.h"
+#include "MFEMIndicator.h"
 #include "MFEMSubMesh.h"
 #include "MFEMFunctorMaterial.h"
 #include "libmesh/string_to_enum.h"
@@ -48,7 +49,6 @@ void
 MFEMProblem::initialSetup()
 {
   FEProblemBase::initialSetup();
-  addMFEMNonlinearSolver();
 }
 
 void
@@ -70,6 +70,30 @@ MFEMProblem::addMFEMPreconditioner(const std::string & user_object_name,
 }
 
 void
+MFEMProblem::addIndicator(const std::string & user_object_name,
+                          const std::string & name,
+                          InputParameters & parameters)
+{
+  FEProblemBase::addUserObject(user_object_name, name, parameters);
+  auto object_ptr = getUserObject<MFEMIndicator>(name).getSharedPtr();
+  auto estimator = std::dynamic_pointer_cast<MFEMIndicator>(object_ptr);
+
+  // construct the estimator itself
+  estimator->createEstimator();
+}
+
+void
+MFEMProblem::addMarker(const std::string & user_object_name,
+                       const std::string & name,
+                       InputParameters & parameters)
+{
+  FEProblemBase::addUserObject(user_object_name, name, parameters);
+  auto object_ptr = getUserObject<MFEMRefinementMarker>(name).getSharedPtr();
+
+  getProblemData().refiner = std::dynamic_pointer_cast<MFEMRefinementMarker>(object_ptr);
+}
+
+void
 MFEMProblem::addMFEMSolver(const std::string & user_object_name,
                            const std::string & name,
                            InputParameters & parameters)
@@ -81,15 +105,19 @@ MFEMProblem::addMFEMSolver(const std::string & user_object_name,
 }
 
 void
-MFEMProblem::addMFEMNonlinearSolver()
+MFEMProblem::addMFEMNonlinearSolver(unsigned int nl_max_its,
+                                    mfem::real_t nl_abs_tol,
+                                    mfem::real_t nl_rel_tol,
+                                    unsigned int print_level)
 {
+  // TODO: allow users to specify other mfem::IterativeSolvers
   auto nl_solver = std::make_shared<mfem::NewtonSolver>(getComm());
 
   // Defaults to one iteration, without further nonlinear iterations
-  nl_solver->SetRelTol(0.0);
-  nl_solver->SetAbsTol(0.0);
-  nl_solver->SetMaxIter(1);
-
+  nl_solver->SetRelTol(nl_rel_tol);
+  nl_solver->SetAbsTol(nl_abs_tol);
+  nl_solver->SetMaxIter(nl_max_its);
+  nl_solver->SetPrintLevel(print_level);
   getProblemData().nonlinear_solver = nl_solver;
 }
 
@@ -437,7 +465,6 @@ const std::vector<std::string> SCALAR_FUNCS = {"Axisymmetric2D3DSolutionFunction
                                                "MultiControlDrumFunction",
                                                "Grad2ParsedFunction",
                                                "GradParsedFunction",
-                                               "RichardsExcavGeom",
                                                "ScaledAbsDifferenceDRLRewardFunction",
                                                "CircularAreaHydraulicDiameterFunction",
                                                "CosineHumpFunction",
@@ -579,6 +606,31 @@ MFEMProblem::getMeshDisplacementGridFunction()
   {
     return std::nullopt;
   }
+}
+
+void
+MFEMProblem::rebalanceMesh(mfem::ParMesh & pmesh)
+{
+  if (pmesh.Nonconforming())
+  {
+    pmesh.Rebalance();
+    updateFESpaces();
+    updateGridFunctions();
+  }
+}
+
+void
+MFEMProblem::updateFESpaces()
+{
+  for (const auto & fe_space_pair : _problem_data.fespaces)
+    fe_space_pair.second->Update();
+}
+
+void
+MFEMProblem::updateGridFunctions()
+{
+  for (const auto & gridfunction_pair : _problem_data.gridfunctions)
+    gridfunction_pair.second->Update();
 }
 
 std::vector<VariableName>

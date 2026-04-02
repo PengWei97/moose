@@ -28,15 +28,15 @@ protected:
   void SetUp() override
   {
     // Setup a temporary Capabilities for testing
-    std::swap(Capabilities::get({})._registry, _old_registry);
-    _capabilities = &Capabilities::get({});
-    ASSERT_EQ(Capabilities::get({})._registry.size(), 0);
+    std::swap(Capabilities::getCapabilities({})._registry, _old_registry);
+    _capabilities = &Capabilities::getCapabilities({});
+    ASSERT_EQ(Capabilities::getCapabilities({})._registry.size(), 0);
   }
 
   void TearDown() override
   {
     // Replace temporary Capabilities for testing with real one
-    std::swap(Capabilities::get({})._registry, _old_registry);
+    std::swap(Capabilities::getCapabilities({})._registry, _old_registry);
     _old_registry.clear();
     _capabilities = nullptr;
   }
@@ -111,10 +111,26 @@ TEST_F(CapabilitiesTest, mooseAppAddCapability)
   }
 }
 
+/// Test MooseApp::isRelocated
+TEST_F(CapabilitiesTest, mooseAppIsRelocated)
+{
+  // always in-tree with unit tests
+  _capabilities->registerMooseCapabilities();
+  EXPECT_FALSE(MooseApp::isRelocated());
+}
+
+/// Test MooseApp::isInTree
+TEST_F(CapabilitiesTest, mooseAppisInTree)
+{
+  // always in-tree with unit tests
+  _capabilities->registerMooseCapabilities();
+  EXPECT_TRUE(MooseApp::isInTree());
+}
+
 /// Test --check-capabilities in MooseApp
 TEST_F(CapabilitiesTest, mooseAppCheckCapabilities)
 {
-  auto & capabilities = Capabilities::get({});
+  auto & capabilities = Capabilities::getCapabilities({});
   capabilities.add("value_true", bool(true), "doc");
   capabilities.add("value_false", bool(false), "doc");
 
@@ -145,7 +161,7 @@ TEST_F(CapabilitiesTest, mooseAppCheckCapabilities)
 /// Test --required-capabilities in MooseApp
 TEST_F(CapabilitiesTest, mooseAppCheckRequiredCapabilities)
 {
-  auto & capabilities = Capabilities::get({});
+  auto & capabilities = Capabilities::getCapabilities({});
   capabilities.add("value_true", bool(true), "doc");
   capabilities.add("value_false", bool(false), "doc");
 
@@ -158,16 +174,15 @@ TEST_F(CapabilitiesTest, mooseAppCheckRequiredCapabilities)
   }
 
   // Exceptions caught as mooseError
-  {
-    auto app = AppFactory::create("MooseUnitApp", {"--required-capabilities='foo!?'"});
-    EXPECT_MOOSEERROR_MSG_CONTAINS(
-        app->run(), "--required-capablities: Capability statement '!': unknown operator.");
-  }
+  EXPECT_MOOSEERROR_MSG_CONTAINS(
+      AppFactory::create("MooseUnitApp", {"--required-capabilities='foo!?'"})->run(),
+      "--required-capablities: Capability statement '!': unknown operator.");
 
-  // Unknown state
+  // Non-registered capabilities are allowed
   {
-    auto app = AppFactory::create("MooseUnitApp", {"--required-capabilities='foo>1'"});
-    EXPECT_MOOSEERROR_MSG_CONTAINS(app->run(), "are not specific enough");
+    auto app = AppFactory::create("MooseUnitApp", {"--required-capabilities='foo'"});
+    app->run();
+    EXPECT_EQ(app->exitCode(), 77);
   }
 }
 
@@ -195,37 +210,120 @@ const nlohmann::json JSON_CAPABILITIES = {
 /// Test --testharness-capabilities in MooseApp
 TEST_F(CapabilitiesTest, mooseAppTestharnessCapabilities)
 {
-  // Check string that satisfies each entry in JSON_CAPABILITIES
-  const std::string check_capabilities =
-      "--check-capabilities='!false & int & int=1 & int_explicit=1 & string & string=string & "
-      "string_enum & string_enum=string_enum & string_explicit=string_explicit & "
-      "string_explicit_enum=string_explicit_enum & true'";
-
-  // Check fails without augmenting via --testharness-capabilities
+  // --testharness-capabilities should not be used without --required-capabilities
   {
-    auto app = AppFactory::create("MooseUnitApp", {check_capabilities});
-    app->run();
-    EXPECT_EQ(app->exitCode(), 77);
+    auto app = AppFactory::create("MooseUnitApp", {"--testharness-capabilities=unused"});
+    EXPECT_MOOSEERROR_MSG_CONTAINS(
+        app->run(),
+        "--testharness-capabilities: Should not be specified without --required-capabilities");
   }
 
-  // Success once adding --testharness-capabilities to augment
+  // Test augmenting capabilities
   {
-    Moose::UnitUtils::TempFile temp_file;
+    // Check string that satisfies each entry in JSON_CAPABILITIES
+    const std::string required_capabilities =
+        "--required-capabilities='!false & int & int=1 & int_explicit=1 & string & string=string & "
+        "string_enum & string_enum=string_enum & string_explicit=string_explicit & "
+        "string_explicit_enum=string_explicit_enum & true'";
 
-    std::ofstream out(temp_file.path());
-    out << JSON_CAPABILITIES.dump() << std::flush;
-    out.close();
+    // Capabilities aren't augmented, will skip
+    {
+      auto app = AppFactory::create("MooseUnitApp", {required_capabilities, "--minimal"});
+      app->run();
+      EXPECT_EQ(app->exitCode(), 77);
+    }
 
-    auto app = AppFactory::create(
-        "MooseUnitApp", {"--testharness-capabilities", temp_file.path(), check_capabilities});
-    app->run();
-    EXPECT_EQ(app->exitCode(), 0);
+    // Capabilities are augmented, will not skip
+    {
+      Moose::UnitUtils::TempFile temp_file;
+
+      std::ofstream out(temp_file.path());
+      nlohmann::json json_out;
+      json_out["capabilities"] = JSON_CAPABILITIES;
+      out << json_out.dump() << std::flush;
+      out.close();
+
+      auto app = AppFactory::create(
+          "MooseUnitApp",
+          {"--testharness-capabilities", temp_file.path(), required_capabilities, "--minimal"});
+      app->run();
+      EXPECT_EQ(app->exitCode(), 0);
+    }
+  }
+
+  // Test augmenting and ignoring capabilities together
+  {
+    nlohmann::json json_out;
+    json_out["capabilities"] = JSON_CAPABILITIES;
+
+    // Make sure it is skipped before ignoring
+    {
+      Moose::UnitUtils::TempFile temp_file;
+      std::ofstream out(temp_file.path());
+      out << json_out.dump() << std::flush;
+      out.close();
+      auto app = AppFactory::create("MooseUnitApp",
+                                    {"--testharness-capabilities",
+                                     temp_file.path(),
+                                     "--required-capabilities='false'",
+                                     "--minimal"});
+      app->run();
+      EXPECT_EQ(app->exitCode(), 77);
+    }
+
+    // Should not be skipped now that it is ignored
+    {
+      json_out["ignore_capabilities"] = std::vector<std::string>{"false"};
+      Moose::UnitUtils::TempFile temp_file;
+      std::ofstream out(temp_file.path());
+      out << json_out.dump() << std::flush;
+      out.close();
+
+      auto app = AppFactory::create("MooseUnitApp",
+                                    {"--testharness-capabilities",
+                                     temp_file.path(),
+                                     "--required-capabilities='false'",
+                                     "--minimal"});
+      app->run();
+      EXPECT_EQ(app->exitCode(), 0);
+    }
+  }
+
+  // Test just ignoring capabilities without augmenting them
+  {
+    _capabilities->add("test_ignore", bool(true), "doc");
+
+    // Make sure it is skipped before ignoring
+    {
+      auto app = AppFactory::create("MooseUnitApp",
+                                    {"--required-capabilities='!test_ignore'", "--minimal"});
+      app->run();
+      EXPECT_EQ(app->exitCode(), 77);
+    }
+
+    // Should not be skipped now that it is ignored
+    {
+      Moose::UnitUtils::TempFile temp_file;
+      std::ofstream out(temp_file.path());
+      nlohmann::json json_out;
+      json_out["ignore_capabilities"] = std::vector<std::string>{"test_ignore"};
+      out << json_out.dump() << std::flush;
+      out.close();
+      auto app = AppFactory::create("MooseUnitApp",
+                                    {"--testharness-capabilities",
+                                     temp_file.path(),
+                                     "--required-capabilities='!test_ignore'",
+                                     "--minimal"});
+      app->run();
+      EXPECT_EQ(app->exitCode(), 0);
+    }
   }
 
   // File doesn't exist
   {
     const std::string bad_file = "/testharness/capabilities/no/exist.json";
-    auto app = AppFactory::create("MooseUnitApp", {"--testharness-capabilities", bad_file});
+    auto app = AppFactory::create(
+        "MooseUnitApp", {"--testharness-capabilities", bad_file, "--required-capabilities=unused"});
     EXPECT_MOOSEERROR_MSG_CONTAINS(
         app->run(), "--testharness-capabilities: Could not open \"" + bad_file + "\"");
   }
@@ -238,7 +336,9 @@ TEST_F(CapabilitiesTest, mooseAppTestharnessCapabilities)
     out << "{" << std::flush;
     out.close();
 
-    auto app = AppFactory::create("MooseUnitApp", {"--testharness-capabilities", temp_file.path()});
+    auto app = AppFactory::create(
+        "MooseUnitApp",
+        {"--testharness-capabilities", temp_file.path(), "--required-capabilities=unused"});
     EXPECT_MOOSEERROR_MSG_CONTAINS(app->run(),
                                    "--testharness-capabilities: Failed to load capabilities \"" +
                                        std::string(temp_file.path()) +
@@ -249,24 +349,45 @@ TEST_F(CapabilitiesTest, mooseAppTestharnessCapabilities)
   {
     Moose::UnitUtils::TempFile temp_file;
 
-    const nlohmann::json root = {{"name", {{"foo", "bar"}}}};
+    const nlohmann::json capabilities = {{"name", {{"foo", "bar"}}}};
+    nlohmann::json root;
+    root["capabilities"] = capabilities;
     std::ofstream out(temp_file.path());
     out << root.dump() << std::flush;
     out.close();
 
-    auto app = AppFactory::create("MooseUnitApp", {"--testharness-capabilities", temp_file.path()});
+    auto app = AppFactory::create(
+        "MooseUnitApp",
+        {"--testharness-capabilities", temp_file.path(), "--required-capabilities=unused"});
     EXPECT_MOOSEERROR_MSG_CONTAINS(
         app->run(),
         "--testharness-capabilities: Failed to load capabilities \"" +
             std::string(temp_file.path()) +
             "\":\nCapabilities::augment: Capability 'name' missing 'doc' entry");
   }
+
+  // Bad ignore, caught as mooseError
+  {
+    Moose::UnitUtils::TempFile temp_file;
+
+    nlohmann::json root;
+    root["ignore_capabilities"] = {"foo"};
+    std::ofstream out(temp_file.path());
+    out << root.dump() << std::flush;
+    out.close();
+
+    auto app = AppFactory::create(
+        "MooseUnitApp",
+        {"--testharness-capabilities", temp_file.path(), "--required-capabilities=unused"});
+    EXPECT_MOOSEERROR_MSG_CONTAINS(
+        app->run(), "--required-capablities: Capability to ignore 'foo' is not known");
+  }
 }
 
 /// Test Capabilities::dump
 TEST_F(CapabilitiesTest, dump)
 {
-  auto & capabilities = Capabilities::get({});
+  auto & capabilities = Capabilities::getCapabilities({});
 
   capabilities.add("false", bool(false), "false");
   capabilities.add("true", bool(true), "true");
@@ -291,7 +412,7 @@ TEST_F(CapabilitiesTest, dump)
 /// Test Capabilities::check
 TEST_F(CapabilitiesTest, check)
 {
-  auto & capabilities = Capabilities::get({});
+  auto & capabilities = Capabilities::getCapabilities({});
 
   capabilities.add("name", bool(true), "false");
   EXPECT_EQ(capabilities.check("name").state, CheckState::CERTAIN_PASS);
@@ -301,7 +422,7 @@ TEST_F(CapabilitiesTest, check)
 /// Test Capabilities::augment
 TEST_F(CapabilitiesTest, augment)
 {
-  auto & capabilities = Capabilities::get({});
+  auto & capabilities = Capabilities::getCapabilities({});
 
   capabilities.augment(JSON_CAPABILITIES, {});
 
@@ -347,7 +468,7 @@ TEST_F(CapabilitiesTest, augment)
 /// Test Capabilities::augment with a parsing failure
 TEST_F(CapabilitiesTest, augmentParseError)
 {
-  auto & capabilities = Capabilities::get({});
+  auto & capabilities = Capabilities::getCapabilities({});
 
   // missing doc
   {
@@ -364,4 +485,36 @@ TEST_F(CapabilitiesTest, augmentParseError)
                      Moose::CapabilityException,
                      "Capabilities::augment: Capability 'name' missing 'value' entry");
   }
+}
+
+/// Test Capabilities::[isInstallationType,isRelocated,isInTree]
+TEST_F(CapabilitiesTest, isInstallationType)
+{
+  auto & capabilities = Capabilities::getCapabilities({});
+
+  // We test unit tests in tree, so doing the normal registration
+  // with moose should get us installation_type=in_tree
+  capabilities.registerMooseCapabilities();
+  Capability & capability = capabilities.get("installation_type");
+
+  // Should be false with installation_type=in_tree
+  EXPECT_FALSE(capabilities.isInstallationType("unknown"));
+  EXPECT_FALSE(capabilities.isInstallationType("relocated"));
+  EXPECT_TRUE(capabilities.isInstallationType("in_tree"));
+  EXPECT_TRUE(capabilities.isInTree());
+  EXPECT_FALSE(capabilities.isRelocated());
+
+  // Set the value to "relocated"
+  const auto enumeration_ptr = capability.queryEnumeration();
+  ASSERT_TRUE(enumeration_ptr.has_value());
+  const auto enumeration = *enumeration_ptr;
+  capability = Capability(capability.getName(), std::string("relocated"), capability.getDoc())
+                   .setExplicit()
+                   .setEnumeration(enumeration);
+  ASSERT_EQ(capability.getStringValue(), "relocated");
+  EXPECT_FALSE(capabilities.isInstallationType("unknown"));
+  EXPECT_TRUE(capabilities.isInstallationType("relocated"));
+  EXPECT_FALSE(capabilities.isInstallationType("in_tree"));
+  EXPECT_FALSE(capabilities.isInTree());
+  EXPECT_TRUE(capabilities.isRelocated());
 }

@@ -7,13 +7,18 @@
 # Licensed under LGPL 2.1, please see LICENSE for details
 # https://www.gnu.org/licenses/lgpl-2.1.html
 
-import re, os, shutil
-from Tester import Tester
-from TestHarness import util, TestHarness
-from TestHarness.capability_util import addAugmentedCapability
-from shlex import quote
 import json
-from typing import Optional
+import os
+import re
+import shutil
+from shlex import quote
+from typing import Optional, Tuple
+
+from Tester import Tester
+
+from TestHarness import TestHarness, util
+from TestHarness.capability_util import addAugmentedCapability
+from TestHarness.mpi_config import MPIType
 
 
 class RunApp(Tester):
@@ -149,12 +154,6 @@ class RunApp(Tester):
 
     def __init__(self, name, params):
         Tester.__init__(self, name, params)
-        if os.environ.get("MOOSE_MPI_COMMAND"):
-            self.mpi_command = os.environ["MOOSE_MPI_COMMAND"]
-            self.force_mpi = True
-        else:
-            self.mpi_command = "mpiexec"
-            self.force_mpi = False
 
         # Make sure that either input or command is supplied
         if not (
@@ -167,13 +166,31 @@ class RunApp(Tester):
                 'One of "input", "command", "command_proxy", or "no_additional_cli_args" must be supplied for a RunApp test'
             )
 
-        if params.isValid("command_proxy"):
-            params["use_shell"] = True
-            # Not compatible with each other due to the return break in runCommand()
-            if params["no_additional_cli_args"]:
-                raise Exception(
-                    'The parameters "command_proxy" and "no_additional_cli_args" cannot be supplied together'
-                )
+        # If command or command_proxy is specified, we cannot allow variable
+        # ranges in parallel/threads because the underlying command doesn't
+        # know what -p and --n-threads are set to
+        for param in ["command", "no_additional_cli_args"]:
+            if params.isValid(param) and params[param]:
+                for suffix in ["parallel", "threads"]:
+                    min_param = f"min_{suffix}"
+                    max_param = f"max_{suffix}"
+
+                    if params.isParamSetByUser(max_param):
+                        if params[min_param] != params[max_param]:
+                            raise Exception(
+                                f"'{min_param}' and '{max_param}' must be equal "
+                                f"when '{param}' is set"
+                            )
+                    else:
+                        params[max_param] = 1
+                        self.addCaveats(f"implicit {max_param}=1")
+
+        # Not compatible with each other due to the return break in runCommand()
+        if params.isValid("command_proxy") and params["no_additional_cli_args"]:
+            raise Exception(
+                "The parameters 'command_proxy' and 'no_additional_cli_args' "
+                "cannot be supplied together"
+            )
 
         for value in params["compute_devices"]:
             if value.lower() not in TestHarness.validComputeDevices():
@@ -185,6 +202,9 @@ class RunApp(Tester):
         # and any of those capabilities depend on the
         # augmented capabilities
         self._augmented_capabilities_file: Optional[str] = None
+
+        self._runapp_environment: dict = {}
+        """Environment variables that need to be augmented for this RunApp test."""
 
     def getInputFile(self):
         if self.specs.isValid("input"):
@@ -274,6 +294,15 @@ class RunApp(Tester):
                 file = "metadata_perf_graph_" + self.getTestNameForFile() + ".json"
                 self.json_metadata["perf_graph"] = Tester.JSONMetadata(file)
 
+        # --min-parallel and --min-threads
+        for name in ["parallel", "threads"]:
+            if (option := getattr(options, f"min_{name}")) is not None and (
+                max_value := self.specs[f"max_{name}"]
+            ) < option:
+                self.addCaveats(f"--min-{name}: max={max_value}")
+                self.setStatus(self.skip)
+                return False
+
         return True
 
     def getThreads(self, options):
@@ -329,6 +358,14 @@ class RunApp(Tester):
 
         return ncpus
 
+    @staticmethod
+    def getMPICommand(options) -> Tuple[str, bool]:
+        """Get the command to use for MPI (if any) and whether or not to force MPI."""
+        if mpi_command := os.environ.get("MOOSE_MPI_COMMAND"):
+            return mpi_command, True
+        else:
+            return "srun" if options.hpc_srun else "mpiexec", False
+
     def getCommand(self, options):
         specs = self.specs
 
@@ -355,7 +392,7 @@ class RunApp(Tester):
             )
 
             # Need to run mpiexec with containerized openmpi
-            if options.hpc and self.hasOpenMPI():
+            if options.hpc and options.scheduler.mpi_config.mpi_type == MPIType.OPENMPI:
                 cmd = f"mpiexec -n 1 {cmd}"
 
             return cmd
@@ -475,13 +512,21 @@ class RunApp(Tester):
             command = command + " --n-threads=" + str(nthreads)
 
         # Force mpi, more than 1 core, or containerized openmpi (requires mpiexec serial)
-        if self.force_mpi or ncpus > 1 or (options.hpc and self.hasOpenMPI()):
-            command = f"{self.mpi_command} -n {ncpus} {command}"
+        mpi_command, force_mpi = self.getMPICommand(options)
+        if (
+            force_mpi
+            or ncpus > 1
+            or (
+                options.hpc and options.scheduler.mpi_config.mpi_type == MPIType.OPENMPI
+            )
+        ):
+            command = f"{mpi_command} -n {ncpus} {command}"
 
-        # Arbitrary proxy command, but keep track of the command so that someone could use it later
+        # Arbitrary proxy command; set RUNAPP_COMMAND to the actual command
+        # and use the command proxy path as the command
         if specs.isValid("command_proxy"):
-            command = command.replace('"', r"\"")
-            return f'RUNAPP_COMMAND="{command}" {os.path.join(specs["test_dir"], specs["command_proxy"])}'
+            self._runapp_environment["RUNAPP_COMMAND"] = command
+            return str(os.path.join(specs["test_dir"], specs["command_proxy"]))
 
         return command
 
@@ -612,9 +657,10 @@ class RunApp(Tester):
         derived testers from having a successful status set, before actually running
         the derived processResults method.
 
-        # TODO: because RunParallel is now setting every successful status message,
+        # TODO: because Scheduler is now setting every successful status message,
                 refactor testFileOutput and processResults.
         """
+
         # If we had capability requirements and get an exit 77, it means that the
         # capability doesn't exist in the binary
         if self.specs["capabilities"] and exit_code == 77:
@@ -680,26 +726,47 @@ class RunApp(Tester):
     def prepare(self, options):
         super().prepare(options)
 
-        # Dump the augmented capabilities, if any
-        if self.specs["capabilities"]:
+        # Capture any capabilities that we augmented when checking if
+        # this test could run so that we can pass them via
+        # --testharness-capabilities to the application. The application
+        # needs to add our augmented capabilities so that running
+        # --required-capabilities="..." is valid with the capabilities
+        # that were augmented.
+        if self._capability_names:
             # Capabilities from this Tester's specs in addition
             # to capabilities from the global options
-            capabilities = (
-                self._augmented_capabilities | options._augmented_capabilities
+            if self._augmented_capabilities is not None:
+                capabilities = (
+                    self._augmented_capabilities | options._augmented_capabilities
+                )
+            else:
+                capabilities = options._augmented_capabilities
+
+            # The capabilities that we need to dump, if any
+            store_capabilities = {
+                capability: entry
+                for capability, entry in capabilities.items()
+                if capability in self._capability_names
+            }
+            # The capabilities that need to be ignored in the app, if any
+            store_ignore_capabilities = (
+                [v for v in options.ignore_capability if v in self._capability_names]
+                if options.ignore_capability is not None
+                else None
             )
 
-            # Capture the capabilities that we need to dump, if any.
-            # For now, we'll lazily just see if each of the
-            # augmented capabilities exists in the whole string.
-            store_capabilities = {}
-            for capability, entry in capabilities.items():
-                if capability in self.specs["capabilities"]:
-                    store_capabilities[capability] = entry
-
-            # We have capabilities to store
+            # Store if we have any to store
+            store = {}
             if store_capabilities:
+                store["capabilities"] = store_capabilities
+            if store_ignore_capabilities:
+                store["ignore_capabilities"] = store_ignore_capabilities
+            if store:
                 self._augmented_capabilities_file = self.getCapabilitiesFilePath(
                     options
                 )
                 with open(self._augmented_capabilities_file, "w") as f:
-                    json.dump(store_capabilities, f)
+                    json.dump(store, f)
+
+    def augmentEnvironment(self, options) -> dict:
+        return super().augmentEnvironment(options) | self._runapp_environment

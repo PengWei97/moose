@@ -10,12 +10,12 @@
 #pragma once
 
 #include "KokkosPostprocessor.h"
-#include "KokkosNodalReducer.h"
+#include "KokkosNodalUserObject.h"
 
 namespace Moose::Kokkos
 {
 
-class NodalPostprocessor : public NodalReducer, public Postprocessor
+class NodalPostprocessor : public NodalUserObject, public Postprocessor
 {
 public:
   static InputParameters validParams();
@@ -23,13 +23,15 @@ public:
   NodalPostprocessor(const InputParameters & parameters);
 
   /**
-   * Finalize is not required for Postprocessor implementations since work may be done in
-   * getValue().
+   * We provide default finalize() as getValue() has been abused to perform the final aggregation
+   * for a long time and we allowed not implementing finalize(). However, it is desired to do all
+   * the finalization work such as communication in finalize() and let getValue() simply return the
+   * final aggregated value, as getValue() is designed to be a const method.
    */
   virtual void finalize() override {}
 
   // Disambiguation with FunctorBase::operator()
-  using NodalReducer::operator();
+  using NodalUserObject::operator();
 };
 
 } // namespace Moose::Kokkos

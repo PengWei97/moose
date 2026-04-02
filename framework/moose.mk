@@ -83,7 +83,7 @@ pyhit_srcfiles  := $(hit_srcdir)/hit.cpp $(hit_srcdir)/lex.cc $(hit_srcdir)/pars
 # capabilities python bindings
 #
 PYCAPABILITIES_DIR ?= $(MOOSE_DIR)/python/pycapabilities
-pycapabilities_srcfiles := $(PYCAPABILITIES_DIR)/_pycapabilities.C $(FRAMEWORK_DIR)/src/base/Capability.C $(FRAMEWORK_DIR)/src/base/CapabilityRegistry.C
+pycapabilities_srcfiles := $(PYCAPABILITIES_DIR)/_pycapabilities.C $(FRAMEWORK_DIR)/src/base/Capability.C $(FRAMEWORK_DIR)/src/base/CapabilityException.C $(FRAMEWORK_DIR)/src/base/CapabilityRegistry.C
 
 # Making a .la object instead.  This is what you make out of .lo objects...
 moose_LIB := $(FRAMEWORK_DIR)/libmoose-$(METHOD).la
@@ -527,8 +527,8 @@ ifeq ($(KOKKOS_COMPILER),CPU)
 
 $(MOOSE_KOKKOS_LIB): $(MOOSE_KOKKOS_OBJECTS)
 	@echo "Linking Kokkos Library "$@"..."
-	@$(libmesh_LIBTOOL) --tag=CXX $(LIBTOOLFLAGS) --mode=link --quiet \
-		$(KOKKOS_CXX) -o $@ $(MOOSE_KOKKOS_OBJECTS) $(KOKKOS_LDFLAGS) $(KOKKOS_LIBS) -rpath $(FRAMEWORK_DIR)
+	@bash -c '$(libmesh_LIBTOOL) --tag=CXX $(LIBTOOLFLAGS) --mode=link --quiet \
+		$(KOKKOS_CXX) -o $@ $(MOOSE_KOKKOS_OBJECTS) $(KOKKOS_LDFLAGS) $(KOKKOS_LIBS) -rpath $(FRAMEWORK_DIR) ${SILENCE_SOME_WARNINGS}'
 	@$(libmesh_LIBTOOL) --mode=install --quiet install -c $(MOOSE_KOKKOS_LIB) $(FRAMEWORK_DIR)
 
 else
